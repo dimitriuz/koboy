@@ -1,5 +1,6 @@
 #include "test.h"
 #include "sram.h"
+#include <sys/stat.h>
 #include <unistd.h>
 
 TEST_MAIN({
@@ -19,8 +20,10 @@ TEST_MAIN({
     /* ATOMICITY: no temp file may survive a successful save */
     CHECK(access("build/t.srm.tmp", F_OK) != 0);
 
-    /* a failed save must leave the previous good file intact */
+    /* a failed save (fopen failure) must leave the previous good file intact
+       and clean up any temp file */
     CHECK(!sram_save("build/no_such_dir/x.srm", out, sizeof out));
+    CHECK(access("build/no_such_dir/x.srm.tmp", F_OK) != 0);  /* no temp file left */
     memset(in, 0, sizeof in);
     CHECK(sram_load("build/t.srm", in, sizeof in));
     CHECK(memcmp(in, out, sizeof out) == 0);
@@ -34,4 +37,12 @@ TEST_MAIN({
     memset(in, 0xEE, sizeof in);
     CHECK(!sram_load("build/short.srm", in, sizeof in));
     CHECK_EQ_INT(in[63], 0xEE);
+
+    /* rename failure (destination is a directory) cleans up temp file */
+    mkdir("build/is_a_dir", 0755);
+    CHECK(!sram_save("build/is_a_dir", out, sizeof out));
+    CHECK(access("build/is_a_dir.tmp", F_OK) != 0);  /* no temp file left */
+    /* destination directory still exists and is untouched */
+    CHECK(access("build/is_a_dir", F_OK) == 0);
+    rmdir("build/is_a_dir");
 })

@@ -13,6 +13,8 @@ void sram_path_for_rom(char *out, size_t outlen, const char *save_dir,
     snprintf(stem, sizeof stem, "%s", base);
     char *dot = strrchr(stem, '.');
     if (dot) *dot = 0;
+    /* Path truncation possible but safe for normal ROM filenames. rom_path ending in '/'
+       (empty basename) yields "<dir>/.srm". No validation added — caller's responsibility. */
     snprintf(out, outlen, "%s/%s.srm", save_dir, stem);
 }
 
@@ -28,7 +30,7 @@ bool sram_save(const char *path, const uint8_t *src, size_t len)
     if (ok) ok = (fflush(f) == 0);
     if (ok) ok = (fsync(fileno(f)) == 0);
     if (fclose(f) != 0) ok = false;
-    if (!ok) { remove(tmp); return false; }
+    if (!ok) { remove(tmp); return false; }  /* best-effort cleanup: ignore remove() result */
     if (rename(tmp, path) != 0) { remove(tmp); return false; }
     return true;
 }
