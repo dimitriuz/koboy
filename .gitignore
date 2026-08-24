@@ -1,0 +1,10 @@
+build/
+dist/
+*.o
+*.so
+*.zip
+third_party/fbink/
+*.srm
+*.log
+koboy
+koboy-probe
