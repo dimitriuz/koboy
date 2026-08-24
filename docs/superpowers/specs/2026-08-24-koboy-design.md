@@ -424,11 +424,35 @@ Input is drained **every core iteration (60 Hz)**, not every presented frame
 `input_poll`, we drain evdev non-blocking and latch a bitmask, then answer
 `input_state` from the latch.
 
-### EVIOCGRAB
+### EVIOCGRAB — measured, and it forces the takeover
 
-Grab the touchscreen and key nodes; **never** the power button. Release on exit
-and in signal handlers. Stated cost: a hard crash while grabbed can leave touch
-unresponsive until reboot. Recoverable, judged worth it, and configurable off.
+**Nickel holds `EVIOCGRAB` on `event0`, `event1` and `event2`** (measured
+2026-08-24, Appendix A). A grabbed evdev node delivers events exclusively to
+the grabbing process, so while Nickel runs no other process can read input at
+all — not the buttons, not touch, not even the accelerometer.
+
+Two consequences:
+
+1. **Stopping Nickel is mandatory, not merely preferable.** Approach A in §8 is
+   the only workable model for anything that reads input. Coexistence is
+   impossible by kernel design, not by contention.
+2. Once Nickel is stopped nothing competes for input, so our own grab is
+   belt-and-braces rather than essential. Grab the touchscreen and key nodes;
+   **never** the power button. Release on exit and in signal handlers. A hard
+   crash while grabbed can leave touch unresponsive until reboot — recoverable,
+   and configurable off.
+
+### First-run button calibration
+
+Rather than shipping a per-device keycode table, `koboy` **learns the mapping
+on first run**: it draws "press the button you want as A", reads the first key
+event, repeats for B, and writes the result to `koboy.ini`.
+
+This is §3's capability-detection philosophy applied to input. A device nobody
+has ever tested gets working buttons with no code change and no keycode
+research, and it removes the need to ever determine which physical button emits
+which code. Built-in defaults still ship as a starting guess; calibration
+overrides them and can be re-run from config.
 
 ### Power button
 
@@ -509,12 +533,25 @@ A KFMon config ships as an optional extra for one-tap launch from the library.
 
 ### The probe ships first, and ships safe
 
-`koboy-probe` deliberately **coexists with Nickel**: no takeover, no fb depth
-change, no restore path, so it cannot leave the device in a bad state. It
-times refreshes across region sizes and waveform modes, classifies input
-devices, dumps keycodes and touch slot counts, and writes
-`koboy-probe-<device>.txt` to the root of the FAT partition for retrieval over
-USB.
+The probe has **two modes**, because Nickel's input grab (§7) splits its job in
+half:
+
+- **Coexisting mode** — refresh timing across regions and waveform modes, plus
+  device identification and input *capability* dumps read from
+  `/proc/bus/input/devices`. Needs no takeover, no fb depth change and no
+  restore path, so it cannot leave the device in a bad state. This is how
+  Appendix A was produced.
+- **Takeover mode** — anything that requires actually *reading* input events.
+  Impossible alongside Nickel, since a grabbed node delivers events only to the
+  grabber. This mode stops Nickel and carries the full restore path of §8.
+
+Either way it writes `koboy-probe-<device>.txt` to the root of the FAT
+partition for retrieval over USB.
+
+The original plan had the probe answering the keycode question in coexisting
+mode. That turned out to be impossible, which is why §7 moves button mapping to
+first-run calibration — a better answer anyway, since it also covers devices
+nobody has tested.
 
 Honest caveat: measuring while Nickel is alive makes fps numbers slightly
 **pessimistic**, since Nickel may repaint underneath. Acceptable for the
@@ -563,8 +600,8 @@ Resolved on hardware 2026-08-24; see Appendix A for data.
 | Whether refresh can be issued non-blocking | **Resolved.** Yes — 28ms submission vs 47ms blocking. No worker thread needed for v1 |
 | Touch protocol variant and max slots | **Resolved.** Protocol B, 10 slots, axes transposed relative to the panel |
 | Which `/dev/input/event*` node is which | **Resolved.** event0 keys, event1 touch, event2 accelerometer |
-| Page-turn button keycodes | **Narrowed.** gpio-keys advertises KEY_F1(59), KEY_POWER(116), KEY_F23(193), KEY_F24(194). Which physical button maps to which code needs a press capture |
-| Whether `EVIOCGRAB` is needed once Nickel is stopped | Open; config default flip either way |
+| Page-turn button keycodes | **Resolved by design, not measurement.** Nickel's grab makes capture impossible without stopping it, so the mapping is learned by first-run calibration (§7). gpio-keys advertises KEY_F1(59), KEY_POWER(116), KEY_F23(193), KEY_F24(194) as the candidate set |
+| Whether `EVIOCGRAB` is needed once Nickel is stopped | **Resolved.** Nickel holds the grab on all three nodes, so stopping it is mandatory; our own grab is then optional hardening |
 
 ## 13. Risks
 
@@ -686,3 +723,27 @@ spawn and FBInk init (measured separately via `fbink -e`), which the real
 in-process application will not pay. Nickel was left running throughout, which
 per §8 makes these numbers **pessimistic**. Timing resolution is 10 ms
 (`/proc/uptime`, USER_HZ=100) over 12 iterations per cell.
+
+### Input exclusivity (measured)
+
+Nickel holds open descriptors on `/dev/input/event0`, `event1` and `event2`
+simultaneously, and holds `EVIOCGRAB` on them. Verified three ways:
+
+- A 35-second `dd if=/dev/input/event0` returned **0 bytes** while page-turn
+  buttons were being pressed.
+- `evtest --grab` could not acquire the grab, reporting the device busy.
+- `event2` (accelerometer, which emits on movement regardless of what is on
+  screen) also returned 0 bytes, ruling out any "wrong app in foreground"
+  explanation.
+
+Companion processes observed alongside Nickel, which the §8 restore path needs:
+
+| PID | Command |
+|---|---|
+| 227 | `/usr/local/Kobo/hindenburg` |
+| 228 | `/usr/local/Kobo/nickel -platform kobo -skipFontLoad` |
+| 1405 | `/bin/sh /usr/local/Kobo/sickel-launcher.sh` |
+| 1406 | `/usr/local/Kobo/sickel -platform kobo:noscreen` |
+
+Observing these directly removes any need to derive the restart sequence from a
+third-party script.
