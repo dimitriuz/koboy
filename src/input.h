@@ -23,5 +23,6 @@ void         input_destroy(koboy_input *in);
 void         input_set_touch_transform(koboy_input *in, int raw_max_x, int raw_max_y,
                                        bool transpose, bool flip_x, bool flip_y);
 void         input_feed(koboy_input *in, const koboy_ev *evs, size_t n);
+void         input_feed_key(koboy_input *in, uint16_t code, bool pressed);
 const koboy_input_state *input_state(const koboy_input *in);
 #endif
