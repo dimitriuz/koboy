@@ -69,9 +69,11 @@ TEST_MAIN({
     sym.game_y = 2;
     sym.game_w = 396;   /* TW - game_x - 2 */
     sym.game_h = 496;   /* TH - game_y - 2 */
-    /* Bezel from (1,1) size (398,498), frame expands by max 5:
+    /* Bezel from (1,1) size (398,498); frame's loop runs i = 0..5 (t=6), so
+       the max offset is 5 and the far edge lands at x/y + w/h - 1 + 5:
        Leftmost: x = 1 - 5 = -4 (OUT); Topmost: y = 1 - 5 = -4 (OUT)
-       Rightmost: x = 1 + 398 + 5 = 404 > 400 (OUT); Bottommost: y = 1 + 498 + 5 = 504 > 500 (OUT)
+       Rightmost: x = 1 + 398 - 1 + 5 = 403 >= 400 (OUT)
+       Bottommost: y = 1 + 498 - 1 + 5 = 503 >= 500 (OUT)
        All four edges overflow; both horizontal and vertical writes need clamping. */
 
     chrome_render(panel_start, TW + 2 * GUARD, &sym, &c.layout);
@@ -100,9 +102,10 @@ TEST_MAIN({
     horiz.game_y = 50;      /* comfortable top margin, far from edge */
     horiz.game_w = 396;     /* extends past right edge */
     horiz.game_h = 200;     /* reasonable height */
-    /* Bezel from (1,49) size (398,202), frame expands by max 5:
-       y-range: 49 - 5 = 44 to 251 + 5 = 256 (all in [0, 500))
-       x-range: 1 - 5 = -4 to 399 + 5 = 404 (extends beyond [0, 400))
+    /* Bezel from (1,49) size (398,202); frame's loop runs i = 0..5 (t=6), so
+       the max offset is 5 and the far edge lands at x/y + w/h - 1 + 5:
+       y-range: 49 - 5 = 44 to 49 + 202 - 1 + 5 = 255 (both in [0, 500))
+       x-range: 1 - 5 = -4 to 1 + 398 - 1 + 5 = 403 (extends beyond [0, 400))
        hline is called with valid y-values but out-of-bounds x-ranges.
        Requires x0 < 0 and x1 >= W clamping to stay in bounds. */
 
@@ -131,9 +134,11 @@ TEST_MAIN({
     vert.game_y = 2;        /* tight top margin */
     vert.game_w = 200;      /* reasonable width */
     vert.game_h = 496;      /* extends past bottom edge */
-    /* Bezel from (49,1) size (202,500), frame expands by max 5:
-       x-range: 49 - 5 = 44 to 251 + 5 = 256 (all in [0, 400))
-       y-range: 1 - 5 = -4 to 501 + 5 = 506 (extends beyond [0, 500))
+    /* Bezel from (49,1) size (202,498) [h = game_h + 2 = 496 + 2]; frame's
+       loop runs i = 0..5 (t=6), so the max offset is 5 and the far edge
+       lands at x/y + w/h - 1 + 5:
+       x-range: 49 - 5 = 44 to 49 + 202 - 1 + 5 = 255 (both in [0, 400))
+       y-range: 1 - 5 = -4 to 1 + 498 - 1 + 5 = 503 (extends beyond [0, 500))
        vline is called with valid x-values but out-of-bounds y-ranges.
        Requires y0 < 0 and y1 >= H clamping to stay in bounds. */
 

@@ -7,6 +7,12 @@
 
 static int perm(int v, int total) { return v * total / 1000; }
 
+/* The fine clamps below (x0 < 0 / x1 >= W in hline, y0 < 0 / y1 >= H in
+   vline) are live, not dead code: frame() reaches them whenever a rect's
+   horizontal and vertical margins differ, decoupling the row/column that
+   trips the coarse skip from the range that needs trimming. The horizontal-
+   and vertical-overflow guard-band tests in tests/test_chrome.c exercise
+   exactly this path. Do not remove them as "unreachable". */
 static void hline(uint8_t *fb, int stride, int W, int H, int x0, int x1, int y, uint8_t v)
 {
     if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }
