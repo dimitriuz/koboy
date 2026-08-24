@@ -99,4 +99,31 @@ TEST_MAIN({
     bool result = config_save_keys("/nonexistent/dir/keys.ini", 777, 888);
     CHECK(!result);
     CHECK(!fopen("/nonexistent/dir/keys.ini.tmp", "r"));  /* temp file cleaned up */
+
+    /* Chrome margin regression: On a 1440x1920 panel (Kobo Sage), auto-scale
+       and explicit scale=9 must both reserve at least KOBOY_CHROME_MARGIN pixels
+       on all sides so the bezel doesn't write outside the buffer. */
+    config_defaults(&c);
+    c.scale = 0;  /* auto */
+    CHECK(config_resolve_profile(&p, &c, 1440, 1920));
+    int left   = p.game_x;
+    int right  = 1440 - p.game_x - p.game_w;
+    int top    = p.game_y;
+    int bottom = 1920 - p.game_y - p.game_h;
+    CHECK(left >= KOBOY_CHROME_MARGIN);
+    CHECK(right >= KOBOY_CHROME_MARGIN);
+    CHECK(top >= KOBOY_CHROME_MARGIN);
+    CHECK(bottom >= KOBOY_CHROME_MARGIN);
+
+    /* Same constraint with explicit scale=9 */
+    c.scale = 9;
+    CHECK(config_resolve_profile(&p, &c, 1440, 1920));
+    left   = p.game_x;
+    right  = 1440 - p.game_x - p.game_w;
+    top    = p.game_y;
+    bottom = 1920 - p.game_y - p.game_h;
+    CHECK(left >= KOBOY_CHROME_MARGIN);
+    CHECK(right >= KOBOY_CHROME_MARGIN);
+    CHECK(top >= KOBOY_CHROME_MARGIN);
+    CHECK(bottom >= KOBOY_CHROME_MARGIN);
 })

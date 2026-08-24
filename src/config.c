@@ -75,6 +75,27 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
     if (max_fit < 1) return false;
     int s = c->scale > 0 ? c->scale : max_fit;
     if (s > max_fit) s = max_fit;        /* configured scale does not fit */
+
+    /* Ensure chrome has at least KOBOY_CHROME_MARGIN pixels on all sides */
+    while (s > 1) {
+        int game_w = KOBOY_GB_W * s;
+        int game_h = KOBOY_GB_H * s;
+        int game_x = (panel_w - game_w) / 2;
+        int game_y = panel_h / 20;
+        int left_margin   = game_x;
+        int right_margin  = panel_w - game_x - game_w;
+        int top_margin    = game_y;
+        int bottom_margin = panel_h - game_y - game_h;
+
+        if (left_margin >= KOBOY_CHROME_MARGIN &&
+            right_margin >= KOBOY_CHROME_MARGIN &&
+            top_margin >= KOBOY_CHROME_MARGIN &&
+            bottom_margin >= KOBOY_CHROME_MARGIN) {
+            break;  /* all margins are sufficient */
+        }
+        s--;
+    }
+
     p->scale   = s;
     p->panel_w = panel_w;
     p->panel_h = panel_h;

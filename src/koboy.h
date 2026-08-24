@@ -8,6 +8,7 @@
 #define KOBOY_GB_H 144
 #define KOBOY_FRAME_US 16742          /* 1e6 / 59.7275 */
 #define KOBOY_MAX_TOUCH 10
+#define KOBOY_CHROME_MARGIN 8         /* minimum clear border for bezel to stay in bounds */
 
 typedef enum { KOBOY_REFRESH_FAST = 0, KOBOY_REFRESH_GRAY, KOBOY_REFRESH_FULL } koboy_refresh_mode;
 typedef enum { KOBOY_PIXFMT_RGB565 = 0, KOBOY_PIXFMT_XRGB8888 } koboy_pixfmt;
