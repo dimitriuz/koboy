@@ -1,5 +1,6 @@
 #include "video.h"
 #include <string.h>
+#include <stdlib.h>
 
 /* Rec.601 luma with integer weights; 8-bit channels expanded from 5/6 bits by
    bit replication so 0x1F -> 0xFF exactly. */
@@ -128,5 +129,74 @@ koboy_rect video_dirty_rect(const uint8_t *prev, const uint8_t *cur,
     }
     if (x1 < 0) return r;                /* nothing changed */
     r.x = x0; r.y = y0; r.w = x1 - x0 + 1; r.h = y1 - y0 + 1;
+    return r;
+}
+
+struct koboy_video {
+    koboy_profile p;
+    bool     dither;
+    int      stride;
+    uint8_t *cur, *prev, *gray;
+    uint8_t  lut[65536];
+};
+
+koboy_video *video_create(const koboy_profile *p, bool force_dither)
+{
+    koboy_video *v = calloc(1, sizeof *v);
+    if (!v) return NULL;
+    v->p = *p;
+    v->dither = force_dither;
+    v->stride = p->game_w;
+    size_t n = (size_t)v->stride * (size_t)p->game_h;
+    v->cur  = calloc(1, n);
+    v->prev = calloc(1, n);
+    v->gray = calloc(1, (size_t)KOBOY_GB_W * KOBOY_GB_H);
+    if (!v->cur || !v->prev || !v->gray) { video_destroy(v); return NULL; }
+    video_gray_lut_build(v->lut);
+    /* prev starts as an impossible value so the first frame is fully dirty */
+    memset(v->prev, 0x01, n);
+    return v;
+}
+
+void video_destroy(koboy_video *v)
+{
+    if (!v) return;
+    free(v->cur); free(v->prev); free(v->gray); free(v);
+}
+
+const uint8_t *video_buffer(const koboy_video *v) { return v->cur; }
+int            video_stride(const koboy_video *v) { return v->stride; }
+
+koboy_rect video_submit(koboy_video *v, const void *src, int src_w, int src_h,
+                        size_t src_pitch, koboy_pixfmt fmt)
+{
+    koboy_rect empty = { 0, 0, 0, 0 };
+    if (!src) return empty;                       /* core signalled a duplicate */
+    if (src_w != KOBOY_GB_W || src_h != KOBOY_GB_H) return empty;
+
+    for (int y = 0; y < src_h; y++) {
+        uint8_t *d = v->gray + (size_t)y * KOBOY_GB_W;
+        if (fmt == KOBOY_PIXFMT_RGB565) {
+            const uint16_t *s = (const uint16_t *)((const uint8_t *)src + (size_t)y * src_pitch);
+            for (int x = 0; x < src_w; x++) d[x] = v->lut[s[x]];
+        } else {
+            const uint32_t *s = (const uint32_t *)((const uint8_t *)src + (size_t)y * src_pitch);
+            for (int x = 0; x < src_w; x++) d[x] = video_xrgb8888_to_gray(s[x]);
+        }
+    }
+
+    video_scale_gray(v->cur, v->stride, v->gray, KOBOY_GB_W, KOBOY_GB_H,
+                     KOBOY_GB_W, v->p.scale);
+
+    if (v->dither)
+        video_dither_1bit(v->cur, v->p.game_w, v->p.game_h, v->stride,
+                          v->p.game_x, v->p.game_y);
+    else
+        video_quantise4(v->cur, v->p.game_w, v->p.game_h, v->stride);
+
+    koboy_rect r = video_dirty_rect(v->prev, v->cur, v->p.game_w, v->p.game_h, v->stride);
+    /* cur holds the frame the caller will blit; prev becomes the baseline for
+       the next diff. When nothing changed the buffers already match. */
+    if (r.w) memcpy(v->prev, v->cur, (size_t)v->stride * (size_t)v->p.game_h);
     return r;
 }
