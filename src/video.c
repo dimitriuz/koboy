@@ -103,3 +103,30 @@ void video_dither_1bit(uint8_t *buf, int w, int h, int stride,
             row[x] = row[x] > brow[(unsigned)(screen_x + x) & 15u] ? 255 : 0;
     }
 }
+
+koboy_rect video_dirty_rect(const uint8_t *prev, const uint8_t *cur,
+                           int w, int h, int stride)
+{
+    koboy_rect r = { 0, 0, 0, 0 };
+    int x0 = w, y0 = h, x1 = -1, y1 = -1;
+    for (int ty = 0; ty < h; ty += KOBOY_TILE) {
+        int th = (ty + KOBOY_TILE <= h) ? KOBOY_TILE : h - ty;
+        for (int tx = 0; tx < w; tx += KOBOY_TILE) {
+            int tw = (tx + KOBOY_TILE <= w) ? KOBOY_TILE : w - tx;
+            int changed = 0;
+            for (int y = 0; y < th && !changed; y++) {
+                size_t off = (size_t)(ty + y) * stride + (size_t)tx;
+                if (memcmp(prev + off, cur + off, (size_t)tw) != 0) changed = 1;
+            }
+            if (changed) {
+                if (tx < x0) x0 = tx;
+                if (ty < y0) y0 = ty;
+                if (tx + tw - 1 > x1) x1 = tx + tw - 1;
+                if (ty + th - 1 > y1) y1 = ty + th - 1;
+            }
+        }
+    }
+    if (x1 < 0) return r;                /* nothing changed */
+    r.x = x0; r.y = y0; r.w = x1 - x0 + 1; r.h = y1 - y0 + 1;
+    return r;
+}

@@ -14,4 +14,8 @@ void video_bayer_build(uint8_t m[16][16]);
 void video_quantise4(uint8_t *buf, int w, int h, int stride);
 void video_dither_1bit(uint8_t *buf, int w, int h, int stride,
                        int screen_x, int screen_y);
+
+#define KOBOY_TILE 8
+koboy_rect video_dirty_rect(const uint8_t *prev, const uint8_t *cur,
+                           int w, int h, int stride);
 #endif
