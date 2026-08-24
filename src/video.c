@@ -1,4 +1,5 @@
 #include "video.h"
+#include <string.h>
 
 /* Rec.601 luma with integer weights; 8-bit channels expanded from 5/6 bits by
    bit replication so 0x1F -> 0xFF exactly. */
@@ -24,4 +25,25 @@ uint8_t video_xrgb8888_to_gray(uint32_t px)
 void video_gray_lut_build(uint8_t lut[65536])
 {
     for (int i = 0; i < 65536; i++) lut[i] = video_rgb565_to_gray((uint16_t)i);
+}
+
+/* Nearest-neighbour integer upscale. Each source pixel becomes a solid run of
+   `scale` bytes; each source row is emitted once then memcpy-replicated
+   scale-1 times. Per-pixel work collapses into block copies. */
+void video_scale_gray(uint8_t *dst, int dst_stride, const uint8_t *src,
+                      int src_w, int src_h, int src_stride, int scale)
+{
+    const int out_w = src_w * scale;
+    for (int sy = 0; sy < src_h; sy++) {
+        uint8_t *row = dst + (size_t)sy * scale * dst_stride;
+        const uint8_t *s = src + (size_t)sy * src_stride;
+        if (scale == 1) {
+            memcpy(row, s, (size_t)src_w);
+        } else {
+            uint8_t *o = row;
+            for (int sx = 0; sx < src_w; sx++, o += scale) memset(o, s[sx], (size_t)scale);
+        }
+        for (int r = 1; r < scale; r++)
+            memcpy(row + (size_t)r * dst_stride, row, (size_t)out_w);
+    }
 }
