@@ -45,45 +45,37 @@ TEST_MAIN({
             if (fb[y * 1072 + x] != 0x7F) intruded++;
     CHECK_EQ_INT(intruded, 0);
 
-    /* Guard-band test: the primitives must clip their writes to the panel
-       bounds. Construct pathological geometry that would write far outside
-       the panel if not clamped: bezel extends 6px beyond game rect on all
-       sides, so with tight margins, writes reach beyond [0, panel_w/h). */
+    /* Guard-band tests for bounds clamping. Three scenarios:
+       1. Symmetric overflow: proves coarse "skip entire line" checks work
+       2. Horizontal overflow: exercises hline's x-clamping branches
+       3. Vertical overflow: exercises vline's y-clamping branches */
+
     const int GUARD = 64;
     const uint8_t SENTINEL = 0x42;
-    int TW = 400, TH = 500;  /* tight panel dimensions */
+
+    /* Test 1: Symmetric overflow (all four margins tight) */
+    int TW = 400, TH = 500;
     size_t buf_size = (size_t)(TW + 2 * GUARD) * (TH + 2 * GUARD);
     uint8_t *guarded = malloc(buf_size);
     memset(guarded, SENTINEL, buf_size);
     uint8_t *panel_start = guarded + (size_t)GUARD * (TW + 2 * GUARD) + GUARD;
 
-    /* Construct a pathological profile where the bezel overflows on all
-       sides. game_x=2, game_y=2, game_w=396, game_h=496.
-       Bezel drawn from (1,1) with size (398,498), frame expands ±6:
-       - Left writes reach x = 1 - 6 = -5 (OUT OF BOUNDS)
-       - Top writes reach y = 1 - 6 = -5 (OUT OF BOUNDS)
-       - Right writes reach x = 1 + 398 + 6 = 405 > 400 (OUT OF BOUNDS)
-       - Bottom writes reach y = 1 + 498 + 6 = 505 > 500 (OUT OF BOUNDS)
-       The background fill and other primitives (d-pad, A/B, Start/Select)
-       will also reach outside bounds with this geometry.
-       Clamping is essential here; without it, this test would corrupt all
-       four guard regions. */
-    koboy_profile tight;
-    memset(&tight, 0, sizeof tight);  /* zero-initialize */
-    tight.scale = 1;
-    tight.panel_w = TW;
-    tight.panel_h = TH;
-    tight.game_x = 2;
-    tight.game_y = 2;
-    tight.game_w = TW - tight.game_x - 2;  /* 396 */
-    tight.game_h = TH - tight.game_y - 2;  /* 496 */
+    koboy_profile sym;
+    memset(&sym, 0, sizeof sym);
+    sym.scale = 1;
+    sym.panel_w = TW;
+    sym.panel_h = TH;
+    sym.game_x = 2;
+    sym.game_y = 2;
+    sym.game_w = 396;   /* TW - game_x - 2 */
+    sym.game_h = 496;   /* TH - game_y - 2 */
+    /* Bezel from (1,1) size (398,498), frame expands by max 5:
+       Leftmost: x = 1 - 5 = -4 (OUT); Topmost: y = 1 - 5 = -4 (OUT)
+       Rightmost: x = 1 + 398 + 5 = 404 > 400 (OUT); Bottommost: y = 1 + 498 + 5 = 504 > 500 (OUT)
+       All four edges overflow; both horizontal and vertical writes need clamping. */
 
-    /* Render with the stride covering the full guarded buffer */
-    chrome_render(panel_start, TW + 2 * GUARD, &tight, &c.layout);
+    chrome_render(panel_start, TW + 2 * GUARD, &sym, &c.layout);
 
-    /* Verify all padding bytes remain untouched. Without clamping in the
-       primitives, the bezel would write at x = -5 to 405 and y = -5 to 505,
-       corrupting all four guard regions. */
     int corrupted = 0;
     uint8_t *p_start = guarded;
     for (size_t i = 0; i < buf_size; i++) {
@@ -93,5 +85,68 @@ TEST_MAIN({
         if (is_guard && p_start[i] != SENTINEL) corrupted++;
     }
     CHECK_EQ_INT(corrupted, 0);
+
+    /* Test 2: Horizontal overflow (exercises hline x-clamping) */
+    int TW2 = 400, TH2 = 500;
+    memset(guarded, SENTINEL, buf_size);
+    panel_start = guarded + (size_t)GUARD * (TW2 + 2 * GUARD) + GUARD;
+
+    koboy_profile horiz;
+    memset(&horiz, 0, sizeof horiz);
+    horiz.scale = 1;
+    horiz.panel_w = TW2;
+    horiz.panel_h = TH2;
+    horiz.game_x = 2;       /* tight left margin */
+    horiz.game_y = 50;      /* comfortable top margin, far from edge */
+    horiz.game_w = 396;     /* extends past right edge */
+    horiz.game_h = 200;     /* reasonable height */
+    /* Bezel from (1,49) size (398,202), frame expands by max 5:
+       y-range: 49 - 5 = 44 to 251 + 5 = 256 (all in [0, 500))
+       x-range: 1 - 5 = -4 to 399 + 5 = 404 (extends beyond [0, 400))
+       hline is called with valid y-values but out-of-bounds x-ranges.
+       Requires x0 < 0 and x1 >= W clamping to stay in bounds. */
+
+    chrome_render(panel_start, TW2 + 2 * GUARD, &horiz, &c.layout);
+
+    corrupted = 0;
+    for (size_t i = 0; i < buf_size; i++) {
+        int x = (int)(i % (size_t)(TW2 + 2 * GUARD));
+        int y = (int)(i / (size_t)(TW2 + 2 * GUARD));
+        int is_guard = (x < GUARD || x >= TW2 + GUARD || y < GUARD || y >= TH2 + GUARD);
+        if (is_guard && p_start[i] != SENTINEL) corrupted++;
+    }
+    CHECK_EQ_INT(corrupted, 0);
+
+    /* Test 3: Vertical overflow (exercises vline y-clamping) */
+    int TW3 = 400, TH3 = 500;
+    memset(guarded, SENTINEL, buf_size);
+    panel_start = guarded + (size_t)GUARD * (TW3 + 2 * GUARD) + GUARD;
+
+    koboy_profile vert;
+    memset(&vert, 0, sizeof vert);
+    vert.scale = 1;
+    vert.panel_w = TW3;
+    vert.panel_h = TH3;
+    vert.game_x = 50;       /* comfortable left margin, far from edge */
+    vert.game_y = 2;        /* tight top margin */
+    vert.game_w = 200;      /* reasonable width */
+    vert.game_h = 496;      /* extends past bottom edge */
+    /* Bezel from (49,1) size (202,500), frame expands by max 5:
+       x-range: 49 - 5 = 44 to 251 + 5 = 256 (all in [0, 400))
+       y-range: 1 - 5 = -4 to 501 + 5 = 506 (extends beyond [0, 500))
+       vline is called with valid x-values but out-of-bounds y-ranges.
+       Requires y0 < 0 and y1 >= H clamping to stay in bounds. */
+
+    chrome_render(panel_start, TW3 + 2 * GUARD, &vert, &c.layout);
+
+    corrupted = 0;
+    for (size_t i = 0; i < buf_size; i++) {
+        int x = (int)(i % (size_t)(TW3 + 2 * GUARD));
+        int y = (int)(i / (size_t)(TW3 + 2 * GUARD));
+        int is_guard = (x < GUARD || x >= TW3 + GUARD || y < GUARD || y >= TH3 + GUARD);
+        if (is_guard && p_start[i] != SENTINEL) corrupted++;
+    }
+    CHECK_EQ_INT(corrupted, 0);
+
     free(guarded);
 })
