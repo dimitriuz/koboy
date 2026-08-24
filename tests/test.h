@@ -14,7 +14,7 @@ static int t_run = 0, t_fail = 0;
     if (_a != _b) { t_fail++; fprintf(stderr, "FAIL %s:%d: %s == %ld, expected %ld\n", \
         __FILE__, __LINE__, #a, _a, _b); } } while (0)
 
-#define TEST_MAIN(body) int main(void) { body; \
+#define TEST_MAIN(...) int main(void) { __VA_ARGS__; \
     fprintf(stderr, "%s: %d checks, %d failures\n", __FILE__, t_run, t_fail); \
     return t_fail ? 1 : 0; }
 #endif
