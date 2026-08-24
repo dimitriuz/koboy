@@ -8,3 +8,6 @@ third_party/fbink/
 *.log
 koboy
 koboy-probe
+*.gb
+*.gbc
+*.sav
