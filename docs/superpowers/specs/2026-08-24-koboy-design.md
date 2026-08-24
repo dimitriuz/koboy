@@ -226,7 +226,16 @@ for 1-bit fast mode and for GBC colour content.
 - **FAST (1-bit):** nearest-scale to output, then Bayer 16x16 -> 1 bit.
   Mid-tones become dot patterns within each scaled block.
 - **GRAY (4-bit):** DMG's 4 shades -> 4 exact levels, no dither. GBC ->
-  luminance, quantised to 16.
+  luminance, also quantised to **4** levels, with dither available to convey
+  tone.
+
+  Correction after measurement: this section originally specified 16 levels for
+  GBC. Appendix A rules that out --- the 16-level waveforms measured 321.7 ms
+  (GL16, 3.1 fps) and 393.3 ms (GC16, 2.5 fps) for a full game rect, against
+  46.7 ms for the 4-level DU4. A 16-level GBC path would be unplayable, so DU4's
+  four levels are the only viable target for GBC as well as DMG. This is why the
+  implementation ships `video_quantise4` and `video_dither_1bit` and no 16-level
+  quantiser.
 
 ### Ordered dithering is a correctness requirement
 
