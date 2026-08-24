@@ -45,8 +45,10 @@ TEST_MAIN({
             if (fb[y * 1072 + x] != 0x7F) intruded++;
     CHECK_EQ_INT(intruded, 0);
 
-    /* Guard-band test: the primitives should clip their writes to the panel
-       bounds, as demonstrated by rendering with guards around the buffer. */
+    /* Guard-band test: the primitives must clip their writes to the panel
+       bounds. Construct pathological geometry that would write far outside
+       the panel if not clamped: bezel extends 6px beyond game rect on all
+       sides, so with tight margins, writes reach beyond [0, panel_w/h). */
     const int GUARD = 64;
     const uint8_t SENTINEL = 0x42;
     int TW = 400, TH = 500;  /* tight panel dimensions */
@@ -55,20 +57,33 @@ TEST_MAIN({
     memset(guarded, SENTINEL, buf_size);
     uint8_t *panel_start = guarded + (size_t)GUARD * (TW + 2 * GUARD) + GUARD;
 
-    /* Construct a profile where the bezel is close to panel edges */
+    /* Construct a pathological profile where the bezel overflows on all
+       sides. game_x=2, game_y=2, game_w=396, game_h=496.
+       Bezel drawn from (1,1) with size (398,498), frame expands ±6:
+       - Left writes reach x = 1 - 6 = -5 (OUT OF BOUNDS)
+       - Top writes reach y = 1 - 6 = -5 (OUT OF BOUNDS)
+       - Right writes reach x = 1 + 398 + 6 = 405 > 400 (OUT OF BOUNDS)
+       - Bottom writes reach y = 1 + 498 + 6 = 505 > 500 (OUT OF BOUNDS)
+       The background fill and other primitives (d-pad, A/B, Start/Select)
+       will also reach outside bounds with this geometry.
+       Clamping is essential here; without it, this test would corrupt all
+       four guard regions. */
     koboy_profile tight;
-    tight.scale = 2;  /* much smaller scale */
+    memset(&tight, 0, sizeof tight);  /* zero-initialize */
+    tight.scale = 1;
     tight.panel_w = TW;
     tight.panel_h = TH;
-    tight.game_w = 160 * 2;   /* 320 */
-    tight.game_h = 144 * 2;   /* 288 */
-    tight.game_x = 8;   /* minimal left margin: bezel at game_x-1 = 7, frame extends to -5 */
-    tight.game_y = TH / 20;   /* normal top margin: ~25, bezel extends up to -5 */
+    tight.game_x = 2;
+    tight.game_y = 2;
+    tight.game_w = TW - tight.game_x - 2;  /* 396 */
+    tight.game_h = TH - tight.game_y - 2;  /* 496 */
 
     /* Render with the stride covering the full guarded buffer */
     chrome_render(panel_start, TW + 2 * GUARD, &tight, &c.layout);
 
-    /* Verify all padding bytes remain untouched */
+    /* Verify all padding bytes remain untouched. Without clamping in the
+       primitives, the bezel would write at x = -5 to 405 and y = -5 to 505,
+       corrupting all four guard regions. */
     int corrupted = 0;
     uint8_t *p_start = guarded;
     for (size_t i = 0; i < buf_size; i++) {
