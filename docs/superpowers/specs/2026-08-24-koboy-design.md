@@ -92,11 +92,16 @@ an unseen device is fixable by config edit rather than recompile.
 
 ### Two SoC families
 
-2021-23 devices are NXP i.MX; Clara BW/Colour and Libra Colour (2024) are
-MediaTek MT8113. They differ in CPU performance and, more importantly, in
-e-ink controller behaviour — A2 does not perform identically across them.
+At least three families, not two: 2021-23 devices are NXP i.MX (`FBID`
+`mxc_epdc_fb`), Clara BW/Colour and Libra Colour (2024) are MediaTek, and
+FBInk additionally exposes an `isSunxi` flag for Allwinner-based models. They
+differ in CPU performance and, critically, in which waveform modes exist and
+how fast each one is.
+
 This is why `refresh_mode` is an abstraction rather than a waveform
-passthrough (§5): the fix is a per-family mapping table.
+passthrough (§5). Appendix A shows that decision paying for itself: on Mark 9
+the conventionally-fastest mode (A2) is **3x slower** than DU4. A passthrough
+design would have hardcoded the wrong mode.
 
 ## 4. Architecture
 
@@ -123,9 +128,9 @@ koboy/
 
 ```c
 typedef enum {
-    KOBOY_REFRESH_FAST,   /* A2-ish: 1-bit, fastest, most ghosting */
-    KOBOY_REFRESH_GRAY,   /* DU/GL16: more shades, slower          */
-    KOBOY_REFRESH_FULL,   /* GC16: full flash, periodic cleanup    */
+    KOBOY_REFRESH_FAST,   /* fastest usable mode; DU4 on Mark 9, see App. A */
+    KOBOY_REFRESH_GRAY,   /* more levels, slower                            */
+    KOBOY_REFRESH_FULL,   /* GC16: full flash, periodic cleanup             */
 } koboy_refresh_mode;
 
 typedef struct {
@@ -349,7 +354,9 @@ player has no timely visual cue to correct by.
 ### Simultaneous touches
 
 - **Touch-only devices** (Clara family, Elipsa) require at least 2 tracked
-  points as a hard floor: one thumb on the d-pad, one on A/B.
+  points as a hard floor: one thumb on the d-pad, one on A/B. Measured
+  headroom is far larger than assumed — the Libra 2 panel reports 10 slots
+  (Appendix A) — so a full touch-only layout is comfortably feasible.
 - **Button-equipped devices** (Libra 2, Sage, Libra Colour) require only
   **one**, because A/B are hardware. A concrete ergonomic advantage, not a
   cosmetic one.
@@ -495,24 +502,28 @@ breaking change to the blit seam**, not designed around now.
 
 ## 12. Open measurements
 
-These are unknown hardware facts, not undecided design. Each is a probe output
-with a bounded blast radius.
+Resolved on hardware 2026-08-24; see Appendix A for data.
 
-| Unknown | Resolved by | Impact if unfavourable |
-|---|---|---|
-| Achievable fps vs refresh region size, per waveform mode | probe | Retunes the waveform mapping table and default render scale; no architectural change |
-| Whether refresh ioctl can be issued non-blocking | probe | Reintroduces the worker thread deferred in §6 |
-| Page-turn button keycodes | probe (`evtest`-equivalent) | Populates a keycode map |
-| Touch protocol variant and max slots | probe | Selects a protocol handler in `input.c` |
-| Whether `EVIOCGRAB` is needed once Nickel is stopped | probe | Config default flip |
+| Unknown | Status |
+|---|---|
+| Achievable fps vs region size, per waveform mode | **Resolved.** DU4 gives 21 fps at the full 7x rect, 44 fps at a small dirty rect. A2 is unusable on this platform (6.8 fps) |
+| Whether refresh can be issued non-blocking | **Resolved.** Yes — 28ms submission vs 47ms blocking. No worker thread needed for v1 |
+| Touch protocol variant and max slots | **Resolved.** Protocol B, 10 slots, axes transposed relative to the panel |
+| Which `/dev/input/event*` node is which | **Resolved.** event0 keys, event1 touch, event2 accelerometer |
+| Page-turn button keycodes | **Narrowed.** gpio-keys advertises KEY_F1(59), KEY_POWER(116), KEY_F23(193), KEY_F24(194). Which physical button maps to which code needs a press capture |
+| Whether `EVIOCGRAB` is needed once Nickel is stopped | Open; config default flip either way |
 
 ## 13. Risks
 
-- **The fps ceiling is unmeasured.** If fast-mode refresh of a full game rect
-  lands near single-digit fps, the project is a curiosity rather than a
-  handheld. Mitigated by dirty rects, the 8bpp path, and a configurable render
-  scale — but not eliminated. This is the one risk that could invalidate the
-  premise, and it is measured first.
+- **The fps ceiling is measured, and the premise holds.** ~21 fps at the full
+  7x game rect using DU4, under deliberately pessimistic conditions (Nickel
+  running, worst-case full black/white transitions, 32bpp, per-refresh process
+  spawn). Dirty rects, non-blocking submission and the 8bpp path all push
+  further up from there. This risk is **retired**.
+- **A2-only devices may not be viable.** A2 shows a nearly flat cost curve
+  (~120-148ms regardless of area), so on any device lacking DU4 neither dirty
+  rects nor a smaller render scale will help much. Such devices may cap around
+  7 fps. Unknown until one is tested; does not affect Mark 9 targets.
 - **Untestable device coverage.** Only the Libra 2 can be verified. Mitigated
   by capability detection, config-overridable profiles, and a probe that
   generates a profile for any device, making community contribution the growth
@@ -531,3 +542,91 @@ with a bounded blast radius.
 5. `input.c` — thumb-pad and zone logic, trace tested.
 6. `platform_kobo.c` — FBInk + evdev, informed by probe results.
 7. `scripts/koboy.sh` + packaging + `TESTED.md`.
+
+---
+
+## Appendix A — Measured hardware facts
+
+Kobo Libra 2, firmware 4.38.23684, measured 2026-08-24 over SSH.
+
+### Platform
+
+| Fact | Value |
+|---|---|
+| FBInk identity | `Libra 2`, id 388, codename `Io`, platform **Mark 9** |
+| FBInk build on device | v1.24.0-78, at `/usr/bin/fbink` |
+| Kernel | 4.1.15, `armv7l` |
+| CPU | ARM **Cortex-A9** (part 0xc09), **single core**, NEON + VFPv3 |
+| RAM | 507600 kB total; 236824 kB free with Nickel running |
+| fb driver | `mxc_epdc_fb` (NXP EPDC), `isSunxi=0` |
+| Panel | 1264 x 1680, 300 DPI, **BPP=32**, `lineLength=5120` |
+| Stride padding | 5120 / 4 = **1280 px stride vs 1264 visible** — blits must honour it |
+| Vertical origin | `viewVertOrigin = viewVertOffset = 8` |
+| Rotation | `currentRota=1` (CW 90), canonical 0, `ntxRotaQuirk=5`, `canRotate=1` |
+| Extras | `canHWInvert=1`, `hasEclipseWfm=1`, `isKoboNonMT=0` |
+
+Single-core A9 confirms the `-march=armv7-a -mfpu=neon` baseline in §6, and
+independently confirms GBA was correctly ruled out.
+
+### Waveform performance, full 7x game rect (1120x1008), blocking
+
+| Mode | ms/refresh | fps |
+|---|---|---|
+| **DU4** | **46.7** | **21.4** |
+| A2 | 146.7 | 6.8 |
+| DU | 215.0 | 4.7 |
+| GL16 | 321.7 | 3.1 |
+| GC16 | 393.3 | 2.5 |
+
+**DU4 is the fast path on Mark 9, not A2.** DU4 is also a *4-level* mode,
+which is exactly DMG's palette — so the no-dither grey path of §5 becomes the
+primary path rather than a fallback, and Bayer dithering is needed only for
+GBC content or on devices without DU4.
+
+### Region-size scaling
+
+| Region | A2 | DU4 |
+|---|---|---|
+| 1120x1008 | 148.3 ms | 47.5 ms |
+| 1120x504 | 127.5 ms | — |
+| 560x504 | 117.5 ms | 25.8 ms |
+| 320x288 | 120.0 ms | 22.5 ms |
+| 160x144 | 145.8 ms | — |
+
+DU4 scales with area (~19ms fixed + area term), so **dirty rectangles pay
+off**. A2 is nearly flat, i.e. dominated by fixed per-update cost — dirty
+rects cannot rescue an A2-only device.
+
+### Blocking vs non-blocking submission
+
+| Mode | submit only | blocking |
+|---|---|---|
+| A2 1120x1008 | 26.7 ms | 146.7 ms |
+| DU4 1120x1008 | 28.3 ms | 47.5 ms |
+
+Non-blocking submission works, confirming §6's single-threaded design.
+
+### Input devices
+
+| Node | Device | Capabilities |
+|---|---|---|
+| `event0` | `gpio-keys` | EV_KEY + EV_SW; codes KEY_F1(59), KEY_POWER(116), KEY_F23(193), KEY_F24(194) |
+| `event1` | `Elan Touchscreen` | protocol B, `PROP_DIRECT`, 10 slots (`ABS_MT_SLOT` max 9) |
+| `event2` | `kx122-accel` | accelerometer (ABS_X/Y/Z) — orientation sensing, unused |
+
+Touchscreen axis ranges: **`ABS_X`/`ABS_MT_POSITION_X` max 1680**,
+**`ABS_Y`/`ABS_MT_POSITION_Y` max 1264**. The panel is 1264 wide x 1680 tall,
+so **touch axes are transposed relative to the panel** — precisely the quirk
+class §7 anticipated, now measured rather than guessed. Also present:
+`ABS_MT_TRACKING_ID`, `ABS_MT_PRESSURE`, `ABS_PRESSURE` (max 4095),
+`ABS_MT_TOUCH_MAJOR`, `BTN_TOUCH`.
+
+### Method and caveats
+
+Each refresh was a solid-fill of the region alternating black/white via
+`fbink -k <region> -W <mode>`, i.e. **maximum pixel transition** — real Game
+Boy frames change far less. Measurements include ~5 ms/iteration of process
+spawn and FBInk init (measured separately via `fbink -e`), which the real
+in-process application will not pay. Nickel was left running throughout, which
+per §8 makes these numbers **pessimistic**. Timing resolution is 10 ms
+(`/proc/uptime`, USER_HZ=100) over 12 iterations per cell.
