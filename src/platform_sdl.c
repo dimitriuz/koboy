@@ -268,6 +268,19 @@ static void pump(sdl_ctx *s, koboy_input *in)
     }
 }
 
+/* Destroys whatever has been created so far, in reverse order, leaving the
+   context reusable. Shared by shutdown and by every failure branch of init, so
+   a half-built backend never leaks a window or an open video subsystem. */
+static void sdl_teardown(sdl_ctx *s)
+{
+    free(s->argb);
+    s->argb = NULL;
+    if (s->tex) { SDL_DestroyTexture(s->tex);  s->tex = NULL; }
+    if (s->ren) { SDL_DestroyRenderer(s->ren); s->ren = NULL; }
+    if (s->win) { SDL_DestroyWindow(s->win);   s->win = NULL; }
+    SDL_Quit();
+}
+
 static bool sdl_init(void *ctx, const koboy_config *c)
 {
     sdl_ctx *s = ctx;
@@ -277,7 +290,7 @@ static bool sdl_init(void *ctx, const koboy_config *c)
 
     if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         SDL_Log("SDL_Init: %s", SDL_GetError());
-        return false;
+        goto fail;          /* SDL_Init can fail with subsystems already up */
     }
     s->perf_freq = SDL_GetPerformanceFrequency();
     if (!s->perf_freq) s->perf_freq = 1;
@@ -296,32 +309,31 @@ static bool sdl_init(void *ctx, const koboy_config *c)
 
     s->win = SDL_CreateWindow("koboy", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               win_w, win_h, SDL_WINDOW_SHOWN);
-    if (!s->win) { SDL_Log("SDL_CreateWindow: %s", SDL_GetError()); return false; }
+    if (!s->win) { SDL_Log("SDL_CreateWindow: %s", SDL_GetError()); goto fail; }
 
     s->ren = SDL_CreateRenderer(s->win, -1, 0);
-    if (!s->ren) { SDL_Log("SDL_CreateRenderer: %s", SDL_GetError()); return false; }
+    if (!s->ren) { SDL_Log("SDL_CreateRenderer: %s", SDL_GetError()); goto fail; }
     SDL_RenderSetLogicalSize(s->ren, s->panel_w, s->panel_h);
 
     s->tex = SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ARGB8888,
                                SDL_TEXTUREACCESS_STREAMING, s->panel_w, s->panel_h);
-    if (!s->tex) { SDL_Log("SDL_CreateTexture: %s", SDL_GetError()); return false; }
+    if (!s->tex) { SDL_Log("SDL_CreateTexture: %s", SDL_GetError()); goto fail; }
 
     s->argb = calloc((size_t)s->panel_w * (size_t)s->panel_h, sizeof *s->argb);
-    if (!s->argb) return false;
+    if (!s->argb) { SDL_Log("out of memory allocating panel shadow"); goto fail; }
     for (size_t i = 0; i < (size_t)s->panel_w * (size_t)s->panel_h; i++)
         s->argb[i] = 0xFFFFFFFFu;
     return true;
+
+fail:
+    sdl_teardown(s);
+    return false;
 }
 
 static void sdl_shutdown(void *ctx)
 {
     sdl_ctx *s = ctx;
-    free(s->argb);   s->argb = NULL;
-    if (s->tex) SDL_DestroyTexture(s->tex);
-    if (s->ren) SDL_DestroyRenderer(s->ren);
-    if (s->win) SDL_DestroyWindow(s->win);
-    s->tex = NULL; s->ren = NULL; s->win = NULL;
-    SDL_Quit();
+    sdl_teardown(s);
     free(s);
 }
 

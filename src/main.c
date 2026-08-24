@@ -169,6 +169,14 @@ int main(int argc, char **argv)
 
     if (!pf->init(pf->ctx, &cfg)) { fprintf(stderr, "koboy: platform init failed\n"); return 1; }
 
+    /* Installed here, not beside the emulator loop: the calibration wait below
+       tests g_stop, and a handler installed after it would leave that test dead
+       and let a signal during a first-run calibration terminate outright. This
+       is also after platform init on purpose, so it overrides any handler the
+       backend's own library installed. */
+    signal(SIGTERM, on_signal);
+    signal(SIGINT,  on_signal);
+
     int pw = 0, ph = 0;
     pf->screen_info(pf->ctx, &pw, &ph);
 
@@ -269,14 +277,10 @@ int main(int argc, char **argv)
     }
 
     /* ------------------------------------------------------------- the loop */
-    signal(SIGTERM, on_signal);
-    signal(SIGINT,  on_signal);
-
     koboy_pacer pace;
-    pace.start_us = 0;
     pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
 
-    unsigned long presented = 0, since_cleanup = 0;
+    unsigned long presented = 0, since_cleanup = 0, cleanups = 0;
     uint64_t last_sram_us = pf->now_us(pf->ctx);
 
     while (!g_stop && !pf->should_quit(pf->ctx)) {
@@ -308,8 +312,14 @@ int main(int argc, char **argv)
                     KOBOY_REFRESH_FAST);
         presented++;
 
-        if (++since_cleanup >= (unsigned long)cfg.cleanup_interval) {
+        /* A value <= 0 disables cleanup. The explicit guard is required:
+           without it, 0 makes this always true (a full refresh every presented
+           frame, the inverse of "never") and a negative value wraps the cast so
+           cleanup never runs at all. */
+        if (cfg.cleanup_interval > 0 &&
+            ++since_cleanup >= (unsigned long)cfg.cleanup_interval) {
             since_cleanup = 0;
+            cleanups++;
             /* Scoped to the game rect, never the full panel: a full-panel flash
                would disturb chrome that has no reason to change. */
             pf->refresh(pf->ctx, prof.game_x, prof.game_y, prof.game_w, prof.game_h,
@@ -329,6 +339,8 @@ sram_check:
     }
 
     if (sram && sram_len) sram_save(sram_path, sram, sram_len);
+    say("koboy: %s, %lu presented frames, %lu game-rect cleanups\n",
+        g_stop ? "stopped by signal" : "stopped", presented, cleanups);
     /* Always printed, even under --quiet: the smoke tests grep for it.
        --quiet suppresses other chatter only. */
     printf("presented=%lu\n", presented);

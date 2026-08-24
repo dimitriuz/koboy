@@ -22,7 +22,7 @@ test: build $(TESTBIN)
 clean:
 	rm -rf build
 
-.PHONY: build test clean
+.PHONY: build test clean host
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
 SDL_LIBS   := $(shell pkg-config --libs sdl2)
@@ -31,4 +31,3 @@ build/koboy: src/main.c src/platform_sdl.c $(SRC) | build
 	$(CC) $(CFLAGS) $(INC) $(SDL_CFLAGS) -o $@ $^ $(SDL_LIBS) -ldl -lm
 
 host: build/koboy build/stub_core.so
-.PHONY: host
