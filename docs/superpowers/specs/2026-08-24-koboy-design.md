@@ -81,14 +81,26 @@ typedef struct {
 Built-in defaults per device class; every field overridable in `koboy.ini`, so
 an unseen device is fixable by config edit rather than recompile.
 
-`scale = min(panel_w / 160, game_area_h / 144)`:
+Scale is a **deliberate choice, not the maximum that fits** (see §5). Default
+is **5x -> 800 x 720**, which fits every supported panel with room to spare:
 
-| Panel | Devices | Scale | Game area |
+| Panel | Devices | Side margin | Space below game rect |
 |---|---|---|---|
-| 1072 x 1448 | Clara family (6") | 6x | 960 x 864 |
-| 1264 x 1680 | Libra family (7") | 7x | 1120 x 1008 |
-| 1404 x 1872 | Elipsa family (10.3") | 8x | 1280 x 1152 |
-| 1440 x 1920 | Sage (8") | 9x | 1440 x 1296 |
+| 1072 x 1448 | Clara family (6") | 136 px | 728 px |
+| 1264 x 1680 | Libra family (7") | 232 px | 960 px |
+| 1404 x 1872 | Elipsa family (10.3") | 302 px | 1152 px |
+| 1440 x 1920 | Sage (8") | 320 px | 1200 px |
+
+One default therefore covers every target, which is simpler and more
+predictable than a per-device computed scale. `scale` is overridable in
+`koboy.ini`; if a configured scale does not fit, it falls back to the largest
+integer scale that does.
+
+Caveat: a fixed integer scale means *pixel* size is constant while *physical*
+size tracks panel DPI. The Libra 2, Clara family and Sage are all 300 DPI, so
+5x is ~68 mm wide on each; the Elipsa is 227 DPI, where the same 800 px is
+~89 mm. Integer scaling is worth keeping for its exact pixel replication, so
+this is accepted rather than corrected.
 
 ### Two SoC families
 
@@ -114,6 +126,7 @@ koboy/
 |   |-- core.c/.h         libretro dlopen + env callbacks
 |   |-- video.c/.h        RGB565 -> gray8, scale, dither    (pure)
 |   |-- input.c/.h        touch zones + keycodes -> buttons (pure)
+|   |-- chrome.c/.h       procedural faceplate, drawn once
 |   |-- config.c/.h       koboy.ini parsing
 |   |-- platform_if.h     the seam
 |   |-- platform_sdl.c    desktop backend
@@ -167,12 +180,35 @@ Cost: one indirect call per frame, irrelevant at ~20fps.
 
 ## 5. Video pipeline
 
-### Orientation
+### Orientation and why 5x rather than the largest fit
 
 Default is portrait with the grip bezel to the right: the right thumb rests on
 the physical buttons, the left thumb reaches the lower-left of the screen. Game
-area top-centred, control area below. Landscape (one scale step larger on some
-devices) is available via config but puts the buttons on an edge.
+rect top-centred, chrome and controls below.
+
+Render scale defaults to **5x (800 x 720)** rather than the largest scale the
+panel allows, for two measured reasons:
+
+1. **Refresh cost scales with area.** Extrapolating the DU4 curve in Appendix A
+   (~20 ms fixed + 2.41e-5 ms/px, fit within 5% on the middle measured point):
+
+   | Scale | Game area | Est. fps |
+   |---|---|---|
+   | 4x | 640 x 576 | ~41 |
+   | **5x** | **800 x 720** | **~34** |
+   | 6x | 960 x 864 | ~28 |
+   | 7x | 1120 x 1008 | ~23 |
+
+   We need ~20 fps to feel smooth, so 5x buys headroom that absorbs the pixel
+   pipeline's cost on a single-core A9 and tolerates a worse fixed cost on
+   other devices.
+
+2. **The largest fit is bigger than the hardware being emulated.** The original
+   DMG screen was roughly 47 x 43 mm. At 300 DPI, 7x is 95 x 85 mm — twice
+   original size, a 5-inch Game Boy. 5x is 68 x 61 mm (1.44x original):
+   larger and easier on the eyes than the real thing without being absurd.
+
+The freed space is not waste; it is where the chrome lives.
 
 ### Frame pacing
 
@@ -225,7 +261,24 @@ but is not required to start.
 ### Ghost cleanup
 
 Every N presented frames (configurable, ~200) and on pause/exit, one
-`KOBOY_REFRESH_FULL` flashes the panel clean.
+`KOBOY_REFRESH_FULL` flashes clean — **scoped to the game rect only, never the
+full panel**, so the static chrome is never disturbed.
+
+### Static chrome
+
+At 5x the game rect is under a third of the panel. The surrounding area is
+drawn once as a Game Boy-style faceplate: bezel around the screen, d-pad and
+button glyphs, Start/Select labels, and a status line (battery, game title).
+
+- **Zero per-frame cost.** Drawn once at startup and never refreshed, exactly
+  like the control layout in §7. Chrome elaborateness is free at runtime, so
+  this is an authoring question rather than a performance one.
+- **Drawn with `KOBOY_REFRESH_FULL` (GC16, 16 levels).** Static chrome gets
+  full panel quality while only the game rect runs the fast 4-level DU4 path.
+  One ~400 ms refresh at launch buys crisp chrome for the whole session.
+- **Procedural, not a bitmap.** Geometry derives from the same control-area
+  percentages as §7, so one implementation adapts to every panel size. A fixed
+  PNG would need authoring per device class and would undercut §3.
 
 ## 6. Core integration
 
@@ -534,12 +587,15 @@ Resolved on hardware 2026-08-24; see Appendix A for data.
 
 ## 14. Build order
 
-1. `koboy-probe` — buildable now, answers §12, zero device risk.
+1. `koboy-probe` — captures button keycodes (the one §12 item still open) and
+   generates device profiles for hardware the author does not own. Zero device
+   risk; remains the growth path for `TESTED.md`.
 2. Platform seam + `platform_sdl.c` — playable-on-desktop skeleton.
 3. `core.c` — libretro contract, verified on the host with a desktop-built
    gambatte core.
 4. `video.c` — dither/scale/dirty-rect pipeline, golden-image tested.
 5. `input.c` — thumb-pad and zone logic, trace tested.
+5b. `chrome.c` — procedural faceplate; pure geometry, golden-image tested.
 6. `platform_kobo.c` — FBInk + evdev, informed by probe results.
 7. `scripts/koboy.sh` + packaging + `TESTED.md`.
 
