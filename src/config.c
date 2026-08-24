@@ -87,10 +87,64 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
 
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 {
-    FILE *f = fopen(path, "a");
-    if (!f) return false;
-    fprintf(f, "\n# written by first-run calibration\nkey_a = %u\nkey_b = %u\n",
+    /* Read existing file, filtering out old key_a/key_b lines, then write
+       atomically with new keys. This makes calibration idempotent: whether
+       called for the first time or recalibration, the file ends with exactly
+       one key_a line and one key_b line. */
+
+    /* Create temp file in same directory as target to ensure same filesystem
+       (so rename succeeds atomically, and so writes fail fast if disk full) */
+    char temp_path[512];
+    snprintf(temp_path, sizeof temp_path, "%s.tmp", path);
+
+    FILE *out = fopen(temp_path, "w");
+    if (!out) return false;
+
+    /* Read existing file if it exists, filtering out key_a/key_b lines */
+    FILE *in = fopen(path, "r");
+    if (in) {
+        char line[1024];
+        while (fgets(line, sizeof line, in)) {
+            /* Check if this is an assignment (has '=' before any '#').
+               If so, check if it's key_a or key_b and skip if so.
+               Pure comment lines (# ...) or blank lines pass through unchanged. */
+            char *eq = strchr(line, '=');
+            char *hash = strchr(line, '#');
+
+            /* If there's an '=' and it comes before any '#', this is an assignment */
+            if (eq && (!hash || eq < hash)) {
+                /* Extract key name (everything before '=', trimmed) */
+                char k[1024];
+                snprintf(k, sizeof k, "%.*s", (int)(eq - line), line);
+                trim(k);
+
+                /* Skip old key_a and key_b lines */
+                if (!strcmp(k, "key_a") || !strcmp(k, "key_b")) {
+                    continue;
+                }
+            }
+
+            /* Preserve this line (comments, blanks, other keys) */
+            fputs(line, out);
+        }
+        fclose(in);
+    }
+
+    /* Write the new calibration */
+    fprintf(out, "# written by first-run calibration\nkey_a = %u\nkey_b = %u\n",
             (unsigned)key_a, (unsigned)key_b);
-    fclose(f);
+
+    if (fclose(out) != 0) {
+        /* fclose failed; temp file is left but out of sync, remove it */
+        remove(temp_path);
+        return false;
+    }
+
+    /* Atomically replace the target file */
+    if (rename(temp_path, path) != 0) {
+        remove(temp_path);
+        return false;
+    }
+
     return true;
 }

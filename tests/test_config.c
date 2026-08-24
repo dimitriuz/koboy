@@ -41,4 +41,62 @@ TEST_MAIN({
     config_defaults(&c);
     CHECK(config_load(&c, "build/definitely-absent.ini"));
     CHECK_EQ_INT(c.scale, 5);
+
+    /* config_save_keys is idempotent: calling it twice on the same file with
+       different values should result in the file containing exactly one key_a
+       line and one key_b line with the latest values. */
+    CHECK(config_save_keys("build/keys1.ini", 111, 222));
+    CHECK(config_save_keys("build/keys1.ini", 333, 444));
+
+    /* Count occurrences of key_a and key_b in the file */
+    FILE *count_f = fopen("build/keys1.ini", "r");
+    CHECK(count_f);
+    int key_a_count = 0, key_b_count = 0;
+    char line[1024];
+    while (fgets(line, sizeof line, count_f)) {
+        if (strstr(line, "key_a =")) key_a_count++;
+        if (strstr(line, "key_b =")) key_b_count++;
+    }
+    fclose(count_f);
+    CHECK_EQ_INT(key_a_count, 1);
+    CHECK_EQ_INT(key_b_count, 1);
+
+    /* Verify the values are the latest ones */
+    config_defaults(&c);
+    CHECK(config_load(&c, "build/keys1.ini"));
+    CHECK_EQ_INT(c.key_a, 333);
+    CHECK_EQ_INT(c.key_b, 444);
+
+    /* Preservation: seed a file with a comment, an unrelated key, and an old
+       key_a line. Call config_save_keys. Verify the comment and unrelated key
+       survive and still parse correctly. */
+    FILE *seed_f = fopen("build/keys2.ini", "w");
+    fprintf(seed_f, "# important comment\nscale = 4\nold key_a = 999\n");
+    fclose(seed_f);
+    CHECK(config_save_keys("build/keys2.ini", 555, 666));
+
+    /* Verify comment and scale survived */
+    config_defaults(&c);
+    CHECK(config_load(&c, "build/keys2.ini"));
+    CHECK_EQ_INT(c.scale, 4);
+    CHECK_EQ_INT(c.key_a, 555);
+    CHECK_EQ_INT(c.key_b, 666);
+
+    /* Verify the comment is actually in the file (not just parsed) */
+    FILE *verify_f = fopen("build/keys2.ini", "r");
+    bool found_comment = false;
+    while (fgets(line, sizeof line, verify_f)) {
+        if (strstr(line, "important comment")) {
+            found_comment = true;
+            break;
+        }
+    }
+    fclose(verify_f);
+    CHECK(found_comment);
+
+    /* Failure path: attempt to save to a non-existent directory.
+       Should return false and leave no temp file. */
+    bool result = config_save_keys("/nonexistent/dir/keys.ini", 777, 888);
+    CHECK(!result);
+    CHECK(!fopen("/nonexistent/dir/keys.ini.tmp", "r"));  /* temp file cleaned up */
 })
