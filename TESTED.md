@@ -11,7 +11,7 @@ broken, just unmeasured. If you run koboy on one, please add a row.
 
 | Device | Platform | Firmware | Panel | Buttons | `wfm_fast` | fps at 5x | Status |
 |---|---|---|---|---|---|---|---|
-| Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, KEY_F23(193)/KEY_F24(194) --- the shipped defaults, so they work without calibrating | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
+| Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, KEY_F23(193)/KEY_F24(194) --- the shipped default pair, though this device's own calibration assigned them the other way round (`key_a = 194`) | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
 
 That row was verified with the shipped defaults, which is the point of shipping
 them: `waveform_fast = auto`, `full_refresh_permille = 1000` (never force a
@@ -21,6 +21,37 @@ game of Tetris on those settings: controls responsive, **no flashing at all**,
 and slight ghosting the player was happy to live with. The earlier defaults
 (`450` / `60` / `3000`) were mitigations for a forced-DU4 pipeline and, once
 measured, turned out to cause every flash between them while fixing nothing.
+
+### Second title, an action game (Darkwing Duck, MBC1)
+
+Tetris is a generous first test: small dirty rectangles, no scrolling. An action
+platformer is the harder case, so `Darkwing Duck (USA)` was run on the same
+device and the same shipped defaults. Measured from the launcher log:
+
+| | |
+|---|---|
+| Wall clock | 173 s (15:30:50 to 15:33:43), launched from NickelMenu |
+| Presented frames | 2261, i.e. **13.1 presented fps** at `present_divisor = 3` |
+| Game-rect cleanups | 0 --- the periodic flash never fired, as intended |
+| Large-area full refreshes | 16, about one per 11 s, all from real full-screen changes rather than a threshold |
+| Layout | scale 5, an 800x720 game rect at (232,84) on the 1264x1680 panel |
+| Exit | `rc=0`, framebuffer restored to 32bpp, Nickel restarted **without a reboot** |
+
+13.1 presented fps against Tetris's headroom is the honest cost of a game that
+dirties most of the screen most of the time: the pipeline pushes changed
+rectangles, and in a scrolling platformer the changed rectangle is nearly the
+whole picture. It was judged good to play at that rate.
+
+The clean exit matters as much as the frame rate. Getting back to a working
+Nickel without a reboot is what the launcher's environment gate and `restore()`
+exist for, and this run is the evidence they work: the device identity file was
+byte-identical afterwards, with its real serial intact.
+
+**What this run did NOT test:** Darkwing Duck is cartridge type `0x01` (MBC1)
+with `rambanks: 0` --- no battery-backed SRAM, exactly like Tetris. So the save
+path is still unexercised on hardware by either title, and `sram_load` changed
+materially in the final fix round. A battery-save game (a Zelda, Pokemon, or
+Kirby's Dream Land 2) is the missing test.
 
 ## How to add a row
 
