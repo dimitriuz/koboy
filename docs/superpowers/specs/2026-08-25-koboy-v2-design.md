@@ -363,14 +363,36 @@ in Appendix A. The short version:
 `bluetoothd`, `bluealsa` and `dbus-daemon` are init children in their own process
 group. **Stopping Nickel's process group does not touch them.**
 
-`rtk_hciattach` is the exception: Nickel spawned it and it sits in **Nickel's**
-process group, so the takeover kills it and `hci0` goes with it — the UART line
-discipline is released when the attach process dies.
+`rtk_hciattach` is the interesting case: Nickel spawned it and it sits in
+**Nickel's** process group, so a process-group kill would take it — and `hci0`
+with it, since the UART line discipline is released when the attach process
+dies.
 
-**Consequence: koboy owns bringing the radio up.** `koboy.sh` checks for `hci0`
+**Correction, from reading `scripts/koboy.sh` rather than from the process
+table.** The launcher does not kill by process group. It kills by name:
+
+```sh
+killall -q -TERM nickel hindenburg sickel fickel strickel fontickel \
+                 adobehost foxitpdf iink
+```
+
+`rtk_hciattach` is not in that list, so the takeover leaves it running and it is
+merely reparented to init. `hci0` should therefore survive as things stand. That
+is a conclusion from reading the launcher, **not a measurement** — verifying it
+requires an actual takeover, which is the one operation with a
+device-corruption incident in its history, so it is verified on-device in the
+Bluetooth plan rather than assumed here.
+
+The prescribed behaviour is unchanged either way, and deliberately so:
+
+**koboy owns bringing the radio up, by capability check rather than by
+assumption.** `koboy.sh` checks for `hci0`
 after stopping Nickel and, if absent, respawns the attach helper with the argv
 observed here (`/sbin/rtk_hciattach -n -s 115200 ttymxc1 rtk_h5`), waiting for
-`hci0` to appear. Nickel's own strings name three variants — `RealtekHciAttach`,
+`hci0` to appear. Checking rather than assuming covers both cases with one code
+path: the helper surviving the takeover, and Bluetooth simply having been
+switched off before launch — which is the common case and the one that would
+otherwise leave a user wondering why their gamepad does nothing. Nickel's own strings name three variants — `RealtekHciAttach`,
 `NXPHciAttach`, `CypressHciAttach` — so the helper is selected by what exists on
 the device rather than hardcoded, in keeping with v1 §3.
 
@@ -585,9 +607,13 @@ independent of its audio half.
 
 ## 12. Risks
 
-- **`rtk_hciattach` dies with Nickel.** Known and designed for (§8.2), but it is
-  a new thing `koboy.sh` does during the takeover, and the takeover is the one
-  subsystem with a device-corruption incident in its history (v1 Appendix D §5).
+- **Radio bring-up is new work inside the takeover.** `rtk_hciattach` sits in
+  Nickel's process group but the launcher kills by name, so it probably
+  survives — probably, not certainly, and it is unverified (§8.2). Either way
+  koboy checks for `hci0` and brings it up when absent, which is also the
+  Bluetooth-was-switched-off case. The concern is that this is a new thing
+  `koboy.sh` does during the takeover, and the takeover is the one subsystem
+  with a device-corruption incident in its history (v1 Appendix D §5).
   Bringing up a UART line discipline must not become a way to fail the restore
   path: radio bring-up happens **after** the environment gate passes, and the
   restore trap is untouched by it.
@@ -620,6 +646,7 @@ independent of its audio half.
 | Whether the PCM accepts gambatte's native 32768 Hz, or resampling is required | Step 8, same run |
 | Does a gamepad reconnect after the takeover without an agent | Step 8, with the author's controller |
 | Which attach helper each device family needs | Selected at runtime from what exists on the device |
+| Whether `rtk_hciattach` actually survives the takeover | Bluetooth plan, task 1 — needs a real takeover, so it is measured rather than reasoned |
 
 ---
 
@@ -677,8 +704,11 @@ hci0:  Type: Primary  Bus: UART
 | `bluetoothd` | 3790 | 1 | 233 |
 
 `bluetoothd`, `bluealsa` and `dbus-daemon` share process group 233 and survive a
-kill of Nickel's group 1874. `rtk_hciattach` is in Nickel's group and does not,
-so `hci0` disappears with the takeover and koboy must bring it back.
+kill of Nickel's group 1874. `rtk_hciattach` is in Nickel's group and would not
+survive a group kill — but `scripts/koboy.sh` kills by name, not by group, and
+does not name it, so in practice it is reparented to init and `hci0` stays up.
+Unverified: confirming it needs a real takeover. koboy checks for `hci0` and
+brings it up when absent either way.
 
 ### Kobo's own configuration
 
