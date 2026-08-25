@@ -58,9 +58,16 @@ device's own menu, as the README explains.
 The Libra 2 figures above come from direct waveform measurements on that device
 (design spec, Appendices A and B), not from a guess --- but e-ink refresh
 timing depends on panel temperature and controller state, and re-measuring the
-*same* rect with the *same* waveform on the *same* device gave figures 45%
-apart across two sessions. Treat every absolute number here as
+*same* rect with the *same* waveform on the *same* device has now given 31.2,
+46.7 and 67.5 ms across three sessions --- a factor of 2.2, and that is a floor
+on the spread rather than a bound. Treat every absolute number here as
 order-of-magnitude.
+
+Blocking figures deserve extra suspicion: this device reports
+`unreliable_wait_for=1`, and that flag applies to the very ioctl a blocking
+measurement waits on, so those numbers are questionable by construction.
+`koboy-probe` prints a caveat beside them when the flag is set. The main loop
+never waits for completion, so what it depends on is the non-blocking path.
 
 What did reproduce across sessions, and is what the design actually rests on:
 
