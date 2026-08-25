@@ -663,7 +663,7 @@ Kobo Libra 2, firmware 4.38.23684, measured 2026-08-24 over SSH.
 | fb driver | `mxc_epdc_fb` (NXP EPDC), `isSunxi=0` |
 | Panel | 1264 x 1680, 300 DPI, **BPP=32**, `lineLength=5120` |
 | Stride padding | 5120 / 4 = **1280 px stride vs 1264 visible** — blits must honour it |
-| Vertical origin | `viewVertOrigin = viewVertOffset = 8` |
+| Vertical origin | `viewVertOrigin = viewVertOffset = 8` --- **NOT a blit offset, see correction below** |
 | Rotation | `currentRota=1` (CW 90), canonical 0, `ntxRotaQuirk=5`, `canRotate=1` |
 | Extras | `canHWInvert=1`, `hasEclipseWfm=1`, `isKoboNonMT=0` |
 
@@ -831,3 +831,46 @@ compiler built successfully; the final gcc never ran. This is a 14-year gap
 between a 2012 libc's autoconf idioms and a 2026 host, not a misconfiguration.
 Viable routes: a prebuilt toolchain targeting glibc <= 2.19, or building
 koxtoolchain inside a container with a period-appropriate host.
+
+---
+
+## Appendix C — Correction: `viewVertOrigin` is not a framebuffer offset
+
+Appendix A recorded `viewVertOrigin = 8` and section 8 stated that blits must
+honour it. **That was wrong**, and using 8 as a pixel origin would have rendered
+every frame 8 px too low on the panel.
+
+FBInk folds its own text row-balancing `viewVertOffset` into the reported
+`viewVertOrigin`. The Libra 2's quirk table sets no `koboVertOffset`, so the
+real viewport origin is `origin - offset` = **0**. The Task 17 implementer
+derived this by reading FBInk's source; it was then confirmed by measurement on
+the device:
+
+```
+viewHeight=1680   screenHeight=1680
+viewVertOrigin=8  viewVertOffset=8
+```
+
+`viewHeight == screenHeight == 1680` is the decisive evidence. A genuine 8 px
+framebuffer origin would leave only 1672 viewable rows; the two being equal
+proves there is no framebuffer offset at all. The 8 is FBInk's own text-row
+shifting, which is why its startup log says "Vertical fit isn't perfect,
+shifting rows down by 8 pixels" --- a statement about text placement, not about
+the framebuffer.
+
+The **stride** fact from Appendix A stands unchanged and does still bind blits:
+`lineLength = 5120` at 32bpp is 1280 px of stride against 1264 visible.
+
+### Two further corrections from the same task
+
+**`hasEclipseWfm` gates DU4.** FBInk silently downgrades `WFM_DU4` to GC4 unless
+that quirk is set, so a backend claiming DU4 without checking it would be making
+a false claim. Measured on this device: `hasEclipseWfm=1`, `devicePlatform='Mark
+9'` --- so DU4 genuinely engages here, but the check is required for correctness
+on other models.
+
+**The power button cannot be excluded from an input grab.** Section 7 required
+grabbing the key node while never grabbing the power button. On this hardware
+those are the same device --- page-turn keys and power both live on `gpio-keys`
+(`event0`) --- so the instruction was impossible as written. The resolution is to
+read that node without grabbing it at all.
