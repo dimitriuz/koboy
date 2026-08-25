@@ -380,7 +380,10 @@ labels. Today's table is A–Z and space, which renders a filename as
     `size_t` wraps to near `SIZE_MAX`, so the write is undefined behaviour and
     the process crashes before any guard band can observe anything. Same
     reasoning, and the same fix, as `chrome_bands` in `src/chrome.c` and
-    `stats_stage_valid` in `src/stats.h`.
+    `stats_stage_valid` in `src/stats.h`. Proves the predicate is correct, not
+    that `text_draw` still calls it -- fix round 2's positive-overflow
+    end-to-end block in `tests/test_text.c` (see Step 6) covers that gap by
+    observing a real call site instead of a crash.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -434,17 +437,10 @@ TEST_MAIN({
     text_draw(fb, W, W, H, 0, 0, "\x01\x7F", 1, 0x00);
     CHECK_EQ_INT(ink_count(fb, sizeof fb), 0);
 
-    /* The clip, asserted directly. This is the real gate: it is the one
-       assertion in this file guaranteed to fail gracefully (a deterministic
-       FAIL line, no crash) if the clip breaks. It runs BEFORE the guard-band
-       block below on purpose -- that block calls text_draw with coordinates
-       far off every edge, and text_draw's clip is now entirely routed
-       through text_pixel_visible (see text.c), so once that predicate is
-       wrong the guard-band block's own text_draw calls become undefined
-       behaviour too (a negative row index wraps to near SIZE_MAX on cast to
-       size_t) and can crash the process. Ordering these first means a broken
-       predicate is still reported before anything downstream can take the
-       process out. */
+    /* The clip, asserted directly: proves the predicate itself is correct.
+       The block below proves text_draw actually calls it -- see its comment
+       for why that second check needs positive-only overflow to stay
+       crash-safe under the same mutant that breaks this one. */
     CHECK_EQ_INT(text_pixel_visible(0, 0, W, H), 1);
     CHECK_EQ_INT(text_pixel_visible(W - 1, H - 1, W, H), 1);
     CHECK_EQ_INT(text_pixel_visible(-1, 0, W, H), 0);
@@ -452,25 +448,38 @@ TEST_MAIN({
     CHECK_EQ_INT(text_pixel_visible(W, 0, W, H), 0);
     CHECK_EQ_INT(text_pixel_visible(0, H, W, H), 0);
 
-    /* CLIPPING IS LIVE. Drawing past every edge must touch nothing outside the
-       buffer. A guard band on both sides catches an unclamped write; this is
-       checked by assertion on the band rather than by hoping a stray write
-       lands somewhere observable. Exercises text_draw end-to-end (glyph
-       rasterisation plus the clip together) as a regression check of the
-       CORRECT implementation -- it is not itself crash-safe against a broken
-       text_pixel_visible, per the note above, which is why it is not the
-       gate the mutant round relies on. */
-    static uint8_t guarded[16 + W * H + 16];
-    memset(guarded, 0x5A, sizeof guarded);
-    uint8_t *inner = guarded + 16;
-    memset(inner, 0xFF, (size_t)W * H);
-    text_draw(inner, W, W, H, -50, -50, "CLIP", 3, 0x00);
-    text_draw(inner, W, W, H, W - 2, H - 2, "CLIP", 3, 0x00);
-    text_draw(inner, W, W, H, 0, H + 5, "CLIP", 3, 0x00);
-    int guard_ok = 1;
-    for (int i = 0; i < 16; i++) if (guarded[i] != 0x5A) guard_ok = 0;
-    for (int i = 0; i < 16; i++) if (guarded[16 + W * H + i] != 0x5A) guard_ok = 0;
-    CHECK_EQ_INT(guard_ok, 1);
+    /* End-to-end proof that text_draw actually CONSULTS the clip, not merely
+       that the predicate is right. Overflow is to the RIGHT and BOTTOM only,
+       and that restriction is the whole point: a negative coordinate cast to
+       size_t wraps to near SIZE_MAX, so an unclamped write would be undefined
+       behaviour and the process would simply crash -- which is what the
+       previous version of this block did, and why it could not be trusted.
+       Positive overflow into padding that is inside the same allocation is
+       fully defined, so a missing clamp is observed rather than survived.
+
+       This is the check the direct text_pixel_visible assertions cannot make:
+       they prove the predicate, this proves the call site. */
+    {
+        enum { GW = 64, GH = 32, PAD = 32 };
+        enum { GSTRIDE = GW + PAD, GROWS = GH + PAD };
+        static uint8_t g[GSTRIDE * GROWS];
+        memset(g, 0xFF, sizeof g);
+
+        /* Positioned so the glyphs run past both the right and bottom edges of
+           the declared GW x GH region. */
+        text_draw(g, GSTRIDE, GW, GH, GW - 2, GH - 2, "WW", 3, 0x00);
+
+        int outside_touched = 0, inside_painted = 0;
+        for (int y = 0; y < GROWS; y++)
+            for (int x = 0; x < GSTRIDE; x++) {
+                uint8_t v = g[(size_t)y * GSTRIDE + x];
+                if (x >= GW || y >= GH) { if (v != 0xFF) outside_touched++; }
+                else if (v != 0xFF)     inside_painted++;
+            }
+        CHECK_EQ_INT(outside_touched, 0);
+        /* And it really did draw, so "nothing outside" is not vacuous. */
+        CHECK(inside_painted > 0);
+    }
 
     /* Centring puts equal-ish margins either side. */
     memset(fb, 0xFF, sizeof fb);
@@ -667,22 +676,33 @@ void text_draw_centred(uint8_t *fb, int stride, int W, int H, int y,
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `make build/test_text && ./build/test_text`
-Expected: PASS — `tests/test_text.c: 17 checks, 0 failures`.
+Expected: PASS — `tests/test_text.c: 18 checks, 0 failures`.
 
 (The plan's predicted check counts are unreliable across this document --
-Task 1 said 12, actual was 10; this step originally said 13, actual was 11
-before fix round 1 added six `text_pixel_visible` assertions, giving 17.
-Report the real count from the build; never add or remove an assertion to
-hit a predicted number.)
+Task 1 said 12, actual was 10; this step originally said 13, actual was 11;
+fix round 1 added six `text_pixel_visible` assertions for 17; fix round 2
+replaced the one-assertion negative-coordinate guard band with a two-
+assertion positive-overflow one (`outside_touched`, `inside_painted`),
+giving 18. Report the real count from the build; never add or remove an
+assertion to hit a predicted number.)
 
 - [ ] **Step 6: Verify the clip guard is real (mutant)**
 
-The clip is asserted directly via `text_pixel_visible` (added in fix round
-1 -- see Interfaces and Steps 3/4 above), because probing it by deleting the
-inline `if (fy < 0 || fy >= H) continue;` and drawing off-buffer cannot
-produce a reliable test: a negative row index cast to `size_t` wraps to near
-`SIZE_MAX`, so the write is undefined behaviour and the process crashes
-before any guard-band assertion runs (confirmed: exit 139, zero output).
+The clip is asserted two ways, and both matter: `text_pixel_visible`
+(fix round 1) proves the predicate itself is correct; the end-to-end block
+below it (fix round 2) proves `text_draw` actually consults that predicate
+at its call sites, which the direct assertions alone cannot show. That
+second block deliberately overflows only to the RIGHT and BOTTOM, into
+padding that is part of the same allocation (`GSTRIDE = GW + PAD`,
+`GROWS = GH + PAD`): a positive out-of-range index stays inside the
+allocation, so an unclamped write is *observed*, not merely crashed into.
+The original version of this block used a negative-coordinate guard band
+instead and could not be trusted -- a negative row index cast to `size_t`
+wraps to near `SIZE_MAX`, so the resulting write is undefined behaviour and
+the process simply segfaults before any assertion runs (confirmed twice:
+once for the original inline clip in fix round 1's Step 6, and again for
+`text_pixel_visible` itself when the guard-band block still used negative
+coordinates -- see task-2-report.md's fix-round-1 and fix-round-2 sections).
 
 Mutant: make `text_pixel_visible` return `true` unconditionally --
 
@@ -694,30 +714,27 @@ bool text_pixel_visible(int x, int y, int W, int H)
 }
 ```
 
-Rebuild and run `./build/test_text`. Expected: four deterministic, graceful
-`FAIL ... == 1, expected 0` lines from the direct `text_pixel_visible`
-assertions (which run first in the test, specifically so they are reported
-before anything downstream can crash the process) --
+Rebuild and run `./build/test_text`. Expected, and now achieved: graceful,
+deterministic failures and a **clean exit — no crash** --
 
 ```
-FAIL tests/test_text.c:61: text_pixel_visible(-1, 0, W, H) == 1, expected 0
-FAIL tests/test_text.c:62: text_pixel_visible(0, -1, W, H) == 1, expected 0
-FAIL tests/test_text.c:63: text_pixel_visible(W, 0, W, H) == 1, expected 0
-FAIL tests/test_text.c:64: text_pixel_visible(0, H, W, H) == 1, expected 0
+FAIL tests/test_text.c:54: text_pixel_visible(-1, 0, W, H) == 1, expected 0
+FAIL tests/test_text.c:55: text_pixel_visible(0, -1, W, H) == 1, expected 0
+FAIL tests/test_text.c:56: text_pixel_visible(W, 0, W, H) == 1, expected 0
+FAIL tests/test_text.c:57: text_pixel_visible(0, H, W, H) == 1, expected 0
+FAIL tests/test_text.c:87: outside_touched == 320, expected 0
+tests/test_text.c: 18 checks, 5 failures
+exit=1
 ```
 
-then the process still crashes (exit 139) during the guard-band block that
-follows, because `text_draw`'s clip is now entirely routed through the same
-broken predicate, so those off-buffer `text_draw` calls become undefined
-behaviour too -- no final "N checks, M failures" summary line is printed.
-This is the mutant's true, observed behaviour: the direct assertions do
-fail gracefully as intended, but the guard-band block sharing the binary
-with a broken predicate means the run as a whole does not reach a clean,
-crash-free exit. See task-2-report.md's fix-round-1 section for the full
-bisection and the coordinator's ruling on it.
+Five failures: the four direct-predicate assertions, plus the end-to-end
+`outside_touched` check (320 padding pixels got painted once the clip no
+longer clamped anything) -- and `inside_painted` still passes, so the
+failure is not vacuous; `text_draw` really did draw. The binary reaches its
+final summary line and exits 1. No segfault.
 
 Revert `text_pixel_visible` to the real implementation. Confirm
-`./build/test_text` returns to `tests/test_text.c: 17 checks, 0 failures`.
+`./build/test_text` returns to `tests/test_text.c: 18 checks, 0 failures`.
 
 - [ ] **Step 7: Delete the duplicate font from `main.c`**
 

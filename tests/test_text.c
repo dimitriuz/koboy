@@ -45,17 +45,10 @@ TEST_MAIN({
     text_draw(fb, W, W, H, 0, 0, "\x01\x7F", 1, 0x00);
     CHECK_EQ_INT(ink_count(fb, sizeof fb), 0);
 
-    /* The clip, asserted directly. This is the real gate: it is the one
-       assertion in this file guaranteed to fail gracefully (a deterministic
-       FAIL line, no crash) if the clip breaks. It runs BEFORE the guard-band
-       block below on purpose -- that block calls text_draw with coordinates
-       far off every edge, and text_draw's clip is now entirely routed
-       through text_pixel_visible (see text.c), so once that predicate is
-       wrong the guard-band block's own text_draw calls become undefined
-       behaviour too (a negative row index wraps to near SIZE_MAX on cast to
-       size_t) and can crash the process. Ordering these first means a broken
-       predicate is still reported before anything downstream can take the
-       process out. */
+    /* The clip, asserted directly: proves the predicate itself is correct.
+       The block below proves text_draw actually calls it -- see its comment
+       for why that second check needs positive-only overflow to stay
+       crash-safe under the same mutant that breaks this one. */
     CHECK_EQ_INT(text_pixel_visible(0, 0, W, H), 1);
     CHECK_EQ_INT(text_pixel_visible(W - 1, H - 1, W, H), 1);
     CHECK_EQ_INT(text_pixel_visible(-1, 0, W, H), 0);
@@ -63,25 +56,38 @@ TEST_MAIN({
     CHECK_EQ_INT(text_pixel_visible(W, 0, W, H), 0);
     CHECK_EQ_INT(text_pixel_visible(0, H, W, H), 0);
 
-    /* CLIPPING IS LIVE. Drawing past every edge must touch nothing outside the
-       buffer. A guard band on both sides catches an unclamped write; this is
-       checked by assertion on the band rather than by hoping a stray write
-       lands somewhere observable. Exercises text_draw end-to-end (glyph
-       rasterisation plus the clip together) as a regression check of the
-       CORRECT implementation -- it is not itself crash-safe against a broken
-       text_pixel_visible, per the note above, which is why it is not the
-       gate the mutant round relies on. */
-    static uint8_t guarded[16 + W * H + 16];
-    memset(guarded, 0x5A, sizeof guarded);
-    uint8_t *inner = guarded + 16;
-    memset(inner, 0xFF, (size_t)W * H);
-    text_draw(inner, W, W, H, -50, -50, "CLIP", 3, 0x00);
-    text_draw(inner, W, W, H, W - 2, H - 2, "CLIP", 3, 0x00);
-    text_draw(inner, W, W, H, 0, H + 5, "CLIP", 3, 0x00);
-    int guard_ok = 1;
-    for (int i = 0; i < 16; i++) if (guarded[i] != 0x5A) guard_ok = 0;
-    for (int i = 0; i < 16; i++) if (guarded[16 + W * H + i] != 0x5A) guard_ok = 0;
-    CHECK_EQ_INT(guard_ok, 1);
+    /* End-to-end proof that text_draw actually CONSULTS the clip, not merely
+       that the predicate is right. Overflow is to the RIGHT and BOTTOM only,
+       and that restriction is the whole point: a negative coordinate cast to
+       size_t wraps to near SIZE_MAX, so an unclamped write would be undefined
+       behaviour and the process would simply crash -- which is what the
+       previous version of this block did, and why it could not be trusted.
+       Positive overflow into padding that is inside the same allocation is
+       fully defined, so a missing clamp is observed rather than survived.
+
+       This is the check the direct text_pixel_visible assertions cannot make:
+       they prove the predicate, this proves the call site. */
+    {
+        enum { GW = 64, GH = 32, PAD = 32 };
+        enum { GSTRIDE = GW + PAD, GROWS = GH + PAD };
+        static uint8_t g[GSTRIDE * GROWS];
+        memset(g, 0xFF, sizeof g);
+
+        /* Positioned so the glyphs run past both the right and bottom edges of
+           the declared GW x GH region. */
+        text_draw(g, GSTRIDE, GW, GH, GW - 2, GH - 2, "WW", 3, 0x00);
+
+        int outside_touched = 0, inside_painted = 0;
+        for (int y = 0; y < GROWS; y++)
+            for (int x = 0; x < GSTRIDE; x++) {
+                uint8_t v = g[(size_t)y * GSTRIDE + x];
+                if (x >= GW || y >= GH) { if (v != 0xFF) outside_touched++; }
+                else if (v != 0xFF)     inside_painted++;
+            }
+        CHECK_EQ_INT(outside_touched, 0);
+        /* And it really did draw, so "nothing outside" is not vacuous. */
+        CHECK(inside_painted > 0);
+    }
 
     /* Centring puts equal-ish margins either side. */
     memset(fb, 0xFF, sizeof fb);
