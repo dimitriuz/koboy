@@ -48,40 +48,53 @@ TEST_MAIN({
 
     /* #7: the stub's observation flags were only readable under gdb, so the
        assertions they were written for were never actually made. Exported as
-       real symbols, they become real checks. */
-    {
-        void *so = dlopen("build/stub_core.so", RTLD_NOW);
-        CHECK(so != NULL);
-        int *unloaded = (int *)dlsym(so, "stub_observed_unload");
-        int *was_reset = (int *)dlsym(so, "stub_observed_reset");
-        int *ser_calls = (int *)dlsym(so, "stub_serialize_calls");
-        CHECK(unloaded != NULL);
-        CHECK(was_reset != NULL);
-        CHECK(ser_calls != NULL);
-    }
+       real symbols -- and READ, not merely resolved, below: a test that
+       checks the symbol resolves without ever reading its value repeats the
+       exact failure #7 is about. */
+    void *so = dlopen("build/stub_core.so", RTLD_NOW);
+    CHECK(so != NULL);
+    int *unloaded  = (int *)dlsym(so, "stub_observed_unload");
+    int *was_reset = (int *)dlsym(so, "stub_observed_reset");
+    int *ser_calls = (int *)dlsym(so, "stub_serialize_calls");
+    CHECK(unloaded != NULL);
+    CHECK(was_reset != NULL);
+    CHECK(ser_calls != NULL);
 
-    /* Save states round-trip through the core. */
-    {
-        size_t n = core_state_size(c);
-        CHECK(n > 0);
-        uint8_t *blob = malloc(n);
-        CHECK(blob != NULL);
-        CHECK_EQ_INT(core_state_save(c, blob, n), 1);
-        CHECK_EQ_INT(core_state_load(c, blob, n), 1);
+    /* Save states round-trip through the core. Deltas, not absolute values:
+       the stub's counters are process-wide statics, so an absolute == 1
+       would be fragile against test order/reruns within the same binary. */
+    size_t n = core_state_size(c);
+    CHECK(n > 0);
+    uint8_t *blob = malloc(n);
+    CHECK(blob != NULL);
+    int ser_before = *ser_calls;
+    CHECK_EQ_INT(core_state_save(c, blob, n), 1);
+    CHECK_EQ_INT(*ser_calls, ser_before + 1);
+    CHECK_EQ_INT(core_state_load(c, blob, n), 1);
 
-        /* A short buffer is refused rather than truncated: handing a core a
-           partial state is how a running game gets corrupted. */
-        CHECK_EQ_INT(core_state_save(c, blob, n - 1), 0);
-        CHECK_EQ_INT(core_state_load(c, blob, n - 1), 0);
-        free(blob);
-    }
+    /* A short buffer is refused rather than truncated: handing a core a
+       partial state is how a running game gets corrupted. */
+    CHECK_EQ_INT(core_state_save(c, blob, n - 1), 0);
+    CHECK_EQ_INT(core_state_load(c, blob, n - 1), 0);
+    free(blob);
 
+    int reset_before = *was_reset;
     CHECK_EQ_INT(core_reset(c), 1);
+    CHECK_EQ_INT(*was_reset, reset_before + 1);
+
+    /* Symmetric with the double-unload guard: load_rom on an already-loaded
+       core is refused, not silently re-entered, because an un-torn-down
+       cartridge state being overwritten underneath a running game is the
+       exact misuse this task exists to prevent. */
+    CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 0);
+    CHECK(err[0] != 0);
 
     /* Unload, then load a different ROM through the SAME handle. dlclose is
        never called mid-session; retro_unload_game plus retro_load_game is the
        libretro-sanctioned way and avoids cycling the shared object. */
+    int unload_before = *unloaded;
     CHECK_EQ_INT(core_unload_rom(c), 1);
+    CHECK_EQ_INT(*unloaded, unload_before + 1);
     CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
 
     core_close(c);

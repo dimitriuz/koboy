@@ -207,6 +207,17 @@ bool core_load_rom(koboy_core *c, const char *rom_path, char *err, size_t errlen
 {
     if (err && errlen) err[0] = 0;
 
+    /* Symmetric with the double-unload guard in core_unload_rom: refuse
+       rather than silently re-entering retro_load_game on top of a cartridge
+       state that was never torn down. The caller must call core_unload_rom
+       first -- chosen over an implicit auto-unload so switching ROMs is
+       always the explicit two-call sequence the libretro API expects, with
+       no hidden state transition a caller could miss. */
+    if (c->game_loaded) {
+        if (err && errlen) snprintf(err, errlen, "core %s already has a ROM loaded; call core_unload_rom first", rom_path);
+        return false;
+    }
+
     struct retro_game_info info = {0};
     void *buf = NULL;
 
