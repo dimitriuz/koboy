@@ -79,6 +79,7 @@ typedef struct {
     bool transpose, flip_x, flip_y;
 
     bool quit;
+    bool trace;                     /* KOBOY_TRACE_REFRESH in the environment */
 
     uint16_t raw[RAWKEY_RING];
     int      raw_head, raw_tail;
@@ -334,7 +335,8 @@ static void kobo_teardown(kobo_ctx *k)
 static bool kobo_init(void *ctx, const koboy_config *c)
 {
     kobo_ctx *k = ctx;
-    k->cfg = *c;
+    k->cfg   = *c;
+    k->trace = (getenv("KOBOY_TRACE_REFRESH") != NULL);
 
     k->fbfd = fbink_open();
     if (k->fbfd < 0) {
@@ -359,10 +361,12 @@ static bool kobo_init(void *ctx, const koboy_config *c)
     /* ORIGIN. FBInkState.view_vert_origin is *not* the framebuffer viewport
        origin: FBInk documents it as "viewport + viewVertOffset", and
        viewVertOffset is a text-layout shift used to vertically balance whole
-       character rows inside the viewport. On the reference device `fbink -e`
-       reports viewVertOrigin=8 with viewVertOffset=8 -- i.e. the panel has NO
-       hidden rows at all and the 8 is purely the font-row centring FBInk
-       applies to its own text output. Adding it to a pixel blit would push the
+       character rows inside the viewport (fbink.c: `viewVertOrigin =
+       viewVertOrigin + viewVertOffset`, after the viewport block).
+       The reference device's own quirk table sets no koboVertOffset at all
+       (fbink_device_id.c, DEVICE_KOBO_LIBRA_2), so its real framebuffer
+       viewport origin is 0 and the reported viewVertOrigin of 8 is purely
+       FBInk's font-row centring. Adding it to a pixel blit would push the
        whole image down by 8px and clip the bottom 8 rows.
        The framebuffer viewport is therefore origin = origin - offset, which is
        0 here and non-zero only on the handful of Kobos that really do hide
@@ -464,7 +468,7 @@ static bool kobo_blit_gray8(void *ctx, const uint8_t *px, int w, int h,
                             int stride, int x, int y)
 {
     kobo_ctx *k = ctx;
-    if (!px || w <= 0 || h <= 0 || !k->fbmem) return false;
+    if (!px || w <= 0 || h <= 0 || stride < w || !k->fbmem) return false;
     if (x < 0 || y < 0 || x + w > k->view_w || y + h > k->view_h) return false;
 
     const uint32_t bytes = k->bpp / 8;
@@ -520,6 +524,16 @@ static bool kobo_refresh(void *ctx, int x, int y, int w, int h,
     FBInkConfig cfg = k->fb;
     cfg.wfm_mode    = k->wfm[mode];
     cfg.is_flashing = k->flash[mode];
+
+    /* Off by default, and the only way to see from off-device which rectangle
+       each waveform is actually being asked for -- in particular that the
+       periodic cleanup asks for the game rect and not the whole panel. SDL
+       ignores waveform modes entirely, so this is not observable on the
+       desktop at all. */
+    if (k->trace)
+        kobo_say(k, "koboy: refresh %-4s %s %dx%d at (%d,%d) -> fb (%d,%d)\n",
+                 k->wfm_name[mode], k->flash[mode] ? "flash" : "     ",
+                 w, h, x, y, x + k->origin_x, y + k->origin_y);
 
     return fbink_refresh(k->fbfd,
                          (uint32_t)(y + k->origin_y), (uint32_t)(x + k->origin_x),
