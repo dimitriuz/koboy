@@ -12,6 +12,16 @@ static uint8_t  sram[8];
 int stub_saw_mix_frames_disabled = 0;
 int stub_saw_can_dupe = 0;
 
+/* Exported, not static: the test used to inspect these under gdb, which meant
+   the assertions they existed for were never actually made. dlsym-able flags
+   are real assertions. */
+int stub_observed_unload = 0;
+int stub_observed_reset  = 0;
+int stub_serialize_calls = 0;
+
+#define STUB_STATE_BYTES 128
+static unsigned char stub_state[STUB_STATE_BYTES];
+
 unsigned retro_api_version(void) { return 1; }
 void retro_set_environment(retro_environment_t cb)
 {
@@ -52,8 +62,25 @@ bool retro_load_game(const struct retro_game_info *g)
     memset(sram, 0, sizeof sram);
     return true;
 }
-void retro_unload_game(void) {}
-void retro_reset(void) {}
+void retro_unload_game(void) { stub_observed_unload++; }
+void retro_reset(void)       { stub_observed_reset++; }
+
+size_t retro_serialize_size(void) { return STUB_STATE_BYTES; }
+
+bool retro_serialize(void *data, size_t size)
+{
+    if (size < STUB_STATE_BYTES) return false;
+    stub_serialize_calls++;
+    memcpy(data, stub_state, STUB_STATE_BYTES);
+    return true;
+}
+
+bool retro_unserialize(const void *data, size_t size)
+{
+    if (size < STUB_STATE_BYTES) return false;
+    memcpy(stub_state, data, STUB_STATE_BYTES);
+    return true;
+}
 void retro_run(void)
 {
     if (poll_cb) poll_cb();
