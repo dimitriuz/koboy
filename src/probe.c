@@ -37,6 +37,12 @@
  *
  * Either mode writes /mnt/onboard/koboy-probe-<device>.txt as key=value
  * lines, one fact per line, so a TESTED.md row can be assembled by eye.
+ * --coexist opens it fresh (a re-run should not accumulate stale sweep
+ * data); --takeover opens it in APPEND mode and adds a dated block, so the
+ * documented workflow of running --coexist and then --takeover on the same
+ * device leaves one file carrying both -- panel/stride/touch/sweep facts
+ * plus captured key codes and touch samples -- rather than the takeover run
+ * quietly truncating away everything --coexist had just written.
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -703,6 +709,18 @@ static int run_coexist(void)
     kv("wfm_fast_region=%dx%d\n", fast_region_w, fast_region_h);
     kv("wfm_fast_submit_ms=%.1f\n", fast_submit_us / 1000.0);
     kv("wfm_fast_ms=%.1f\n", fast_block_us / 1000.0);
+    /* unreliable_wait_for (printed above, with the rest of the FBInk quirk
+       fields) means MXCFB_WAIT_FOR_UPDATE_COMPLETE can time out rather than
+       return when the panel genuinely finishes -- so on a device that sets
+       it, every *_block_us_* figure in this file, wfm_fast_ms included, may
+       be measuring a stall rather than real panel latency. Restated here,
+       next to the one number a TESTED.md row is most likely to quote
+       verbatim, rather than trusting a reader to connect it back to a flag
+       printed a hundred lines earlier. submit_us is unaffected -- it never
+       calls fbink_wait_for_complete -- and is the more trustworthy figure on
+       such a device. */
+    if (st.unreliable_wait_for)
+        kv("wfm_fast_ms_caveat=unreliable_wait_for=1 on this device -- block_us/wfm_fast_ms above may reflect a stalled wait, not real panel latency; prefer submit_us\n");
 
     note("koboy-probe: wrote %s\n", fout ? path : "(stdout only -- see above for why)");
     if (fout) fclose(fout);
@@ -757,12 +775,31 @@ static int run_takeover(void)
     sanitize(dev_id, sizeof dev_id, st.device_codename[0] ? st.device_codename : st.device_name);
     char path[256];
     snprintf(path, sizeof path, "/mnt/onboard/koboy-probe-%s.txt", dev_id);
-    FILE *fout = fopen(path, "w");
-    if (!fout) note("koboy-probe: cannot open %s for writing: %s (stdout only)\n",
+
+    /* "a", deliberately NOT "w". The documented workflow (docs/probe-readme.md)
+       is --coexist first, then --takeover on the same device, so that one file
+       ends up with panel/stride/touch/sweep facts AND captured key codes and
+       touch samples -- the single pasteable TESTED.md row this tool exists to
+       produce. Opening "w" here would truncate that file back to nothing but
+       the takeover_* fields the moment this mode ran, silently discarding
+       every fact --coexist had just written. If no coexist run has happened
+       yet, "a" still creates the file fresh, so a standalone --takeover run
+       behaves exactly as before. */
+    FILE *fout = fopen(path, "a");
+    if (!fout) note("koboy-probe: cannot open %s for appending: %s (stdout only)\n",
                      path, strerror(errno));
     g_nsinks = 0;
     g_sinks[g_nsinks++] = stdout;
     if (fout) g_sinks[g_nsinks++] = fout;
+
+    time_t t = time(NULL);
+    char   tbuf[32];
+    strftime(tbuf, sizeof tbuf, "%Y-%m-%dT%H:%M:%S", localtime(&t));
+    /* A visible seam, so a file that already carries a --coexist report reads
+       as two clearly-dated blocks rather than one confusing run-on of keys --
+       and so re-running --takeover more than once appends another dated block
+       instead of silently blending with the last one. */
+    kv("\n# koboy-probe report, mode=takeover, generated %s\n", tbuf);
 
     raw_node nodes[MAX_NODES];
     int      n_nodes = scan_proc_input(nodes, MAX_NODES);
@@ -813,6 +850,15 @@ static int run_takeover(void)
          (unsigned long long)(TAKEOVER_WINDOW_US / 1000000ull));
 
     uint16_t seen_keys[32]; int n_seen_keys = 0;
+    /* touch_contacts and last_x/last_y are a rough characterisation, not a
+       protocol decode: this counts every ABS_MT_TRACKING_ID >= 0 seen on ANY
+       slot, with no per-slot state, so a genuine two-finger touch (one on the
+       d-pad, one on A/B -- exactly the case koboy's own touch-only layouts
+       depend on) can double-count contacts, and last_x/last_y can blend
+       reports from two different slots rather than tracking one. Good enough
+       to tell "does this panel report multitouch at all", not to reconstruct
+       simultaneous gestures -- input.c's real slot tracking is what the
+       emulator itself uses at runtime, and is a different, stateful job. */
     int      touch_contacts = 0;
     int      last_x = -1, last_y = -1;
 

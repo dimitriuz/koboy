@@ -38,6 +38,14 @@ and paste the relevant lines into a new row of the main project's
 `touch_transpose=`, and `wfm_fast_name=`/`wfm_fast_ms=` are the ones that
 matter most.
 
+**Check `unreliable_wait_for=` before trusting `wfm_fast_ms=`.** If it reads
+`1`, the panel's "update complete" ioctl can time out instead of reporting
+real completion, and every `*_block_us_*` figure in the file -- `wfm_fast_ms`
+included -- may be measuring that stall rather than actual panel latency.
+The probe repeats the same caveat as `wfm_fast_ms_caveat=` right next to the
+number when this applies; `wfm_fast_submit_ms=` is unaffected and the more
+trustworthy figure on such a device.
+
 ### `--takeover`
 
 ```sh
@@ -56,10 +64,14 @@ sleep 3
 
 It then waits 15 seconds for you to press every physical button and touch
 the screen a few times, and appends what it saw (key codes, touch contact
-count, last raw coordinates) to the same output file. Bring Nickel back
-afterwards the way `scripts/koboy.sh` in the main project does, or reboot --
-a Nickel restarted by hand outside that script has been observed to corrupt
-the device's own identity file, so a reboot is the safe default if in doubt.
+count, last raw coordinates) to the same output file. The touch count is a
+rough check ("does this panel report multitouch at all"), not a real
+multi-finger decode -- it has no per-slot tracking, so touching with two
+fingers at once can over-count or blend the reported coordinates. Bring
+Nickel back afterwards the way `scripts/koboy.sh` in the main project does,
+or reboot -- a Nickel restarted by hand outside that script has been
+observed to corrupt the device's own identity file, so a reboot is the safe
+default if in doubt.
 
 ## Contributing a row
 

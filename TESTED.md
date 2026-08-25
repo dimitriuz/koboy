@@ -24,22 +24,34 @@ measured, turned out to cause every flash between them while fixing nothing.
 
 ## How to add a row
 
-Run koboy once on the device and read the facts off its own self-test, which
-prints exactly what the backend decided:
+You do not need to build or deploy the emulator to add a row. Run
+`koboy-probe --coexist` on the device -- it is safe over ssh and safe with
+Nickel running, because it never reads an input event, never grabs a node,
+and never changes the framebuffer's bit depth:
 
 ```sh
-cd /mnt/onboard/.adds/koboy && ./koboy --frames 300 --selftest
+cd /mnt/onboard/.adds/koboy && ./koboy-probe --coexist
 ```
 
-That reports `panel=`, `stride=`, `bpp=`, `origin=`, `wfm_du4_capable=`,
-`touch_transpose=`, `input_keys=` and, after the run, a `refresh_fast=` line
-with the measured mean and maximum refresh cost. Fill in the row from those,
-say what worked and what did not, and be specific about the failure if it
-failed --- a row saying "d-pad unusable, touch axes came out transposed" is
-worth more than no row.
+That writes `/mnt/onboard/koboy-probe-<device>.txt` with `device=`,
+`platform=`, `panel=`, `stride=`, `bpp=`, `origin=`, `wfm_du4_capable=`,
+`touch_slots=`, `touch_transpose=`, and a refresh-timing sweep ending in
+`wfm_fast_name=`/`wfm_fast_ms=`. If the device also has page-turn buttons,
+stop Nickel (`killall -TERM nickel hindenburg sickel`) and run
+`./koboy-probe --takeover` afterwards -- it appends the key codes and touch
+samples it captured to that same file, and bring Nickel back (or reboot)
+once it is done. `docs/probe-readme.md` has the full walkthrough, including
+why `--takeover` refuses to run while Nickel is still up.
 
-Please launch it from the device's own menu, as the README explains, and not
-over ssh. koboy refuses the second case on purpose.
+Fill in the row from that file, say what worked and what did not, and be
+specific about the failure if it failed --- a row saying "d-pad unusable,
+touch axes came out transposed" is worth more than no row.
+
+`koboy-probe --coexist` has none of `koboy`'s own menu-launch restriction --
+it never touches Nickel or the input grabs, so ssh is fine for it. `koboy`
+itself (worth running too, if you get that far -- actually playing something
+is the real test) still refuses to run over ssh; launch that from the
+device's own menu, as the README explains.
 
 ## Reading the fps column with the caution it deserves
 
