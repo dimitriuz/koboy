@@ -1,6 +1,7 @@
 #define _POSIX_C_SOURCE 200809L
 #include "sram.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -35,11 +36,27 @@ bool sram_save(const char *path, const uint8_t *src, size_t len)
     return true;
 }
 
+/* ALL OR NOTHING, and this is the whole point of the temporary buffer: `dst` is
+   the core's LIVE save RAM. The previous version fread() straight into it and
+   only then reported failure, so a truncated save file left SRAM as a mix of
+   partial file and core initial state -- and the periodic flush ten seconds
+   later wrote that hybrid back over the user's only save. Loading the save
+   destroyed it. Nothing may touch `dst` unless the whole of it can be filled.
+   A file LONGER than SRAM is still accepted, reading the first `len` bytes, which
+   is what the old code did: a mismatch there means a different cartridge or a
+   format with trailing data (RTC state, for instance), and refusing to load would
+   be a new failure mode rather than a fix for this one. */
 bool sram_load(const char *path, uint8_t *dst, size_t len)
 {
+    if (!dst || !len) return false;
     FILE *f = fopen(path, "rb");
     if (!f) return false;
-    size_t got = fread(dst, 1, len, f);
+    uint8_t *tmp = malloc(len);
+    if (!tmp) { fclose(f); return false; }
+    size_t got = fread(tmp, 1, len, f);
     fclose(f);
-    return got == len;
+    bool ok = (got == len);
+    if (ok) memcpy(dst, tmp, len);
+    free(tmp);
+    return ok;
 }

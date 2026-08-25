@@ -408,8 +408,33 @@ int main(int argc, char **argv)
     uint8_t *sram = core_sram(core, &sram_len);
     /* Tetris is cartridge type 0x00: no battery-backed SRAM at all, so this is
        NULL/0 on the development ROM and must not be dereferenced. */
+    /* Set false when a save file exists but could not be loaded whole. Then
+       NOTHING is written back over it for the rest of the session.
+       The reasoning, because "saving is off" looks like a bug otherwise: a file
+       that fails to load is either truncated or from another cartridge, and in
+       both cases it is the only copy of something the user cares about. Writing
+       this session's SRAM over it destroys whatever is recoverable, for the sake
+       of progress made in a game that started from a blank save anyway. So the
+       file is left exactly as found, the user is told on the panel, and the fix
+       is theirs to make (move the file aside, and saving resumes next run). */
+    bool sram_writeback = true;
     if (sram && sram_len) {
-        if (sram_load(sram_path, sram, sram_len)) say("koboy: loaded %s\n", sram_path);
+        if (sram_load(sram_path, sram, sram_len)) {
+            say("koboy: loaded %s\n", sram_path);
+        } else if (access(sram_path, F_OK) == 0) {
+            sram_writeback = false;
+            say("koboy: %s could not be read whole; SRAM left as the core "
+                "initialised it and saving is disabled this session\n", sram_path);
+            /* On the panel, not just the log: a save that silently did not load
+               is how a user loses hours without ever being told. Short lines --
+               FBInk wraps at the column edge, not at word boundaries. */
+            fatal("Save file unreadable.\nStarting fresh.\nSaving is OFF this run.");
+            /* fatal() drew over the faceplate; put it back. */
+            memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
+            chrome_render(panel, panel_stride, &prof, &cfg.layout);
+            pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
+            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+        }
     } else {
         say("koboy: cartridge has no save RAM\n");
     }
@@ -500,7 +525,7 @@ int main(int argc, char **argv)
 sram_check:
         /* Periodic flush while dirty: e-readers get suspended and killed
            unceremoniously, and sram_save is atomic so a kill mid-write is safe. */
-        if (sram && sram_len) {
+        if (sram && sram_len && sram_writeback) {
             uint64_t now = pf->now_us(pf->ctx);
             if (now - last_sram_us > 10ull * 1000000ull) {
                 sram_save(sram_path, sram, sram_len);
@@ -509,7 +534,7 @@ sram_check:
         }
     }
 
-    if (sram && sram_len) sram_save(sram_path, sram, sram_len);
+    if (sram && sram_len && sram_writeback) sram_save(sram_path, sram, sram_len);
     say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
         "%lu large-area full refreshes\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,
