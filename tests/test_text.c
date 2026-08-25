@@ -45,10 +45,32 @@ TEST_MAIN({
     text_draw(fb, W, W, H, 0, 0, "\x01\x7F", 1, 0x00);
     CHECK_EQ_INT(ink_count(fb, sizeof fb), 0);
 
+    /* The clip, asserted directly. This is the real gate: it is the one
+       assertion in this file guaranteed to fail gracefully (a deterministic
+       FAIL line, no crash) if the clip breaks. It runs BEFORE the guard-band
+       block below on purpose -- that block calls text_draw with coordinates
+       far off every edge, and text_draw's clip is now entirely routed
+       through text_pixel_visible (see text.c), so once that predicate is
+       wrong the guard-band block's own text_draw calls become undefined
+       behaviour too (a negative row index wraps to near SIZE_MAX on cast to
+       size_t) and can crash the process. Ordering these first means a broken
+       predicate is still reported before anything downstream can take the
+       process out. */
+    CHECK_EQ_INT(text_pixel_visible(0, 0, W, H), 1);
+    CHECK_EQ_INT(text_pixel_visible(W - 1, H - 1, W, H), 1);
+    CHECK_EQ_INT(text_pixel_visible(-1, 0, W, H), 0);
+    CHECK_EQ_INT(text_pixel_visible(0, -1, W, H), 0);
+    CHECK_EQ_INT(text_pixel_visible(W, 0, W, H), 0);
+    CHECK_EQ_INT(text_pixel_visible(0, H, W, H), 0);
+
     /* CLIPPING IS LIVE. Drawing past every edge must touch nothing outside the
        buffer. A guard band on both sides catches an unclamped write; this is
        checked by assertion on the band rather than by hoping a stray write
-       lands somewhere observable. */
+       lands somewhere observable. Exercises text_draw end-to-end (glyph
+       rasterisation plus the clip together) as a regression check of the
+       CORRECT implementation -- it is not itself crash-safe against a broken
+       text_pixel_visible, per the note above, which is why it is not the
+       gate the mutant round relies on. */
     static uint8_t guarded[16 + W * H + 16];
     memset(guarded, 0x5A, sizeof guarded);
     uint8_t *inner = guarded + 16;

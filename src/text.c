@@ -78,6 +78,11 @@ int text_measure(const char *s, int px)
     return (int)strlen(s) * TEXT_ADVANCE * px;
 }
 
+bool text_pixel_visible(int x, int y, int W, int H)
+{
+    return x >= 0 && x < W && y >= 0 && y < H;
+}
+
 void text_draw(uint8_t *fb, int stride, int W, int H, int x, int y,
                const char *s, int px, uint8_t ink)
 {
@@ -89,14 +94,16 @@ void text_draw(uint8_t *fb, int stride, int W, int H, int x, int y,
                 if (!(g[col] & (1u << row))) continue;
                 for (int dy = 0; dy < px; dy++) {
                     int fy = y + row * px + dy;
-                    /* Live clamps. text_draw is called with coordinates
-                       derived from panel geometry and from string lengths the
-                       caller does not bound, so both edges are reachable --
-                       the ROM browser renders filenames of any length. */
-                    if (fy < 0 || fy >= H) continue;
                     for (int dx = 0; dx < px; dx++) {
                         int fx = x + col * px + dx;
-                        if (fx >= 0 && fx < W)
+                        /* Live clamp, routed through the exposed predicate so
+                           the clip itself can be asserted directly -- see
+                           text_pixel_visible's comment in text.h. Coordinates
+                           here are derived from panel geometry and from
+                           string lengths the caller does not bound, so both
+                           edges are reachable: the ROM browser renders
+                           filenames of any length. */
+                        if (text_pixel_visible(fx, fy, W, H))
                             fb[(size_t)fy * stride + fx] = ink;
                     }
                 }
