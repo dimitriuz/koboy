@@ -1,10 +1,11 @@
 #!/bin/sh
-# Cross-builds gambatte-libretro for Kobo. Requires koxtoolchain on PATH.
+# Cross-builds gambatte-libretro for Kobo. Requires the cross toolchain on PATH
+# (see docs/cross-compiling.md; CROSS defaults to the Linaro armhf prefix).
 # The device is a single-core Cortex-A9 with NEON, and the 2024 MediaTek Kobos
 # are Cortex-A53 running a 32-bit userland, so armv7-a+neon is the common
 # denominator that runs on both. A core tuned for A53 will SIGILL on an A9.
 set -e
-CROSS="${CROSS:-arm-kobo-linux-gnueabihf-}"
+CROSS="${CROSS:-arm-linux-gnueabihf-}"
 SRC="${SRC:-third_party/gambatte-libretro}"
 OUT="${OUT:-dist/gambatte_libretro.so}"
 

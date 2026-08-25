@@ -26,10 +26,21 @@
 #include <string.h>
 #include <unistd.h>
 
-/* Provided by the backend translation unit (platform_sdl.c today). */
+/* Provided by the backend translation unit. Exactly one is linked in: the
+   desktop build takes platform_sdl.c, the device build platform_kobo.c and
+   -DKOBOY_PLATFORM_KOBO. Everything between here and the end of main() is the
+   same code either way; these few lines are the whole of the difference. */
+extern bool platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
+
+#ifdef KOBOY_PLATFORM_KOBO
+extern koboy_platform *platform_kobo_create(void);
+extern void            platform_kobo_setup_touch(koboy_platform *pf, koboy_input *in);
+extern void            platform_kobo_selftest(koboy_platform *pf);
+extern void            platform_kobo_fatal(void *ctx, const char *msg);
+#else
 extern koboy_platform *platform_sdl_create(void);
 extern void            platform_sdl_set_panel(koboy_platform *pf, int w, int h);
-extern bool            platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
+#endif
 
 #define DEFAULT_INI "config/koboy.ini"
 
@@ -51,6 +62,25 @@ static void say(const char *fmt, ...)
     va_start(ap, fmt);
     vfprintf(stderr, fmt, ap);
     va_end(ap);
+}
+
+/* Every fatal path goes through here. On the desktop that is just stderr; on
+   the device there is no terminal, so an error that only reaches stderr is
+   indistinguishable from a crash -- the panel keeps whatever was on it and the
+   user power-cycles. The Kobo backend draws the message on the panel and waits
+   for an acknowledgement. */
+static koboy_platform *g_pf;
+static void fatal(const char *fmt, ...)
+{
+    char msg[512];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof msg, fmt, ap);
+    va_end(ap);
+    fprintf(stderr, "koboy: %s\n", msg);
+#ifdef KOBOY_PLATFORM_KOBO
+    if (g_pf) platform_kobo_fatal(g_pf->ctx, msg);
+#endif
 }
 
 /* ------------------------------------------------------- calibration text */
@@ -124,6 +154,7 @@ static void usage(const char *argv0)
         "  --save-dir PATH   directory for .srm saves\n"
         "  --panel WxH       synthetic panel size for the desktop backend\n"
         "  --frames N        stop after N emulated frames (scripted runs)\n"
+        "  --selftest        print machine-readable backend facts and continue\n"
         "  --quiet           suppress everything but the presented= counter\n",
         argv0, DEFAULT_INI);
 }
@@ -134,6 +165,7 @@ int main(int argc, char **argv)
     const char  *ini_path = DEFAULT_INI;
     unsigned long frame_limit = 0;
     int panel_w = 0, panel_h = 0;
+    bool selftest = false;
 
     /* --config is read before the file so an alternate ini can be chosen. */
     for (int i = 1; i < argc - 1; i++)
@@ -146,6 +178,7 @@ int main(int argc, char **argv)
         const char *a = argv[i];
         bool has_val = (i + 1 < argc);
         if      (!strcmp(a, "--quiet")) g_quiet = true;
+        else if (!strcmp(a, "--selftest")) selftest = true;
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(argv[0]); return 0; }
         else if (!has_val) { fprintf(stderr, "koboy: missing value for %s\n", a); return 2; }
         else if (!strcmp(a, "--rom"))      snprintf(cfg.rom_path,  sizeof cfg.rom_path,  "%s", argv[++i]);
@@ -160,14 +193,22 @@ int main(int argc, char **argv)
         } else { fprintf(stderr, "koboy: unknown option %s\n", a); usage(argv[0]); return 2; }
     }
 
-    if (!cfg.rom_path[0]) { fprintf(stderr, "koboy: no rom (use --rom)\n"); return 2; }
-
     /* ------------------------------------------------ platform and profile */
+#ifdef KOBOY_PLATFORM_KOBO
+    (void)panel_w; (void)panel_h;      /* the panel is whatever the device has */
+    koboy_platform *pf = platform_kobo_create();
+#else
     koboy_platform *pf = platform_sdl_create();
+#endif
     if (!pf) { fprintf(stderr, "koboy: cannot create platform\n"); return 1; }
+#ifndef KOBOY_PLATFORM_KOBO
     if (panel_w > 0 && panel_h > 0) platform_sdl_set_panel(pf, panel_w, panel_h);
+#endif
 
+    /* Only now can fatal() draw: before init there is no framebuffer to draw
+       on, so anything above this point can do no better than stderr. */
     if (!pf->init(pf->ctx, &cfg)) { fprintf(stderr, "koboy: platform init failed\n"); return 1; }
+    g_pf = pf;
 
     /* Installed here, not beside the emulator loop: the calibration wait below
        tests g_stop, and a handler installed after it would leave that test dead
@@ -180,9 +221,31 @@ int main(int argc, char **argv)
     int pw = 0, ph = 0;
     pf->screen_info(pf->ctx, &pw, &ph);
 
+    /* Printed before anything else can fail, so the smoke test still gets its
+       facts out of a run that then dies on a missing core or ROM. */
+    if (selftest) {
+#ifdef KOBOY_PLATFORM_KOBO
+        platform_kobo_selftest(pf);
+#else
+        printf("panel=%dx%d\nwfm_fast=none\nstride=%d\ntouch_transpose=0\n",
+               pw, ph, pw);
+        fflush(stdout);
+#endif
+    }
+
+    /* Checked here rather than during argument parsing so that it is reportable:
+       before platform init there is no panel to draw on, and "you forgot to set
+       rom= in koboy.ini" is exactly the mistake a user makes with no terminal
+       in front of them. */
+    if (!cfg.rom_path[0]) {
+        fatal("no rom configured -- set rom= in the ini or pass --rom");
+        pf->shutdown(pf->ctx);
+        return 2;
+    }
+
     koboy_profile prof;
     if (!config_resolve_profile(&prof, &cfg, pw, ph)) {
-        fprintf(stderr, "koboy: panel %dx%d is too small for a 1x game rect\n", pw, ph);
+        fatal("panel %dx%d is too small for a 1x game rect", pw, ph);
         pf->shutdown(pf->ctx);
         return 1;
     }
@@ -192,7 +255,7 @@ int main(int argc, char **argv)
     /* ----------------------------------------------------- chrome, drawn once */
     int panel_stride = pw;
     uint8_t *panel = malloc((size_t)panel_stride * (size_t)ph);
-    if (!panel) { fprintf(stderr, "koboy: out of memory\n"); pf->shutdown(pf->ctx); return 1; }
+    if (!panel) { fatal("out of memory"); pf->shutdown(pf->ctx); return 1; }
     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
     chrome_render(panel, panel_stride, &prof, &cfg.layout);
     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
@@ -240,25 +303,31 @@ int main(int argc, char **argv)
     koboy_video *vid = video_create(&prof, cfg.force_dither);
     koboy_input *in  = input_create(&cfg, &prof);
     if (!vid || !in) {
-        fprintf(stderr, "koboy: out of memory\n");
+        fatal("out of memory");
         video_destroy(vid); input_destroy(in); free(panel);
         pf->shutdown(pf->ctx); return 1;
     }
+#ifdef KOBOY_PLATFORM_KOBO
+    /* The device's touch layer has its own raw range and is mounted rotated;
+       only the backend knows by how much, so it installs the transform. */
+    platform_kobo_setup_touch(pf, in);
+#else
     /* The desktop mouse already reports panel coordinates: no transposition,
        no flips, raw range == panel range. */
     input_set_touch_transform(in, pw, ph, false, false, false);
+#endif
 
     char err[512];
     koboy_core *core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);
     if (!core) {
-        fprintf(stderr, "koboy: %s\n", err);
+        fatal("%s", err);
         video_destroy(vid); input_destroy(in); free(panel);
         pf->shutdown(pf->ctx); return 1;
     }
     core_set_frame_cb(core, on_frame, NULL);
     core_set_input_fn(core, on_input, in);
     if (!core_load_rom(core, cfg.rom_path, err, sizeof err)) {
-        fprintf(stderr, "koboy: %s\n", err);
+        fatal("%s", err);
         core_close(core);
         video_destroy(vid); input_destroy(in); free(panel);
         pf->shutdown(pf->ctx); return 1;

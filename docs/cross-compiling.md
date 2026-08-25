@@ -153,10 +153,14 @@ export CROSS=arm-linux-gnueabihf-
 make core          # runs scripts/build-core.sh, then verify-core.sh
 ```
 
-(`CROSS`'s default in the Makefile/`build-core.sh` is
-`arm-kobo-linux-gnueabihf-`, koxtoolchain's tuple. With the Linaro toolchain
-above, override it to `arm-linux-gnueabihf-` to match that toolchain's
-actual binary prefix.)
+(`CROSS` now defaults to `arm-linux-gnueabihf-`, the Linaro toolchain's
+actual binary prefix, in both the `Makefile` and `scripts/build-fbink.sh`.
+It used to default to koxtoolchain's `arm-kobo-linux-gnueabihf-` tuple, which
+no compiler on this host provides, since that toolchain build never
+completed. `scripts/build-core.sh` now defaults to the same prefix, and `make core`
+forwards the Makefile's `CROSS` to it explicitly, so overriding `CROSS` in one
+place is enough. Override it if your toolchain lives under a different
+prefix.)
 
 `scripts/build-core.sh` clones `libretro/gambatte-libretro` into
 `third_party/gambatte-libretro` and builds it with:
@@ -267,3 +271,86 @@ question rather than changed here. If, once a real cross-built core is
 exercised on real content (Tasks 17-19), gambatte behaves oddly around core
 options it queries but we don't explicitly stub, that callback is the first
 place to look.
+
+## Building FBInk
+
+`koboy` links FBInk statically. FBInk is what abstracts the e-ink refresh
+ioctls (mxcfb on this device, sunxi and MTK elsewhere), Kobo's device
+identification table, and the `/dev/input/event*` classification that would
+otherwise have to be reimplemented and kept current per device.
+
+```sh
+export PATH="/path/to/arm-linaro-4.9-2014.09/bin:$PATH"
+make fbink        # or just `make kobo`, which depends on it
+```
+
+`scripts/build-fbink.sh` clones `NiLuJe/FBInk` (with submodules -- the
+vendored `i2c-tools` is a hard dependency of a `KOBO=true` build) into
+`third_party/fbink` and builds `Release/libfbink.a` with:
+
+```
+CROSS_TC=arm-linux-gnueabihf
+KOBO=true MINIMAL=true DRAW=true BITMAP=true INPUT=true
+CFLAGS=-O2 -fomit-frame-pointer -pipe -march=armv7-a -mfpu=neon -mfloat-abi=hard
+```
+
+**Why static.** The device does carry working FBInk binaries, but not
+necessarily a `libfbink.so` whose ABI matches the header we compiled
+against, and a missing or older shared library is a startup failure on a
+device with no terminal to report it on. Static costs ~190 KB of archive,
+paid once.
+
+**Why `MINIMAL` plus three toggles.** `DRAW` gives `fbink_cls`, `BITMAP`
+gives `fbink_print` -- between them, the on-panel fatal-error screen, which
+is the only text koboy ever asks FBInk to draw. `INPUT` gives
+`fbink_input_scan`. Everything else FBInk can do (OpenType, image decoding,
+QImageScale, Unifont) is dead weight here, because koboy blits its own
+gray8 straight into the mmap'ed framebuffer.
+
+Note that a `MINIMAL` build still *defines* every public symbol when a
+feature is off -- the bodies just become `return -ENOSYS`. So an `nm` check
+cannot catch a dropped feature toggle, and `build-fbink.sh` asserts on the
+actual `-DFBINK_WITH_*` defines in the recorded compiler invocation instead
+(`build/fbink-build.log`).
+
+### The one patch the old toolchain needs
+
+FBInk's `Makefile` adds `-fno-semantic-interposition` unconditionally for
+any non-Clang compiler. That option is GCC >= 5 only, and GCC treats an
+unknown `-f` option as an *error*, not a warning. With Linaro GCC 4.9.2 --
+the only toolchain we found that targets glibc 2.19 -- the first casualty is
+the vendored `i2c-tools` build:
+
+```
+arm-linux-gnueabihf-gcc: error: unrecognized command line option
+    '-fno-semantic-interposition'
+make[1]: *** [lib/Module.mk:75: lib/smbus.ao] Error 1
+```
+
+`scripts/build-fbink.sh` gates that one line on the compiler actually
+accepting the option, then re-greps to confirm the edit landed. It is applied
+by the script rather than committed as a patch file because
+`third_party/fbink/` is a gitignored clone, so there is nothing to carry a
+patch against. The edit is idempotent.
+
+### Result
+
+```
+$ readelf -h build/koboy-arm | grep Machine
+  Machine:                           ARM
+$ readelf -d build/koboy-arm | grep NEEDED
+ 0x00000001 (NEEDED)  Shared library: [libdl.so.2]
+ 0x00000001 (NEEDED)  Shared library: [libm.so.6]
+ 0x00000001 (NEEDED)  Shared library: [libc.so.6]
+$ readelf --dyn-syms build/koboy-arm | grep -o 'GLIBC_[0-9.]*' | sort -Vu
+GLIBC_2.4
+GLIBC_2.7
+GLIBC_2.17
+$ readelf -A build/koboy-arm | grep SIMD
+  Tag_Advanced_SIMD_arch: NEONv1
+```
+
+`GLIBC_2.17` is new relative to the core's `2.4`/`2.7` and is worth naming:
+it is `clock_gettime`, which moved from `librt` into `libc` at glibc 2.17.
+Still comfortably under the device's 2.19 floor, and it is why `koboy-arm`
+needs no `-lrt`.
