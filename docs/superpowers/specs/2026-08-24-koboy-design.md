@@ -874,3 +874,116 @@ grabbing the key node while never grabbing the power button. On this hardware
 those are the same device --- page-turn keys and power both live on `gpio-keys`
 (`event0`) --- so the instruction was impossible as written. The resolution is to
 read that node without grabbing it at all.
+
+---
+
+## Appendix D — Corrections from the device phase (Tasks 17 and 19)
+
+Everything below was learned by running koboy on a real Kobo Libra 2. None of it
+was reachable from the desktop backend, and all of it overrides earlier sections.
+Recorded here because the task reports it came from do not survive the run.
+
+### 1. The fast waveform defaults to AUTO, not DU4 — this supersedes section 5
+
+Section 5 and Appendix A concluded that `KOBOY_REFRESH_FAST` should map to DU4,
+on the strength of DU4 being ~3.5x faster than A2. **That conclusion was drawn
+from a benchmark that could not see the failure mode.** The measurement painted
+solid rectangles, so it never tested *erasing*, and DU4 — a fast non-flashing
+waveform — cannot cleanly erase. In play this produced severe ghosting: a
+falling piece drew at each new position while its previous positions were never
+cleared, so the game looked frozen when it was in fact advancing.
+
+The fix came from studying how the Kindle equivalent handles refreshing, and the
+finding was an absence: **it never selects a waveform at all.** It refreshes
+without specifying one and lets the EPDC driver choose. The controller already
+inspects the actual pixel transitions per update region and picks a waveform
+accordingly — which is exactly the "does this region need erasing?" question we
+were about to answer in software.
+
+Measured on the device, same content, same session, three A/B pairs:
+
+| Policy | mean | worst case |
+|---|---|---|
+| **AUTO** | **155-164 us** | **629 us** |
+| forced DU4 | 206-385 us | 8551 us |
+
+AUTO is both cheaper and far more predictable. `waveform_fast = auto` is the
+default; `du4` remains selectable. Confirmed in play: no ghosting, and the user
+completed a full game.
+
+DU4 is also **gated on `hasEclipseWfm`** — FBInk silently downgrades DU4 to GC4
+without that quirk, so claiming DU4 without checking it would be a false claim.
+
+### 2. The shipped display defaults are the ones validated on hardware
+
+Two mitigations written for forced DU4 became redundant under AUTO and were the
+sole cause of observed flashing. A device trace settled it: 35 AUTO refreshes on
+small rects, **none** flashing; 21 GC16 flashes, **all** attributable to the
+area threshold; and **zero** scheduled cleanups ever firing.
+
+| Key | was | ships as |
+|---|---|---|
+| `full_refresh_permille` | 450 | 1000 |
+| `cleanup_interval` | 60 | 0 |
+| `cleanup_max_ms` | 3000 | 0 |
+| `dpad_mode` | relative | cross |
+
+`full_refresh_permille = 1000` is **not** unreachable, and an earlier version of
+this note wrongly said so. The comparison is `dirty * 1000 >= whole * permille`,
+so at 1000 it fires when the dirty rect covers the game rect corner to corner —
+reachable on a full-screen wipe, and correct behaviour when it happens. A value
+of **1001 or above** is a provable never, since the dirty rect is a bounding box
+contained within the game rect.
+
+### 3. The chrome and the input model must agree — `dpad_mode = cross`
+
+Section 7 chose a relative thumb-pad because the device has no tactile
+landmarks. But the chrome draws an absolute **cross**, and users press its arms.
+A relative pad produces no direction from a tap — only from a drag — so the
+d-pad was effectively unusable while A, B and Start (genuine absolute zones)
+worked fine. Cross mode ships as the default. The lesson generalises: the drawn
+UI is the part people trust, so the input model has to match the drawing.
+
+### 4. `dlopen` never searches the current directory
+
+`config_defaults` originally set a bare `core_path = "gambatte_libretro.so"`.
+A name containing no slash sends `dlopen` to the system library paths and
+**never** the current directory, so the core failed to load on the device while
+sitting beside the binary. Bare names now resolve against the executable's own
+directory via `/proc/self/exe`; a path containing a slash is honoured verbatim.
+No host test could have caught this — on the desktop the core is always passed
+as an absolute path.
+
+### 5. Restarting Nickel requires Nickel's own environment
+
+Section 8's restore path was a bare re-exec. **That corrupts the device.**
+Nickel started outside its normal init environment rewrites
+`/mnt/onboard/.kobo/version` with a placeholder serial and an empty device code,
+after which FBInk reports `Unknown!` / `Mark ?` / `hasEclipseWfm=0` — breaking
+per-device quirks for every FBInk tool on the device, KOReader included. Only a
+reboot repairs it.
+
+KOReader avoids this by being launched *by* Nickel and inheriting its
+environment. So `koboy.sh` gates on that environment being present
+(`PLATFORM`, `PRODUCT`, `NICKEL_HOME`) and refuses to restart Nickel without it,
+rendering the reason on the panel and exiting non-zero. A menu launch exits
+cleanly with no reboot; an SSH launch cannot corrupt anything. The gate is
+spoofable by exporting those names — nothing in userspace can prove a process's
+parent — but it stops the accident, which is what it exists for.
+
+Three further corrections to section 8's restore sequence:
+
+- **`fbdepth -r` is not a restore.** `-r` is `--rota`, requires an argument, and
+  exits 255. Read depth and rotation with `-g`/`-o` and restore by name.
+- **Do not unmount `/mnt/onboard`.** KOReader unmounts the *external* `/mnt/sd`;
+  unmounting onboard pulls the launcher's own partition out from under it.
+- **WiFi must come down before Nickel restarts.** Leaving it up made the
+  restarted Nickel fail to insert its own driver (`File exists`) and the device
+  rebooted itself ~3.5 minutes later.
+
+### 6. A missing touchscreen is a warning, not a fatal error
+
+Section 8 listed "no touchscreen found" among the fatal paths. It is instead a
+warning: a device with working hardware buttons is usable, and refusing to start
+would be worse than running degraded. `dlopen` failure and an unreadable ROM do
+remain fatal, and render on the panel.
