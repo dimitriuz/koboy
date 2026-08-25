@@ -156,6 +156,7 @@ static void usage(const char *argv0)
         "  --panel WxH       synthetic panel size for the desktop backend\n"
         "  --frames N        stop after N emulated frames (scripted runs)\n"
         "  --selftest        print machine-readable backend facts and continue\n"
+        "  --message TEXT    draw TEXT on the panel and exit 3 (launcher errors)\n"
         "  --waveform auto|du4  waveform for fast refreshes (default auto)\n"
         "  --quiet           suppress everything but the presented= counter\n",
         argv0, DEFAULT_INI);
@@ -168,6 +169,7 @@ int main(int argc, char **argv)
     unsigned long frame_limit = 0;
     int panel_w = 0, panel_h = 0;
     bool selftest = false;
+    const char *message = NULL;
 
     /* --config is read before the file so an alternate ini can be chosen. */
     for (int i = 1; i < argc - 1; i++)
@@ -187,6 +189,7 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--core"))     snprintf(cfg.core_path, sizeof cfg.core_path, "%s", argv[++i]);
         else if (!strcmp(a, "--save-dir")) snprintf(cfg.save_dir,  sizeof cfg.save_dir,  "%s", argv[++i]);
         else if (!strcmp(a, "--config"))   i++;   /* already handled */
+        else if (!strcmp(a, "--message"))  message = argv[++i];
         else if (!strcmp(a, "--frames"))   frame_limit = strtoul(argv[++i], NULL, 10);
         else if (!strcmp(a, "--waveform")) {
             const char *w = argv[++i];
@@ -244,6 +247,18 @@ int main(int argc, char **argv)
                pw, ph, pw);
         fflush(stdout);
 #endif
+    }
+
+    /* --message exists for the launcher script, which has a message for the user
+       ("this needs a reboot") and no terminal to put it in. It reuses fatal()
+       rather than shelling out to the device's own fbink, so there is exactly
+       one on-panel error presentation and it looks the same wherever the error
+       came from. Always non-zero: it is only ever used to report a failure. */
+    if (message) {
+        fatal("%s", message);
+        pf->shutdown(pf->ctx);
+        free(pf);
+        return 3;
     }
 
     /* Checked here rather than during argument parsing so that it is reportable:

@@ -1,0 +1,15 @@
+# koboy -- NickelMenu entry.
+#
+# Install: copy this file to /mnt/onboard/.adds/nm/koboy (the filename does not
+# matter; NickelMenu reads every file in that directory). NickelMenu parses its
+# configuration when Nickel starts, so the entry appears after the next Nickel
+# restart -- which the first launch of koboy provides for free.
+#
+# cmd_spawn, not cmd_output: koboy runs for as long as the user plays, and
+# cmd_output would block Nickel waiting for it. "quiet" suppresses the toast;
+# the panel is about to be taken over anyway.
+#
+# Launching from here is not a convenience, it is a requirement: the spawned
+# process inherits Nickel's environment, which is the only safe way to restart
+# Nickel afterwards. koboy refuses to run without it -- see scripts/koboy.sh.
+menu_item : main : koboy : cmd_spawn : quiet : exec /mnt/onboard/.adds/koboy/koboy.sh
