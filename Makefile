@@ -31,3 +31,12 @@ build/koboy: src/main.c src/platform_sdl.c $(SRC) | build
 	$(CC) $(CFLAGS) $(INC) $(SDL_CFLAGS) -o $@ $^ $(SDL_LIBS) -ldl -lm
 
 host: build/koboy build/stub_core.so
+
+CROSS ?= arm-kobo-linux-gnueabihf-
+
+kobo: | build
+	$(MAKE) CC=$(CROSS)gcc CFLAGS="$(CFLAGS) -march=armv7-a -mfpu=neon -mfloat-abi=hard" \
+	        build/koboy-arm build/koboy-probe-arm
+
+core: ; sh scripts/build-core.sh
+.PHONY: kobo core
