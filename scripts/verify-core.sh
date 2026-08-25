@@ -15,7 +15,20 @@ if $READELF -d "$SO" | grep -q 'NEEDED.*libstdc++'; then
     exit 1
 fi
 
-allowed='libc\.so|libm\.so|libdl\.so|libpthread\.so|libgcc_s\.so'
+# ld-linux-armhf.so.3 (the dynamic loader/interpreter itself) is permitted:
+# every dynamically-linked armhf binary needs it, including the device's own
+# working /usr/bin/fbink -- a device that couldn't provide it couldn't run
+# anything dynamically linked at all, so it is not a hazard the way a
+# mismatched glibc or a dynamic libstdc++ would be. It shows up here because
+# -static-libstdc++ pulls in libstdc++.a(eh_globals.o) (C++'s per-thread
+# __cxa_eh_globals, TLS-based via __tls_get_addr on targets with native TLS,
+# which ARM has); confirmed by a link map and by the fact that a trivial
+# empty .cpp built with identical flags does *not* need it, so it's specific
+# to gambatte's C++ code, not an artifact of the flags themselves. Validated
+# by an actual on-device dlopen(RTLD_NOW) of the real cross-built core
+# (DLOPEN_OK, retro_api_version=1, DLCLOSE_OK) -- stronger evidence than any
+# static check, which is why it's allowed here rather than treated as a fail.
+allowed='libc\.so|libm\.so|libdl\.so|libpthread\.so|libgcc_s\.so|ld-linux-armhf\.so'
 bad=$($READELF -d "$SO" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' | grep -Ev "$allowed" || true)
 [ -z "$bad" ] || { echo "FAIL: unexpected dependencies:"; echo "$bad"; exit 1; }
 

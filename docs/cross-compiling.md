@@ -133,6 +133,18 @@ We ran exactly this and it printed the test string with exit code 0 on the
 real device -- definitive confirmation the toolchain's output actually
 runs there, not just that it looks plausible on paper.
 
+The same check against the actual shipped `dist/gambatte_libretro.so`
+(rather than the trivial `hello.c`) shows a slightly larger, still
+comfortably-safe set:
+
+```sh
+$ readelf --dyn-syms dist/gambatte_libretro.so | grep -o 'GLIBC_[0-9.]*' | sort -Vu
+GLIBC_2.4
+GLIBC_2.7
+```
+
+Highest is `GLIBC_2.7`, still well under the device's `2.19` ceiling.
+
 ## Building the gambatte core
 
 ```sh
@@ -192,34 +204,58 @@ checks:
 - the ELF machine is ARM;
 - there is no dynamic `NEEDED` entry for `libstdc++`;
 - the full `NEEDED` list is a subset of `{libc, libm, libdl, libpthread,
-  libgcc_s}` -- i.e., only what's guaranteed present on the device.
+  libgcc_s, ld-linux-armhf}` -- i.e., only what's guaranteed present on
+  the device.
 
 `scripts/build-core.sh` runs it automatically (using the cross `readelf`,
 via `READELF="${CROSS}readelf"`) as its last step, so `make core` either
 finishes with `PASS core dependency closure is device-safe` or fails loudly
 before anything is copied where a later task could pick it up.
 
-**Known outstanding finding, not yet resolved in the script:** the core
-built with the Linaro 4.9-2014.09 toolchain also carries a `NEEDED` entry
-for `ld-linux-armhf.so.3`, which the allowlist above doesn't include, so
-`verify-core.sh` currently reports `FAIL: unexpected dependencies:
-ld-linux-armhf.so.3` against it. This traces to `libstdc++.a(eh_globals.o)`
+**Why `ld-linux-armhf.so.3` is on the allowlist.** The core built with the
+Linaro 4.9-2014.09 toolchain carries a `NEEDED` entry for
+`ld-linux-armhf.so.3` -- the dynamic loader/interpreter itself, not a
+library the way `libc`/`libm` are. This traces to `libstdc++.a(eh_globals.o)`
 being pulled in by `-static-libstdc++` (C++'s per-thread exception-handling
-globals, `__cxa_eh_globals`, implemented via a `__tls_get_addr`-based
-TLS variable on targets with native TLS, which ARM has) -- confirmed by
+globals, `__cxa_eh_globals`, implemented via a `__tls_get_addr`-based TLS
+variable on targets with native TLS, which ARM has) -- confirmed by
 generating a link map (`-Wl,-Map=...`) and by testing that a trivial empty
 `.cpp` `.so` built with identical flags does *not* pick up this NEEDED
 entry, so it is specific to gambatte's/libretro-common's C++ code pulling
 in exception-support object modules, not an artifact of the flags
-themselves. Despite the static check failing, an actual `dlopen(RTLD_NOW)`
-of the real built core **on the physical Kobo** succeeded completely
-(`retro_api_version` returned `1`, `retro_get_system_info` resolved,
-`dlclose` succeeded) -- RTLD_NOW forces immediate resolution of every
-dynamic symbol including `__tls_get_addr`, so this is not a "looks fine but
-might not be" result. Whether to widen `verify-core.sh`'s allowlist to
-include `ld-linux-armhf.so.3` (on this evidence) or to pursue eliminating
-the dependency at the source is left as an explicit decision for review,
-not made unilaterally here.
+themselves.
+
+It is permitted rather than treated as a hazard because it is categorically
+different from what the allowlist exists to catch (a glibc version mismatch,
+or a dynamic `libstdc++`): every dynamically-linked armhf binary needs the
+loader, including the device's own working `/usr/bin/fbink` -- a device
+that couldn't provide it couldn't run anything dynamically linked at all.
+And this was not taken on faith: an actual `dlopen(RTLD_NOW)` of the real
+built core **on the physical Kobo** succeeded completely --
+`RTLD_NOW` forces immediate resolution of every dynamic symbol including
+`__tls_get_addr`, so a genuinely unresolvable dependency would have failed
+loudly right there, not silently deferred:
+
+```
+$ ssh root@<device> './load_core.arm ./gambatte_libretro.so'
+DLOPEN_OK
+retro_api_version = 1
+retro_get_system_info present: yes
+DLCLOSE_OK
+EXIT=0
+```
+
+With `ld-linux-armhf.so.3` added to the allowlist (with this reasoning as
+an inline comment in the script), `scripts/verify-core.sh` passes cleanly
+against the real cross-built core:
+
+```
+$ READELF=arm-linux-gnueabihf-readelf sh scripts/verify-core.sh dist/gambatte_libretro.so
+PASS core dependency closure is device-safe
+  needs libm.so.6
+  needs libc.so.6
+  needs ld-linux-armhf.so.3
+```
 
 ## A note for later tasks
 
