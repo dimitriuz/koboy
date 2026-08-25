@@ -14,6 +14,30 @@ static void mt(koboy_ev *e, int *n, int slot, int id, int x, int y)
     e[(*n)++] = (koboy_ev){ KOBOY_EV_SYN, 0, 0 };
 }
 
+/* Press one finger at a panel coordinate, read the resulting buttons, lift it
+   again. Goes through input_feed rather than reimplementing the hit tests, so
+   what is asserted is the zone geometry the emulator actually uses. The caller
+   must have installed an identity touch transform (raw_max == panel - 1), which
+   makes scale_axis a no-op and the probe pixel-exact. */
+static uint16_t touch_probe(koboy_input *in, int x, int y)
+{
+    koboy_ev down[5] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    koboy_ev up[2] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, down, 5);
+    uint16_t b = input_state(in)->buttons;
+    input_feed(in, up, 2);
+    return b;
+}
+
 TEST_MAIN({
     koboy_config c; config_defaults(&c);
     koboy_profile p; config_resolve_profile(&p, &c, 1264, 1680);
@@ -56,4 +80,110 @@ TEST_MAIN({
     CHECK(input_state(in)->touch[1].down);
 
     input_destroy(in);
+
+    /* #1: dpad_mode = cross is the SHIPPED DEFAULT and the behaviour that
+       distinguishes it from RELATIVE had no coverage, because every existing
+       touch test lands on the pad centre -- where the two modes are
+       identical by construction.
+
+       The distinction: CROSS derives direction from the drawn cross's fixed
+       centre, so a tap anywhere in the pad steers. RELATIVE sets its origin at
+       the touch point, so the same tap steers nowhere until the finger drags.
+       That difference is why the d-pad was unusable in relative mode on the
+       device: the chrome draws an absolute cross and users press its arms. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        config_resolve_profile(&p, &c, 1264, 1680);
+
+        const int W = p.panel_w, H = p.panel_h;
+        int dcx = c.layout.dpad_cx * W / 1000;
+        int dcy = c.layout.dpad_cy * H / 1000;
+        int dr  = c.layout.dpad_r  * W / 1000;
+
+        /* Well past the deadzone, well inside the pad: the right-hand arm. */
+        int off = c.dpad_deadzone + c.dpad_hysteresis + 20;
+        CHECK(off < dr);
+        int tx = dcx + off, ty = dcy;
+
+        c.dpad_mode = KOBOY_DPAD_CROSS;
+        koboy_input *cross = input_create(&c, &p);
+        CHECK(cross != NULL);
+        input_set_touch_transform(cross, W - 1, H - 1, false, false, false);
+        CHECK_EQ_INT(touch_probe(cross, tx, ty), KOBOY_BTN_RIGHT);
+        input_destroy(cross);
+
+        c.dpad_mode = KOBOY_DPAD_RELATIVE;
+        koboy_input *rel = input_create(&c, &p);
+        CHECK(rel != NULL);
+        input_set_touch_transform(rel, W - 1, H - 1, false, false, false);
+        /* Same coordinate, and RELATIVE must report NO direction: the origin
+           is the touch itself, so displacement is zero. */
+        CHECK_EQ_INT(touch_probe(rel, tx, ty), 0);
+        input_destroy(rel);
+    }
+
+    /* #2: flip_x / flip_y are wired to real per-device probe data in
+       platform_kobo.c but no caller in the test suite ever passes true, so any
+       Kobo needing a mirrored touch axis depends on an untested path.
+       Irrelevant on the verified Libra 2, load-bearing on hardware nobody has
+       tried. */
+    {
+        koboy_config c; config_defaults(&c);
+        c.dpad_mode = KOBOY_DPAD_CROSS;
+        koboy_profile p;
+        config_resolve_profile(&p, &c, 1264, 1680);
+        const int W = p.panel_w, H = p.panel_h;
+
+        int acx = c.layout.a_cx * W / 1000;
+        int acy = c.layout.a_cy * H / 1000;
+
+        /* Unflipped: touching A's centre presses A. */
+        koboy_input *plain = input_create(&c, &p);
+        CHECK(plain != NULL);
+        input_set_touch_transform(plain, W - 1, H - 1, false, false, false);
+        CHECK_EQ_INT(touch_probe(plain, acx, acy) & KOBOY_BTN_A, KOBOY_BTN_A);
+        input_destroy(plain);
+
+        /* flip_x: the MIRRORED raw coordinate must now land on A, and A's own
+           coordinate must not. */
+        koboy_input *fx = input_create(&c, &p);
+        CHECK(fx != NULL);
+        input_set_touch_transform(fx, W - 1, H - 1, false, true, false);
+        CHECK_EQ_INT(touch_probe(fx, W - 1 - acx, acy) & KOBOY_BTN_A, KOBOY_BTN_A);
+        CHECK_EQ_INT(touch_probe(fx, acx, acy) & KOBOY_BTN_A, 0);
+        input_destroy(fx);
+
+        /* flip_y likewise. */
+        koboy_input *fy = input_create(&c, &p);
+        CHECK(fy != NULL);
+        input_set_touch_transform(fy, W - 1, H - 1, false, false, true);
+        CHECK_EQ_INT(touch_probe(fy, acx, H - 1 - acy) & KOBOY_BTN_A, KOBOY_BTN_A);
+        input_destroy(fy);
+    }
+
+    /* The MENU zone: a tap reports once and then clears, and it is NOT a
+       joypad bit. There is no libretro button for "menu", and borrowing an
+       unused bit would forward it straight to the core. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        config_resolve_profile(&p, &c, 1264, 1680);
+        const int W = p.panel_w, H = p.panel_h;
+
+        koboy_input *in2 = input_create(&c, &p);
+        CHECK(in2 != NULL);
+        input_set_touch_transform(in2, W - 1, H - 1, false, false, false);
+
+        CHECK_EQ_INT(input_take_menu_request(in2), 0);
+
+        int mx = c.layout.menu_cx * W / 1000;
+        int my = c.layout.menu_cy * H / 1000;
+        uint16_t bits = touch_probe(in2, mx, my);
+        CHECK_EQ_INT(bits, 0);                        /* no joypad bit */
+        CHECK_EQ_INT(input_take_menu_request(in2), 1); /* latched once */
+        CHECK_EQ_INT(input_take_menu_request(in2), 0); /* and cleared */
+
+        input_destroy(in2);
+    }
 })

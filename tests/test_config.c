@@ -77,22 +77,29 @@ TEST_MAIN({
 
     config_defaults(&c);
 
-    /* 5x fits every supported panel */
+    /* 5x fits the Libra panel, but not the smaller Clara one now that the MENU
+       zone exists: menu_cy is a permille of panel height (540/1000), so on the
+       shorter 1448-px-tall Clara panel it lands at absolute row 742 -- inside
+       a scale-5 rect, which runs to row 792 -- while on the 1680-px Libra it
+       lands at row 861, comfortably below the scale-5 rect's row 804. Same
+       layout, different panel proportions, different answer; that is exactly
+       what chrome_controls_top exists to catch before the MENU box gets drawn
+       over the game rect. */
     koboy_profile p;
     CHECK(config_resolve_profile(&p, &c, 1264, 1680));
     CHECK_EQ_INT(p.scale, 5);
     CHECK_EQ_INT(p.game_x, (1264 - 800) / 2);
     CHECK(config_resolve_profile(&p, &c, 1072, 1448));
-    CHECK_EQ_INT(p.scale, 5);
-    CHECK_EQ_INT(p.game_x, (1072 - 800) / 2);
+    CHECK_EQ_INT(p.scale, 4);
+    CHECK_EQ_INT(p.game_x, (1072 - 640) / 2);
 
     /* An impossible configured scale falls back to the largest that fits -- and
        "fits" now means fits above the controls, not merely inside the panel.
-       6x would clear the bezel margin on this panel with 176 px to spare and
-       still bury the A button and the d-pad, so the answer is 5. */
+       6x would clear the bezel margin on this panel with 176 px to spare, but
+       5x already buries the MENU zone (see above), so the answer is 4. */
     c.scale = 99;
     CHECK(config_resolve_profile(&p, &c, 1072, 1448));
-    CHECK_EQ_INT(p.scale, 5);
+    CHECK_EQ_INT(p.scale, 4);
 
     /* ini overrides defaults; unknown keys are ignored, not fatal */
     FILE *f = fopen("build/t.ini", "w");

@@ -88,7 +88,14 @@ void config_defaults(koboy_config *c)
                        .a_cx = 830, .a_cy = 670, .a_r = 85,
                        .b_cx = 660, .b_cy = 760, .b_r = 85,
                        .start_cx = 610, .start_cy = 920, .start_w = 200, .start_h = 55,
-                       .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55 };
+                       .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55,
+                       /* The band between the game rect's bottom and the top of
+                          the controls. On the verified Libra 2 (1264x1680) the
+                          rect ends at y=804 and chrome_controls_top returned
+                          1018 before this zone existed, so 540 permille (y 830)
+                          with a 55 permille height (y 830-984) is clear of
+                          both with room either side. */
+                       .menu_cx = 500, .menu_cy = 540, .menu_w = 200, .menu_h = 55 };
     c->layout = l;
 }
 
@@ -255,6 +262,10 @@ bool config_load(koboy_config *c, const char *path)
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
         else if (!strcmp(k, "core"))             snprintf(c->core_path, sizeof c->core_path, "%s", v);
         else if (!strcmp(k, "save_dir"))         snprintf(c->save_dir,  sizeof c->save_dir,  "%s", v);
+        else if (!strcmp(k, "menu_cx"))          c->layout.menu_cx = atoi(v);
+        else if (!strcmp(k, "menu_cy"))          c->layout.menu_cy = atoi(v);
+        else if (!strcmp(k, "menu_w"))           c->layout.menu_w  = atoi(v);
+        else if (!strcmp(k, "menu_h"))           c->layout.menu_h  = atoi(v);
         /* unknown keys ignored on purpose: forward compatibility */
     }
     fclose(f);

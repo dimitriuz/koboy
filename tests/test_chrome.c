@@ -391,4 +391,18 @@ TEST_MAIN({
     CHECK_EQ_INT(combos, 52);
     CHECK_EQ_INT(chrome_intruded, 0);
     CHECK_EQ_INT(zone_hits, 0);
+
+    /* The MENU zone is a LIVE TOUCH ZONE, so chrome_controls_top must account
+       for it. That function's contract is "the topmost row any drawn control
+       or live touch zone occupies", and it exists because a scale = 0
+       auto-fitted rect once swallowed the A button while its touch zone stayed
+       live underneath -- tapping the lower playfield pressed A. A new zone the
+       function does not know about reintroduces exactly that. */
+    {
+        koboy_config c; config_defaults(&c);
+        const int W = 1264, H = 1680;
+        int top = chrome_controls_top(&c.layout, W, H);
+        int menu_top = (c.layout.menu_cy * H / 1000) - (c.layout.menu_h * H / 1000) / 2;
+        CHECK(top <= menu_top);
+    }
 })

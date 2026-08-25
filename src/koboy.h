@@ -69,5 +69,6 @@ typedef struct {
     int b_cx, b_cy, b_r;
     int start_cx, start_cy, start_w, start_h;
     int select_cx, select_cy, select_w, select_h;
+    int menu_cx, menu_cy, menu_w, menu_h;
 } koboy_layout;
 #endif

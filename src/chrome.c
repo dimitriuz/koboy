@@ -25,6 +25,7 @@ int chrome_controls_top(const koboy_layout *l, int panel_w, int panel_h)
     top = min2(top, perm(l->b_cy, H) - perm(l->b_r, W));
     top = min2(top, perm(l->start_cy, H) - perm(l->start_h, H) / 2);
     top = min2(top, perm(l->select_cy, H) - perm(l->select_h, H) / 2);
+    top = min2(top, perm(l->menu_cy, H) - perm(l->menu_h, H) / 2);
     if (top < 0) top = 0;
     return top;
 }
@@ -159,4 +160,16 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
         perm(l->start_w, W), perm(l->start_h, H), MID);
     box(fb, stride, W, H, perm(l->select_cx, W), perm(l->select_cy, H),
         perm(l->select_w, W), perm(l->select_h, H), MID);
+
+    /* MENU. Drawn, not hidden behind a gesture: the drawn UI is the part
+       people trust, and v1 already learned that the input model has to match
+       the drawing -- a relative thumb-pad under a drawn absolute cross was
+       unusable. Power still means quit, so a menu that fails to draw can never
+       trap the user on a device where a stuck app looks like a brick. */
+    box(fb, stride, W, H, perm(l->menu_cx, W), perm(l->menu_cy, H),
+        perm(l->menu_w, W), perm(l->menu_h, H), MID);
+    frame(fb, stride, W, H,
+          perm(l->menu_cx, W) - perm(l->menu_w, W) / 2,
+          perm(l->menu_cy, H) - perm(l->menu_h, H) / 2,
+          perm(l->menu_w, W), perm(l->menu_h, H), 2, INK);
 }

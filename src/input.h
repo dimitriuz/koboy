@@ -25,4 +25,11 @@ void         input_set_touch_transform(koboy_input *in, int raw_max_x, int raw_m
 void         input_feed(koboy_input *in, const koboy_ev *evs, size_t n);
 void         input_feed_key(koboy_input *in, uint16_t code, bool pressed);
 const koboy_input_state *input_state(const koboy_input *in);
+
+/* True exactly once per MENU tap, then clears.
+
+   Deliberately NOT a joypad bit: there is no libretro button for "menu", and
+   borrowing an unused RETRO_DEVICE_ID_JOYPAD_* bit would forward every menu
+   tap straight into the running game. */
+bool input_take_menu_request(koboy_input *in);
 #endif
