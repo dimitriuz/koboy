@@ -186,4 +186,60 @@ TEST_MAIN({
 
         input_destroy(in2);
     }
+
+    /* Edge-trigger regression: mutating the latch condition from
+       "menu_now && !in->menu_touching" to plain "menu_now" left the block
+       above green, because touch_probe only performs one down/up cycle and
+       a single tap latches once either way regardless of which form is
+       used -- disclosed, not fixed, at the time that gap was found. The
+       edge is the half that matters in play: a finger RESTING on the zone
+       across several polls (no lift, no move -- exactly what a held touch
+       reports on every SYN) must still latch exactly once, or the menu
+       reopens on every frame the finger stays down. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        config_resolve_profile(&p, &c, 1264, 1680);
+        const int W = p.panel_w, H = p.panel_h;
+
+        koboy_input *in3 = input_create(&c, &p);
+        CHECK(in3 != NULL);
+        input_set_touch_transform(in3, W - 1, H - 1, false, false, false);
+
+        int mx = c.layout.menu_cx * W / 1000;
+        int my = c.layout.menu_cy * H / 1000;
+
+        koboy_ev down[5] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  mx },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  my },
+            { KOBOY_EV_SYN, 0, 0 },
+        };
+        input_feed(in3, down, 5);
+        CHECK_EQ_INT(input_take_menu_request(in3), 1); /* the initial touch-down */
+
+        /* Three more SYNs with the finger still down and unmoved -- the
+           tracking id is never re-sent and there is no lift event, matching
+           a resting touch on a real protocol-B stream. Taken once already,
+           above, WHILE still touching: this is the case a same-poll re-latch
+           can only be seen in, because a fresh take() after release always
+           reads 1 regardless of which form of the condition is running. */
+        koboy_ev syn_only[1] = { { KOBOY_EV_SYN, 0, 0 } };
+        input_feed(in3, syn_only, 1);
+        input_feed(in3, syn_only, 1);
+        input_feed(in3, syn_only, 1);
+
+        /* Still held, never re-latched: exactly the edge-triggered contract. */
+        CHECK_EQ_INT(input_take_menu_request(in3), 0);
+
+        koboy_ev up[2] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+            { KOBOY_EV_SYN, 0, 0 },
+        };
+        input_feed(in3, up, 2);
+        CHECK_EQ_INT(input_take_menu_request(in3), 0); /* lift alone latches nothing */
+
+        input_destroy(in3);
+    }
 })

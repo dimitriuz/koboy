@@ -89,13 +89,31 @@ void config_defaults(koboy_config *c)
                        .b_cx = 660, .b_cy = 760, .b_r = 85,
                        .start_cx = 610, .start_cy = 920, .start_w = 200, .start_h = 55,
                        .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55,
-                       /* The band between the game rect's bottom and the top of
-                          the controls. On the verified Libra 2 (1264x1680) the
-                          rect ends at y=804 and chrome_controls_top returned
-                          1018 before this zone existed, so 540 permille (y 830)
-                          with a 55 permille height (y 830-984) is clear of
-                          both with room either side. */
-                       .menu_cx = 500, .menu_cy = 540, .menu_w = 200, .menu_h = 55 };
+                       /* MENU sits on the Start/Select row, not in the open band
+                          below the game rect -- that band LOOKS free but is not:
+                          chrome_controls_top is bound by whichever control sits
+                          highest, and a zone placed at 540 permille (mid-panel)
+                          measured lower than Start/Select's 920 on every panel
+                          shorter than the Libra 2, dragging the auto-fit scale
+                          down with it. Measured: on the 1072x1448 Clara panel,
+                          chrome_controls_top went from 879 to 742 with the zone
+                          there, which knocked the shipped scale from 5 (800x720)
+                          down to 4 (640x576) -- a 36% area loss, and not only at
+                          scale = 0, because config_resolve_profile's fitting loop
+                          demotes an explicit configured scale too. The design spec's
+                          promise that 5x fits every supported panel depends on
+                          nothing lowering chrome_controls_top below the scale-5
+                          rect, so this is not a cosmetic choice.
+                          The Start/Select row is already reserved by two other
+                          controls, so a third one costs nothing there. Verified
+                          clear of both at scale 5 on every panel, no overlap
+                          with Start and clear of the B disc, right margin well
+                          past KOBOY_CHROME_MARGIN:
+                            Clara  1072x1448  x[804..1018] y[1293..1371]  gap-to-Start 44px  clear-of-B 102px  right-margin 54px
+                            Libra2 1264x1680  x[948..1200] y[1499..1591]  gap 51  clear 116  right-margin 64
+                            Elipsa 1404x1872  x[1053..1333] y[1671..1773] gap 57  clear 130  right-margin 71
+                            Sage   1440x1920  x[1080..1368] y[1714..1818] gap 58  clear 133  right-margin 72 */
+                       .menu_cx = 850, .menu_cy = 920, .menu_w = 200, .menu_h = 55 };
     c->layout = l;
 }
 
