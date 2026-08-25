@@ -29,6 +29,13 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
                             int panel_w, int panel_h);
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b);
 
+/* Should a frame whose dirty rect covers dirty_px of a whole_px game rect be
+   promoted from the fast waveform to the flashing one? Lives here, and is
+   tested, because the shipped default turns the promotion off and "off" is only
+   trustworthy if the comparison itself is pinned: a >= that became a > would
+   quietly reintroduce flashing with nothing failing. */
+bool config_promote_full(const koboy_config *c, long dirty_px, long whole_px);
+
 /* Resolve a slashless core/rom/save path against the directory containing the
    running executable. See the long comment in config.c: dlopen() never looks in
    the cwd for a name with no slash, so a bare core name could not be found on

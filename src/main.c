@@ -423,13 +423,10 @@ int main(int argc, char **argv)
            the panel shows. A region that ghosts and then stops changing is
            never revisited by this test at all. */
         koboy_refresh_mode mode = KOBOY_REFRESH_FAST;
-        if (cfg.full_refresh_permille > 0) {
-            long dirty = (long)r.w * (long)r.h;
-            long whole = (long)prof.game_w * (long)prof.game_h;
-            if (dirty * 1000L >= whole * (long)cfg.full_refresh_permille) {
-                mode = KOBOY_REFRESH_FULL;
-                big_refreshes++;
-            }
+        if (config_promote_full(&cfg, (long)r.w * (long)r.h,
+                                (long)prof.game_w * (long)prof.game_h)) {
+            mode = KOBOY_REFRESH_FULL;
+            big_refreshes++;
         }
         pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, mode);
         presented++;

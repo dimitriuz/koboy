@@ -7,7 +7,8 @@ TEST_MAIN({
     CHECK_EQ_INT(c.scale, 5);
     CHECK_EQ_INT(c.present_divisor, 3);
     /* The ghosting mitigations default OFF and the flash-promotion threshold
-       defaults to "never" (the dirty area cannot exceed the game rect). Both
+       defaults to firing only on a whole-rect change, which normal gameplay
+       essentially never produces (and which is asserted below, not assumed). Both
        were written for forced DU4, which cannot erase; AUTO can, and measuring
        showed the threshold was the sole source of the flashing while the
        cleanup never fired. Asserted here so re-enabling them is a deliberate
@@ -21,6 +22,45 @@ TEST_MAIN({
        the absolute one. */
     CHECK_EQ_INT(c.dpad_mode, KOBOY_DPAD_CROSS);
     CHECK_EQ_INT(c.key_a, 0);
+
+    /* The promotion DECISION, not just the stored threshold. Checking only that
+       the default is 1000 would let a >= silently become a >, or the bounding
+       box shrink by a pixel, and flashing would come back with every test still
+       green. The game rect used here is the shipped 5x one, 800x720.
+
+       At the default the promotion fires only on a dirty rect covering the whole
+       game rect -- which IS reachable, since the dirty rect is a single merged
+       bounding box and a full-screen wipe produces exactly it. That case is
+       deliberately inside the promotion: a frame in which everything changed is
+       when a flashing refresh is wanted. */
+    const long whole = 800L * 720L;
+    CHECK(config_promote_full(&c, whole, whole));            /* corner to corner */
+    CHECK(!config_promote_full(&c, whole - 1, whole));        /* one pixel short */
+    CHECK(!config_promote_full(&c, whole / 2, whole));        /* half the rect */
+    CHECK(!config_promote_full(&c, 160L * 144L, whole));      /* a 1x-sized patch */
+
+    /* A lowered threshold promotes proportionally: 450 permille means 45% of
+       the rect, and the boundary is again inclusive. */
+    c.full_refresh_permille = 450;
+    CHECK(config_promote_full(&c, whole * 45 / 100, whole));
+    CHECK(config_promote_full(&c, whole, whole));
+    CHECK(!config_promote_full(&c, whole * 44 / 100, whole));
+
+    /* <= 0 means disabled, and must not degenerate into "always": a plain
+       comparison against 0 permille is true for every non-empty rect. */
+    c.full_refresh_permille = 0;
+    CHECK(!config_promote_full(&c, whole, whole));
+    CHECK(!config_promote_full(&c, 1, whole));
+    c.full_refresh_permille = -1;
+    CHECK(!config_promote_full(&c, whole, whole));
+
+    /* Degenerate geometry cannot promote, and must not divide or overflow. */
+    c.full_refresh_permille = 1000;
+    CHECK(!config_promote_full(&c, 0, whole));
+    CHECK(!config_promote_full(&c, whole, 0));
+    CHECK(!config_promote_full(NULL, whole, whole));
+
+    config_defaults(&c);
 
     /* 5x fits every supported panel */
     koboy_profile p;

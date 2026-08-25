@@ -41,12 +41,16 @@ void config_defaults(koboy_config *c)
        is a poor clock -- 70s of measured gameplay presented only 45 frames. */
     c->cleanup_interval = 0;
     c->cleanup_max_ms = 0;
-    /* 1000 permille: never promote a frame to the flashing waveform, because
-       the dirty area cannot exceed the game rect. See the note above -- this
-       threshold, not the cleanup, was the measured source of the flashing.
-       Lower it (450 was the old default) to force a flash on large scene
-       changes, which is worth having only if the driver's own choice leaves
-       residue you can see. */
+    /* 1000 permille, i.e. the promotion fires only when the dirty rect covers
+       the game rect corner to corner. That is reachable -- the dirty rect is a
+       single merged bounding box, so a full-screen wipe or a scene transition
+       produces exactly it -- but normal gameplay essentially never does, and
+       when the whole rect really has changed a flashing refresh is what you
+       want anyway. Only *exceeding* the rect is impossible.
+       See the note above: this threshold, not the cleanup, was the measured
+       source of the flashing. Lower it (450 was the old default) to force a
+       flash on large scene changes, which is worth having only if the driver's
+       own choice leaves residue you can see. */
     c->full_refresh_permille = 1000;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->grab_input = true;
@@ -181,6 +185,19 @@ static void trim(char *s)
 }
 
 static bool as_bool(const char *v) { return !(strcmp(v,"false")==0 || strcmp(v,"0")==0); }
+
+/* The promotion test, extracted from the main loop so it can be tested.
+   >= and not >, deliberately: a frame in which the entire game rect changed is
+   precisely when a flashing refresh is wanted, so the boundary case belongs
+   inside the promotion, not outside it. permille <= 0 disables the promotion
+   outright -- without that guard 0 would make the comparison always true, which
+   is the exact inverse of what "disabled" means. */
+bool config_promote_full(const koboy_config *c, long dirty_px, long whole_px)
+{
+    if (!c || c->full_refresh_permille <= 0) return false;
+    if (whole_px <= 0 || dirty_px <= 0)      return false;
+    return dirty_px * 1000L >= whole_px * (long)c->full_refresh_permille;
+}
 
 bool config_load(koboy_config *c, const char *path)
 {

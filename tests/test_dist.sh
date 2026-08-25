@@ -16,7 +16,8 @@ fi
 
 for f in .adds/koboy/koboy .adds/koboy/koboy.sh .adds/koboy/koboy.ini \
          .adds/koboy/gambatte_libretro.so .adds/koboy/nm-koboy \
-         .adds/koboy/kfmon-koboy.ini .adds/koboy/README.md; do
+         .adds/koboy/kfmon-koboy.ini .adds/koboy/README.md \
+         .adds/koboy/TESTED.md; do
     unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
 done
 

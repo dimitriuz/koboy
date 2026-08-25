@@ -12,7 +12,10 @@
 #
 # Copyright (C) 2026 the koboy authors. GPLv3 or later.
 
-PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/lib:"
+# Kobo's own rcS writes this with a trailing colon, which makes the empty last
+# element mean "the current directory". Not copied: this script runs as root and
+# its working directory is whatever Nickel happened to be in.
+PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/lib"
 
 DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd) || DIR=$(dirname "$0")
 LOG="$DIR/koboy.log"
@@ -52,10 +55,20 @@ log "=== koboy.sh start (pid $$, dir $DIR)"
 # A shell over ssh has none of that environment (measured: HOME, LOGNAME, PATH,
 # PWD, SHELL, SHLVL, SSH_*, USER and nothing else). So an ssh launch is refused
 # here, before Nickel is touched, rather than being allowed to damage the device
-# identity on its way out. It is reconstructible in principle -- PLATFORM and
-# PRODUCT can be read back out of udevd's environ -- but nobody has verified
+# identity on its way out.
+#
+# KNOWN LIMITATION, stated plainly rather than implied: this is trivially
+# spoofable. Exporting those three names before running the script from a shell
+# gets straight past it, and then the restart runs with a *partial* environment
+# and can do exactly the damage described above. No check in userspace can do
+# better -- there is nothing a process can consult to prove who its parent was.
+# What the gate buys is that the accident stops happening: the ordinary ssh
+# launch, which is how this went wrong in the first place, now refuses. It is
+# not a defence against someone deliberately claiming to be Nickel.
+# (PLATFORM and PRODUCT can also be recovered from udevd's environ, which is how
+# KOReader reconstructs them. Deliberately not done here: nobody has verified
 # what else a hand-assembled Nickel writes to persistent state, and the cost of
-# being wrong is a device that needs a reboot to identify itself again.
+# being wrong is a device that needs a reboot to identify itself again.)
 missing=""
 for v in PLATFORM PRODUCT NICKEL_HOME; do
     eval "val=\${$v}"
@@ -120,8 +133,24 @@ wifi_down() {
     # down before Nickel comes back. KOBOY_KEEP_WIFI=1 skips this: developers
     # test this script over ssh, and ssh on this hardware runs over the very
     # interface being torn down.
-    [ -n "$WIFI_MODULE" ] || return 0
-    grep -q "^$WIFI_MODULE" /proc/modules 2>/dev/null || return 0
+    if [ -z "$WIFI_MODULE" ]; then
+        # WARNING, not a debug note. WIFI_MODULE is not part of the hard
+        # environment gate above, so nothing structurally guarantees it is set,
+        # and its absence silently disables the one step that keeps the
+        # restarted Nickel healthy. On unverified hardware a tester should learn
+        # this from the log rather than from their device restarting itself.
+        log "restore: WARNING WIFI_MODULE is not set, so the WiFi teardown was"
+        log "         SKIPPED. If the radio is up, the restarted Nickel will try"
+        log "         to load its own driver, fail with 'File exists', and the"
+        log "         device may reboot itself a few minutes after you exit."
+        log "         Set WIFI_MODULE in the environment (this device: see"
+        log "         /proc/modules) if that happens."
+        return 0
+    fi
+    if ! grep -q "^$WIFI_MODULE" /proc/modules 2>/dev/null; then
+        log "restore: WiFi module $WIFI_MODULE is not loaded, nothing to tear down"
+        return 0
+    fi
     if [ "$KOBOY_KEEP_WIFI" = "1" ]; then
         # Do not use this for anything but a development session. MEASURED: with
         # the radio left up, the restarted Nickel logged
