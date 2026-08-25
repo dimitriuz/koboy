@@ -32,6 +32,14 @@ TEST_MAIN({
     state_path(bad, sizeof bad, dir, rom, KOBOY_STATE_SLOTS + 1);
     CHECK_EQ_INT(bad[0], 0);
 
+    /* A buffer too small to hold the full path must not leave a truncated
+       (and therefore WRONG) path in `out` -- same failure semantics as an
+       out-of-range slot: writing "" makes the caller's fopen fail cleanly
+       instead of silently saving under a shortened, surprising name. */
+    char tiny[4];
+    state_path(tiny, sizeof tiny, dir, rom, 1);
+    CHECK_EQ_INT(tiny[0], 0);
+
     CHECK_EQ_INT(state_exists(dir, rom, 1), 0);
 
     /* safefile_write is atomic: temp file plus rename, so a kill mid-write

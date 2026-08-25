@@ -21,7 +21,14 @@ void state_path(char *out, size_t n, const char *save_dir,
     sram_path_for_rom(srm, sizeof srm, save_dir, rom_path);
     char *dot = strrchr(srm, '.');
     if (dot) *dot = 0;
-    snprintf(out, n, "%s.st%d", srm, slot);
+    int len = snprintf(out, n, "%s.st%d", srm, slot);
+    /* Truncation writes "" for the same reason an out-of-range slot does: a
+       truncated path is a WRONG path, and this one names a save-state file.
+       Silently writing user data to a shortened filename is a data bug, not a
+       cosmetic one. Also keeps the build warning-free -- state.c links into
+       every test binary, so one warning here is 21 lines of noise that would
+       hide the next real one. */
+    if (len < 0 || (size_t)len >= n) out[0] = 0;
 }
 
 bool state_exists(const char *save_dir, const char *rom_path, int slot)
