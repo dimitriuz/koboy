@@ -21,13 +21,28 @@ romdir="$(mktemp -d)"
 script="$(mktemp)"
 printf 'idle 2\ntap 40 200\n' > "$script"
 
-out=$(SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
+# Explicit rc capture, not the bare `out=$(...)` the run above uses: under
+# set -e a nonzero exit from inside a command substitution assignment aborts
+# the script AT THAT LINE, before the "$out" echo or any FAIL message below
+# it ever runs. A prior mutant that made the browser ignore its script hung
+# until the timeout below killed it (rc=124) and the script exited silently
+# with no diagnostic at all -- `|| rc=$?` keeps the assignment out of the
+# tail position of the AND-OR list so -e does not fire on it, and `timeout`
+# turns "hangs forever" into "fails after 30s" so an unattended run reports a
+# failure instead of never finishing.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom-dir "$romdir" --ui-script "$script" \
-        --panel 1264x1680 --frames 30 2>&1)
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
 echo "$out"
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: browser run exited $rc (124 means it hit the 30s timeout)"
+    rm -rf "$romdir" "$script"
+    exit 1
+fi
 echo "$out" | grep -q "chose $romdir/AAA TEST.gb" \
-    || { echo "FAIL: browser did not select the only rom"; exit 1; }
+    || { echo "FAIL: browser did not select the only rom"; rm -rf "$romdir" "$script"; exit 1; }
 echo "$out" | grep -q '^presented=' \
-    || { echo "FAIL: run did not reach the emulator loop"; exit 1; }
+    || { echo "FAIL: run did not reach the emulator loop"; rm -rf "$romdir" "$script"; exit 1; }
 rm -rf "$romdir" "$script"
 echo "ok: rom browser"

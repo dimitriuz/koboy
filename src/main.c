@@ -278,6 +278,20 @@ int main(int argc, char **argv)
             pf->shutdown(pf->ctx);
             return 2;
         }
+        /* uiscript.h's own contract: "an error must fail the run rather than
+           silently pass a test that exercised nothing". An empty or
+           comment-only script is not a read error -- uiscript_load returns 0,
+           not -1 -- but treating it as "no script" here would fall back to
+           run_list's live-polling branch, and a --ui-script was explicitly
+           requested precisely because nobody is at the panel to poll. That
+           run then blocks forever instead of failing, which is a worse
+           silence than a bad read: this is exactly the unattended-run blind
+           spot uiscript.h exists to close. */
+        if (ui_script_n == 0) {
+            fatal("ui script %s is empty (no verbs)", ui_script_path);
+            pf->shutdown(pf->ctx);
+            return 2;
+        }
     }
 
     /* An explicit --rom or rom= goes straight to play, which keeps every
