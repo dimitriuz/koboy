@@ -4,12 +4,12 @@
 # Nickel MUST be stopped first: it holds EVIOCGRAB on event0/1/2, so no other
 # process can read input at all while it runs.
 #
-# This test does NOT reboot. It stops Nickel, runs, and restarts Nickel --
-# which is what KOReader does, and what scripts/koboy.sh relies on every time
-# the user exits a game. `reboot` remains the escape hatch if a restart ever
-# leaves Nickel visibly broken (see restore() below); it is not the default,
-# because rebooting the user's e-reader after every test run is needlessly
-# disruptive.
+# This test reboots at the end, and that is a deliberate reversal: restarting
+# Nickel in place works, but a Nickel started without rcS's full environment
+# rewrites /mnt/onboard/.kobo/version and destroys the device identity FBInk
+# depends on. See restore() for the measured before/after. A reboot is clean and
+# repairs it; the in-place path is not safe to ship until someone verifies what
+# Nickel writes when restarted by hand.
 set -e
 : "${DEV:?set DEV=<device-ip>}"
 R="ssh root@$DEV"
@@ -31,45 +31,39 @@ NICKEL_PAT='/usr/local/Kobo/nicke[l]'
 
 restore() {
     # 1. Framebuffer depth FIRST, and it must be "-d 32", NOT "-r".
-    #    MEASURED on the device: fbdepth's -r is --rota and *requires* an
-    #    argument, so "fbdepth -r" exits 255 with
-    #    "option requires an argument -- 'r'" and changes nothing. There is no
-    #    restore flag; you name the depth you want. When this silently failed,
-    #    the panel stayed at 8bpp and an explicitly restarted Nickel was gone
-    #    again within ten seconds -- Nickel reads the depth at startup and does
-    #    not survive one it does not expect.
+    #    MEASURED: fbdepth's -r is --rota and *requires* an argument, so
+    #    "fbdepth -r" exits 255 with "option requires an argument -- 'r'" and
+    #    changes nothing. There is no restore flag; you name the depth you want.
     $R 'fbdepth -d 32 >/dev/null 2>&1 || true' || true
-    # 2. Nickel's ENVIRONMENT, which is the part that is easy to miss and was
-    #    measured the hard way. Started with a bare `nickel -platform kobo
-    #    -skipFontLoad`, Nickel exits within five seconds every time: it is a Qt
-    #    application whose libraries live in /usr/local/Kobo, and /etc/init.d/rcS
-    #    exports LD_LIBRARY_PATH, NICKEL_HOME, LANG and a DBUS session address
-    #    (rcS lines 324-337) long before it launches Nickel. With those four
-    #    supplied, Nickel stayed up indefinitely. hindenburg goes first, since
-    #    Nickel expects it. setsid so both survive this ssh session closing.
-    $R 'export NICKEL_HOME=/mnt/onboard/.kobo
-        export LD_LIBRARY_PATH=/usr/local/Kobo
-        export LANG=en_US.UTF-8
-        [ -p /tmp/nickel-hardware-status ] || mkfifo /tmp/nickel-hardware-status
-        if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
-            DBUS_SESSION_BUS_ADDRESS=$(/bin/dbus-daemon --session --print-address --fork 2>/dev/null)
-            export DBUS_SESSION_BUS_ADDRESS
-        fi
-        pgrep -f "/usr/local/Kobo/hindenbur[g]" >/dev/null 2>&1 ||
-            (setsid /usr/local/Kobo/hindenburg >/dev/null 2>&1 &)
-        sleep 1
-        (setsid env LIBC_FATAL_STDERR_=1 /usr/local/Kobo/nickel \
-            -platform kobo -skipFontLoad >/dev/null 2>&1 &)
-        sleep 8
-        if pgrep -f "/usr/local/Kobo/nicke[l]" >/dev/null 2>&1; then
-            echo "restore: nickel is running"
-        else
-            # The escape hatch, kept because it is the one thing that always
-            # works. A Kobo reboot is clean; it just costs the user 30 seconds.
-            echo "restore: nickel did not come back -- rebooting to recover"
-            reboot
-        fi' || echo "restore: WARNING could not reach $DEV to restore"
+
+    # 2. Reboot, and this is a REVERSAL of the obvious approach. Restarting
+    #    Nickel in place does work in the narrow sense -- with
+    #    LD_LIBRARY_PATH=/usr/local/Kobo, NICKEL_HOME, LANG and a DBUS session
+    #    address it comes up and stays up indefinitely, verified. Do not do it
+    #    anyway. MEASURED consequence: rcS also exports PLATFORM, PRODUCT (from
+    #    /bin/kobo_config.sh) and the NTX hardware identity, and a Nickel
+    #    started without them REWRITES /mnt/onboard/.kobo/version with a
+    #    placeholder serial and an empty device-code field:
+    #
+    #      before  N4181B1025136,4.1.15,4.38.23684,...,00000000-...-000000000388
+    #      after   11:22:33:44:55:66,4.1.15,4.38.23684,...,
+    #
+    #    That file is how FBInk identifies the device. With it damaged, the
+    #    device's own /usr/bin/fbink reported deviceName='Unknown!' deviceId=15
+    #    devicePlatform='Mark ?' hasEclipseWfm=0 -- so every FBInk-based tool on
+    #    the device, KOReader included, loses its per-device quirks, and koboy
+    #    correctly stops offering DU4. It persists until a clean boot.
+    #
+    #    A reboot runs rcS with the full environment and repairs the file
+    #    (verified: the serial and device code came back and hasEclipseWfm
+    #    returned to 1). It costs the user ~30 seconds and cannot corrupt
+    #    anything. Until someone reproduces rcS's environment exactly and
+    #    verifies that Nickel writes correct persistent state, this is the only
+    #    restore worth shipping.
+    $R 'reboot' || echo "restore: WARNING could not reach $DEV to reboot"
+    echo "restore: rebooting $DEV; Nickel and the device identity come back with rcS"
 }
+
 # Unconditional: a failed assertion below must still hand the device back.
 trap restore EXIT
 
