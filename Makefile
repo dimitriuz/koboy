@@ -56,9 +56,16 @@ build/koboy-arm: src/main.c src/platform_kobo.c $(SRC) $(FBINK_LIB) | build
 	$(CROSS)gcc $(CFLAGS) $(ARM_FLAGS) $(INC) -I$(FBINK_DIR) -DKOBOY_PLATFORM_KOBO \
 	    -o $@ src/main.c src/platform_kobo.c $(SRC) $(FBINK_LIB) -ldl -lm
 
-# Task 18 adds build/koboy-probe-arm; until then `kobo` builds the emulator
-# only, rather than naming a target with no rule.
-kobo: build/koboy-arm
+# koboy-probe is self-contained -- it never touches config.c/video.c/etc, only
+# FBInk and raw evdev -- so it links against src/probe.c alone, not $(SRC).
+# Same toolchain and libfbink.a as build/koboy-arm, because it is answering
+# questions ("does this platform have hasEclipseWfm", "what stride does this
+# panel report") about the exact same hardware seam koboy itself uses.
+build/koboy-probe-arm: src/probe.c $(FBINK_LIB) | build
+	$(CROSS)gcc $(CFLAGS) $(ARM_FLAGS) $(INC) -I$(FBINK_DIR) \
+	    -o $@ src/probe.c $(FBINK_LIB) -ldl -lm
+
+kobo: build/koboy-arm build/koboy-probe-arm
 
 # Not phony, for the same reason as $(FBINK_LIB) above: a full gambatte
 # cross-build is minutes of work, and `make dist` must not pay for it on every
@@ -86,8 +93,10 @@ dist: kobo $(CORE_SO) | build
 	cp config/koboy.ini          build/pkg/.adds/koboy/
 	cp README.md TESTED.md       build/pkg/.adds/koboy/
 	cp $(CORE_SO)                build/pkg/.adds/koboy/
-	# Shipped only if it has been built: the probe is a separate deliverable,
-	# and a missing one must not break packaging the emulator.
+	# `kobo` (a prerequisite above) now always produces build/koboy-probe-arm
+	# too, so this branch is normally taken -- kept as a guard rather than an
+	# unconditional cp so a partial/manual build still packages the emulator
+	# instead of failing outright over a missing, separable deliverable.
 	@if [ -f build/koboy-probe-arm ]; then \
 	    cp build/koboy-probe-arm build/pkg/.adds/koboy/koboy-probe; \
 	    chmod +x build/pkg/.adds/koboy/koboy-probe; \
@@ -104,3 +113,17 @@ dist: kobo $(CORE_SO) | build
 	cd build/pkg && zip -qrD ../../dist/koboy-$(VERSION).zip .adds
 	@echo "dist: dist/koboy-$(VERSION).zip"
 .PHONY: dist
+
+# The probe's own package: just the probe binary and a README, deployable
+# before the emulator, the core or even koboy.ini exist. This is the growth
+# path for TESTED.md -- someone with a device the author does not own can
+# characterise it without building or even wanting the rest of the project.
+probe-dist: build/koboy-probe-arm | build
+	rm -rf build/probe-pkg && mkdir -p build/probe-pkg/.adds/koboy
+	cp build/koboy-probe-arm    build/probe-pkg/.adds/koboy/koboy-probe
+	cp docs/probe-readme.md     build/probe-pkg/.adds/koboy/README.md
+	chmod +x build/probe-pkg/.adds/koboy/koboy-probe
+	mkdir -p dist && rm -f dist/koboy-probe-$(VERSION).zip
+	cd build/probe-pkg && zip -qrD ../../dist/koboy-probe-$(VERSION).zip .adds
+	@echo "probe-dist: dist/koboy-probe-$(VERSION).zip"
+.PHONY: probe-dist
