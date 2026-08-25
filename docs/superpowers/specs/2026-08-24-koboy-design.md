@@ -756,3 +756,78 @@ Companion processes observed alongside Nickel, which the §8 restore path needs:
 
 Observing these directly removes any need to derive the restart sequence from a
 third-party script.
+
+---
+
+## Appendix B — Second measurement session (2026-08-25)
+
+Taken after the default render scale changed to 5x, and after two failed
+attempts to build a cross-toolchain. Same device, same firmware.
+
+### Toolchain ground truth (this supersedes assumptions in section 6)
+
+| Fact | Value |
+|---|---|
+| Device glibc | **2.19** (`GNU C Library (crosstool-NG 1.24.0.103_75d7525) ... version 2.19`) |
+| Misleading symlink | `/lib/libc.so.6 -> libc-2.11.1.so` --- the filename was kept across an upgrade; the library itself reports 2.19 |
+| Shell | busybox `ash`; no `ldd` on device |
+| Dependency closure of a **working** Kobo ARM binary (`/usr/bin/fbink`) | **`libm.so.6` and `libc.so.6` only** |
+| Same for KOReader's `fbink` | identical --- `libm`, `libc` |
+| Build attributes | `Advanced_SIMD_arch: NEONv1` |
+
+Consequences:
+
+- **The cross-toolchain target must produce binaries against glibc <= 2.19.** A
+  distro `arm-linux-gnueabihf` toolchain targets a far newer glibc and its
+  dynamically-linked output will not run here, so that shortcut is closed.
+- **koxtoolchain's glibc 2.15 target is older than necessary.** 2.15 is safe
+  (older links run on newer) but the actual floor is 2.19, and glibc 2.15's
+  configure scripts loop indefinitely on a 2026 host --- see the failure note
+  below. A prebuilt toolchain targeting any glibc <= 2.19 would sidestep the
+  build entirely.
+- **`verify-core.sh`'s acceptance criterion is confirmed correct by ground
+  truth**: real Kobo binaries carry only `libm` + `libc`. The prebuilt libretro
+  ARM core failed exactly this check (dynamic `libstdc++`, no NEON attributes).
+
+### Refresh at the shipped 5x rect (800 x 720), which was never measured before
+
+| Mode | ms/refresh | fps |
+|---|---|---|
+| **DU4, non-blocking** | **15.0** | **66.7** |
+| DU4, blocking | 39.2 | 25.5 |
+| A2, blocking | 135.8 | 7.4 |
+| GL16, blocking | 310.8 | 3.2 |
+
+Non-blocking DU4 is the figure that governs the real emulator, since the main
+loop issues refreshes without waiting for completion. 66.7 fps against a ~20 fps
+requirement is comfortable headroom.
+
+A2 remains ~3.5x slower than DU4, so the Appendix A waveform decision holds
+robustly across sessions.
+
+### Measurement variance --- read Appendix A's absolute numbers with caution
+
+Re-measuring the **same** 7x rect (1120 x 1008) with the **same** DU4 waveform
+today gave **67.5 ms / 14.8 fps**, against Appendix A's **46.7 ms / 21.4 fps**.
+That is 45% run-to-run variance on identical parameters, far beyond the 10 ms
+clock resolution. E-ink refresh timing is temperature- and controller-state
+dependent, so:
+
+- Treat all absolute ms/fps figures as **order-of-magnitude with ~50% spread**,
+  not precise constants.
+- The *relative* findings are what survive: DU4 beats A2 by ~3.5x, cost scales
+  with area, and non-blocking beats blocking by ~2.6x. Every design decision
+  rested on those ratios, and all of them reproduced.
+- The section 5 extrapolation predicted ~34 fps for 5x from the 7x fit; the
+  measured blocking figure is 25.5 fps. The model was optimistic in absolute
+  terms while correct in ordering.
+
+### Toolchain build failure (recorded so it is not retried blindly)
+
+Two attempts at koxtoolchain both hung in **glibc 2.15's `./configure`**, right
+after `running configure fragment for ports/sysdeps/arm/elf`, emitting one
+repeated line indefinitely (2.37M of 2.63M log lines). Binutils and the core
+compiler built successfully; the final gcc never ran. This is a 14-year gap
+between a 2012 libc's autoconf idioms and a 2026 host, not a misconfiguration.
+Viable routes: a prebuilt toolchain targeting glibc <= 2.19, or building
+koxtoolchain inside a container with a period-appropriate host.
