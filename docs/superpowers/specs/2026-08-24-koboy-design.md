@@ -809,8 +809,20 @@ robustly across sessions.
 
 Re-measuring the **same** 7x rect (1120 x 1008) with the **same** DU4 waveform
 today gave **67.5 ms / 14.8 fps**, against Appendix A's **46.7 ms / 21.4 fps**.
-That is 45% run-to-run variance on identical parameters, far beyond the 10 ms
-clock resolution. E-ink refresh timing is temperature- and controller-state
+
+**Widened by a third measurement (Task 18).** `koboy-probe` later measured the
+same region and waveform at **31.2-31.8 ms**. So three readings of identical
+parameters span **31.2 to 67.5 ms — a factor of 2.2**, which is wider than the
+"45%" this section originally claimed. Treat that 45% figure as a floor on the
+spread, not a bound.
+
+There is also a mechanism nobody connected at the time: this device reports
+`unreliable_wait_for=1`, and that flag applies to the very ioctl
+(`MXCFB_WAIT_FOR_UPDATE_COMPLETE`) that every *blocking* measurement depends on.
+Blocking figures on this hardware are therefore suspect by construction, which is
+why `koboy-probe` now prints a caveat beside its timing output when the flag is
+set. Non-blocking submission figures do not depend on that ioctl and are the more
+trustworthy of the two. E-ink refresh timing is temperature- and controller-state
 dependent, so:
 
 - Treat all absolute ms/fps figures as **order-of-magnitude with ~50% spread**,
