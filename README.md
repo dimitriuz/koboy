@@ -5,10 +5,13 @@ renders the DMG's four greys straight onto the e-ink panel through FBInk, and
 reads the page-turn buttons and the touchscreen directly from evdev.
 
 It is built around what the hardware can actually do rather than around what a
-desktop emulator expects: the panel is refreshed with the fast four-level DU4
-waveform where the device supports it, only changed rectangles are pushed, and
-frames are presented at a third of the emulated rate because e-ink cannot go
-faster. On a Kobo Libra 2 that is a playable Game Boy.
+desktop emulator expects: each refresh lets the panel controller pick its own
+waveform from the pixels actually changing, only changed rectangles are pushed,
+and frames are presented at a third of the emulated rate because e-ink cannot go
+faster. Forcing the fast four-level DU4 waveform instead is quicker per refresh
+but cannot erase, which ghosted badly in play, so `waveform_fast = du4` is an
+option in `koboy.ini` and not the default. On a Kobo Libra 2 that is a playable
+Game Boy.
 
 ## What you need
 
@@ -61,8 +64,11 @@ cannot damage the device identity; it just declines to start.
 
 ## Playing
 
-- The two page-turn buttons are A and B. The first launch asks you to press each
-  one and records the key codes in `koboy.ini`.
+- The two page-turn buttons are A and B, mapped out of the box to the codes the
+  Libra 2 emits (193 and 194). If yours differ, clear `key_a`/`key_b` in
+  `koboy.ini` and the next launch asks you to press each one and records what it
+  sees. That prompt can always be dismissed by tapping the screen, so a Kobo
+  with no page-turn buttons at all keeps the on-screen controls and plays.
 - The touchscreen is the d-pad: the lower-left region of the faceplate. The
   default `cross` mode splits the drawn cross into four fixed zones, which is
   what the drawing implies; `dpad_mode = relative` instead steers from wherever

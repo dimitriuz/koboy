@@ -11,7 +11,7 @@ broken, just unmeasured. If you run koboy on one, please add a row.
 
 | Device | Platform | Firmware | Panel | Buttons | `wfm_fast` | fps at 5x | Status |
 |---|---|---|---|---|---|---|---|
-| Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, both usable after calibration | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
+| Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, KEY_F23(193)/KEY_F24(194) --- the shipped defaults, so they work without calibrating | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
 
 That row was verified with the shipped defaults, which is the point of shipping
 them: `waveform_fast = auto`, `full_refresh_permille = 1000` (never force a
