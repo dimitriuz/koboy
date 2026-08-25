@@ -17,7 +17,9 @@
 #include "koboy.h"
 #include "pacing.h"
 #include "romlist.h"
+#include "safefile.h"
 #include "sram.h"
+#include "state.h"
 #include "stats.h"
 #include "text.h"
 #include "ui.h"
@@ -166,6 +168,92 @@ static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
     return chosen;
 }
 
+/* Everything that must happen when a ROM becomes the current game, in the one
+   order that is safe.
+
+   Three hazards live here, all of them silent if got wrong:
+     - core_sram() is re-fetched every time. The pointer belongs to the core's
+       freshly loaded cartridge; caching it across unload/load is a
+       use-after-free waiting for a second game.
+     - The OUTGOING game's SRAM is flushed by the caller BEFORE unload, never
+       after: retro_unload_game takes the buffer, and its last minutes with it.
+     - sram_writeback stays false for the session when a save file exists but
+       could not be read whole, so nothing is written back over it. */
+typedef struct {
+    char     path[512];        /* .srm path for the current rom */
+    uint8_t *mem;
+    size_t   len;
+    bool     writeback;
+} koboy_sram_binding;
+
+static bool load_rom_into(koboy_core *core, koboy_config *cfg,
+                          koboy_sram_binding *sb, char *err, size_t errlen)
+{
+    if (!core_load_rom(core, cfg->rom_path, err, errlen)) return false;
+
+    sram_path_for_rom(sb->path, sizeof sb->path, cfg->save_dir, cfg->rom_path);
+    sb->len = 0;
+    sb->mem = core_sram(core, &sb->len);
+    sb->writeback = true;
+    return true;
+}
+
+enum {
+    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
+    MENU_COUNT
+};
+
+/* Returns the chosen MENU_* action, or MENU_RESUME if the user backed out.
+   `has_states` greys nothing out visually -- the label says so instead, which
+   is cheaper on a panel with no colour and no hover. */
+static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                    int stride, int pw, int ph, bool has_states,
+                    const koboy_input_state *script, int script_n)
+{
+    const char *items[MENU_COUNT];
+    items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
+    items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
+    items[MENU_RESET]       = "RESET GAME";
+    items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
+    items[MENU_RESUME]      = "RESUME";
+    items[MENU_QUIT]        = "QUIT";
+
+    koboy_ui_list list;
+    ui_list_init(&list, "MENU", items, MENU_COUNT,
+                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n);
+    if (pick < 0) return MENU_RESUME;
+    if ((pick == MENU_SAVE || pick == MENU_LOAD) && !has_states) return MENU_RESUME;
+    return pick;
+}
+
+/* Returns the chosen slot (1-based), or 0 if the user backed out. */
+static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                           int stride, int pw, int ph, const char *title,
+                           const char *save_dir, const char *rom_path,
+                           const koboy_input_state *script, int script_n)
+{
+    static char labels[KOBOY_STATE_SLOTS + 1][64];
+    const char *items[KOBOY_STATE_SLOTS + 1];
+    for (int s = 1; s <= KOBOY_STATE_SLOTS; s++) {
+        state_slot_label(labels[s - 1], sizeof labels[s - 1], save_dir, rom_path, s);
+        items[s - 1] = labels[s - 1];
+    }
+    snprintf(labels[KOBOY_STATE_SLOTS], sizeof labels[KOBOY_STATE_SLOTS], "BACK");
+    items[KOBOY_STATE_SLOTS] = labels[KOBOY_STATE_SLOTS];
+
+    koboy_ui_list list;
+    ui_list_init(&list, title, items, KOBOY_STATE_SLOTS + 1,
+                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n);
+    if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
+    return pick + 1;
+}
+
 int main(int argc, char **argv)
 {
     koboy_config cfg;
@@ -299,6 +387,16 @@ int main(int argc, char **argv)
        it did in v1. The shipped ini leaves rom commented out, so a real user
        starts in the browser. */
     koboy_mode mode = cfg.rom_path[0] ? MODE_PLAY : MODE_BROWSE;
+
+    /* Genuinely unused past this point. It was carried here as groundwork for
+       MODE_MENU's CHOOSE ROM entry, on the theory that a ROM picked from
+       --rom (rather than the browser or the ini) might want its containing
+       directory offered as the CHOOSE ROM listing. That would mean silently
+       overriding cfg.rom_dir whenever it still held the compiled-in default,
+       which is a real feature with its own failure modes (what if rom_dir was
+       explicitly set to the same value on purpose?) and no request for it
+       exists -- so it is left alone rather than guessed at. `mode` is the
+       piece of this task's groundwork that actually gets consumed, below. */
     (void)rom_from_argv;
 
     koboy_profile prof;
@@ -437,7 +535,11 @@ int main(int argc, char **argv)
         /* The browser painted over the faceplate. */
         redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
     }
-    (void)mode;
+    /* mode is MODE_PLAY from here on, until the emulator loop below reads and
+       writes it: MODE_QUIT ends the loop from inside the menu (a chosen QUIT,
+       or CHOOSE ROM leaving nothing loaded), kept distinct from g_stop so the
+       final status line does not call a menu-driven quit "stopped by
+       signal". */
 
     /* --------------------------------------------------- video, input, core */
     koboy_video *vid = video_create(&prof, cfg.force_dither);
@@ -466,17 +568,15 @@ int main(int argc, char **argv)
     }
     core_set_frame_cb(core, on_frame, NULL);
     core_set_input_fn(core, on_input, in);
-    if (!core_load_rom(core, cfg.rom_path, err, sizeof err)) {
+
+    koboy_sram_binding sb = {0};
+    if (!load_rom_into(core, &cfg, &sb, err, sizeof err)) {
         fatal("%s", err);
         core_close(core);
         video_destroy(vid); input_destroy(in); free(panel);
         pf->shutdown(pf->ctx); return 1;
     }
 
-    char sram_path[512];
-    sram_path_for_rom(sram_path, sizeof sram_path, cfg.save_dir, cfg.rom_path);
-    size_t sram_len = 0;
-    uint8_t *sram = core_sram(core, &sram_len);
     /* Tetris is cartridge type 0x00: no battery-backed SRAM at all, so this is
        NULL/0 on the development ROM and must not be dereferenced. */
     /* Set false when a save file exists but could not be loaded whole. Then
@@ -488,14 +588,13 @@ int main(int argc, char **argv)
        of progress made in a game that started from a blank save anyway. So the
        file is left exactly as found, the user is told on the panel, and the fix
        is theirs to make (move the file aside, and saving resumes next run). */
-    bool sram_writeback = true;
-    if (sram && sram_len) {
-        if (sram_load(sram_path, sram, sram_len)) {
-            say("koboy: loaded %s\n", sram_path);
-        } else if (access(sram_path, F_OK) == 0) {
-            sram_writeback = false;
+    if (sb.mem && sb.len) {
+        if (sram_load(sb.path, sb.mem, sb.len)) {
+            say("koboy: loaded %s\n", sb.path);
+        } else if (access(sb.path, F_OK) == 0) {
+            sb.writeback = false;
             say("koboy: %s could not be read whole; SRAM left as the core "
-                "initialised it and saving is disabled this session\n", sram_path);
+                "initialised it and saving is disabled this session\n", sb.path);
             /* On the panel, not just the log: a save that silently did not load
                is how a user loses hours without ever being told. Short lines --
                FBInk wraps at the column edge, not at word boundaries. */
@@ -518,13 +617,112 @@ int main(int argc, char **argv)
     uint64_t last_sram_us = pf->now_us(pf->ctx);
     uint64_t last_cleanup_us = last_sram_us;
 
-    while (!g_stop && !pf->should_quit(pf->ctx)) {
+    /* mode != MODE_QUIT joins g_stop and should_quit() as a third way out: the
+       in-game menu sets it (QUIT, or CHOOSE ROM leaving nothing loaded) from
+       inside the loop body below. Kept separate from g_stop on purpose -- that
+       flag is the signal handler's, set from outside any call frame, and
+       reusing it for a menu-driven exit would make the final status line call
+       a chosen QUIT "stopped by signal". */
+    while (mode != MODE_QUIT && !g_stop && !pf->should_quit(pf->ctx)) {
         if (frame_limit && pace.frames >= frame_limit) break;
 
         /* Poll EVERY core iteration (60Hz), not once per presented frame.
            Polling only on presentation would drop short presses and add up to
            50ms of latency on top of the panel's own. */
         pf->poll_input(pf->ctx, in);
+
+        if (input_take_menu_request(in)) {
+            size_t ssz = core_state_size(core);
+            int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0, NULL, 0);
+
+            if (act == MENU_SAVE || act == MENU_LOAD) {
+                int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
+                                           act == MENU_SAVE ? "SAVE TO" : "LOAD FROM",
+                                           cfg.save_dir, cfg.rom_path, NULL, 0);
+                if (slot) {
+                    char sp[512];
+                    state_path(sp, sizeof sp, cfg.save_dir, cfg.rom_path, slot);
+                    uint8_t *blob = malloc(ssz);
+                    if (!blob) {
+                        fatal("out of memory for a save state");
+                    } else if (act == MENU_SAVE) {
+                        if (core_state_save(core, blob, ssz) &&
+                            safefile_write(sp, blob, ssz))
+                            say("koboy: saved state %d\n", slot);
+                        else
+                            fatal("could not write\nsave state %d", slot);
+                    } else {
+                        /* All or nothing: safefile_read_exact leaves blob
+                           untouched on a short file, and only a complete blob
+                           ever reaches the running core. */
+                        if (safefile_read_exact(sp, blob, ssz) &&
+                            core_state_load(core, blob, ssz)) {
+                            say("koboy: loaded state %d\n", slot);
+                            /* The core's cartridge RAM was just rewritten --
+                               gambatte's blob includes it -- so the periodic
+                               flush will now write that to .srm. Correct, and
+                               worth knowing: a state load is indirectly a
+                               save-file write. Re-fetch in case the pointer
+                               moved. */
+                            sb.mem = core_sram(core, &sb.len);
+                        } else {
+                            fatal("could not load\nsave state %d", slot);
+                        }
+                    }
+                    free(blob);
+                }
+            } else if (act == MENU_RESET) {
+                core_reset(core);
+            } else if (act == MENU_QUIT) {
+                mode = MODE_QUIT;
+            } else if (act == MENU_CHOOSE_ROM) {
+                /* Flush BEFORE unload: retro_unload_game takes the buffer. */
+                if (sb.mem && sb.len && sb.writeback)
+                    sram_save(sb.path, sb.mem, sb.len);
+                core_unload_rom(core);
+                /* Cleared, not left stale: retro_unload_game takes the buffer,
+                   so sb.mem is dangling until a new load re-fetches it. If the
+                   picker below is cancelled or the next load fails, mode goes
+                   to MODE_QUIT and this run's final flush (after the loop)
+                   must see mem==NULL rather than dereference freed memory. */
+                sb.mem = NULL;
+                sb.len = 0;
+
+                koboy_romlist rl;
+                int n = romlist_scan(&rl, cfg.rom_dir);
+                int pick = -1;
+                if (n > 0) {
+                    koboy_ui_list list;
+                    ui_list_init(&list, "CHOOSE A GAME", romlist_items(&rl), n,
+                                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                                 pw - 2 * KOBOY_CHROME_MARGIN,
+                                 ph - 2 * KOBOY_CHROME_MARGIN);
+                    pick = run_list(pf, in, &list, panel, panel_stride,
+                                    pw, ph, NULL, 0);
+                }
+                if (pick < 0) { mode = MODE_QUIT; }
+                else {
+                    romlist_path(&rl, pick, cfg.rom_path, sizeof cfg.rom_path);
+                    char lerr[512];
+                    if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
+                        fatal("%s", lerr);
+                        mode = MODE_QUIT;
+                    } else if (sb.mem && sb.len &&
+                               !sram_load(sb.path, sb.mem, sb.len) &&
+                               access(sb.path, F_OK) == 0) {
+                        sb.writeback = false;
+                        fatal("Save file unreadable.\nStarting fresh.\n"
+                              "Saving is OFF this run.");
+                    }
+                }
+            }
+
+            /* Whatever happened, the panel is now showing a menu. */
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+            video_invalidate(vid);
+            pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
+            continue;
+        }
 
         uint64_t delay = pacer_delay_us(&pace, pf->now_us(pf->ctx));
         if (delay) usleep((useconds_t)delay);
@@ -604,16 +802,16 @@ int main(int argc, char **argv)
 sram_check:
         /* Periodic flush while dirty: e-readers get suspended and killed
            unceremoniously, and sram_save is atomic so a kill mid-write is safe. */
-        if (sram && sram_len && sram_writeback) {
+        if (sb.mem && sb.len && sb.writeback) {
             uint64_t now = pf->now_us(pf->ctx);
             if (now - last_sram_us > 10ull * 1000000ull) {
-                sram_save(sram_path, sram, sram_len);
+                sram_save(sb.path, sb.mem, sb.len);
                 last_sram_us = now;
             }
         }
     }
 
-    if (sram && sram_len && sram_writeback) sram_save(sram_path, sram, sram_len);
+    if (sb.mem && sb.len && sb.writeback) sram_save(sb.path, sb.mem, sb.len);
     say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
         "%lu large-area full refreshes\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,

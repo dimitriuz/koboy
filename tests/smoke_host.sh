@@ -46,3 +46,18 @@ echo "$out" | grep -q '^presented=' \
     || { echo "FAIL: run did not reach the emulator loop"; rm -rf "$romdir" "$script"; exit 1; }
 rm -rf "$romdir" "$script"
 echo "ok: rom browser"
+
+# The menu is reachable only through a live touch (input_take_menu_request is
+# fed by pf->poll_input, and MODE_PLAY's poll loop has no --ui-script hook the
+# way MODE_BROWSE's run_list does), so unlike the browser above this run does
+# NOT open or drive the menu -- it only proves the menu-capable build still
+# runs a normal --rom session end to end. Driving MODE_MENU from a script
+# would need the emulator loop to accept --ui-script too, which is deferred.
+romdir="$(mktemp -d)"; : > "$romdir/AAA TEST.gb"
+out="$(SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
+        --rom "$romdir/AAA TEST.gb" --panel 1264x1680 --frames 60 2>&1)"
+echo "$out"
+echo "$out" | grep -q '^presented=' \
+    || { echo "FAIL: menu-capable build did not run"; rm -rf "$romdir"; exit 1; }
+rm -rf "$romdir"
+echo "ok: menu build runs"
