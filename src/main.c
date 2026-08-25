@@ -17,6 +17,7 @@
 #include "koboy.h"
 #include "pacing.h"
 #include "sram.h"
+#include "stats.h"
 #include "video.h"
 
 #include <signal.h>
@@ -443,6 +444,9 @@ int main(int argc, char **argv)
     koboy_pacer pace;
     pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
 
+    koboy_stats stats;
+    stats_reset(&stats);
+
     unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
     uint64_t last_sram_us = pf->now_us(pf->ctx);
     uint64_t last_cleanup_us = last_sram_us;
@@ -459,19 +463,25 @@ int main(int argc, char **argv)
         if (delay) usleep((useconds_t)delay);
 
         g_frame = NULL;
+        uint64_t t0 = pf->now_us(pf->ctx);
         core_run_frame(core);
+        stats_add(&stats, KOBOY_STAGE_CORE, pf->now_us(pf->ctx) - t0);
         bool present = pacer_tick(&pace);
         if (!present) goto sram_check;
 
         /* A NULL g_frame is the core's can-dupe signal, which video_submit turns
            into an empty rect -- so an unchanged frame costs no refresh at all. */
+        t0 = pf->now_us(pf->ctx);
         koboy_rect r = video_submit(vid, g_frame, (int)g_fw, (int)g_fh,
                                     g_fpitch, core_pixfmt(core));
+        stats_add(&stats, KOBOY_STAGE_SUBMIT, pf->now_us(pf->ctx) - t0);
         if (r.w == 0) goto sram_check;          /* nothing changed: skip the panel */
 
+        t0 = pf->now_us(pf->ctx);
         pf->blit_gray8(pf->ctx, video_buffer(vid) + (size_t)r.y * video_stride(vid) + r.x,
                        r.w, r.h, video_stride(vid),
                        prof.game_x + r.x, prof.game_y + r.y);
+        stats_add(&stats, KOBOY_STAGE_BLIT, pf->now_us(pf->ctx) - t0);
 
         /* Waveform by dirty area, not one waveform for every frame.
            KOBOY_REFRESH_FAST maps to a non-flashing waveform (DU4 on this
@@ -494,7 +504,9 @@ int main(int argc, char **argv)
             mode = KOBOY_REFRESH_FULL;
             big_refreshes++;
         }
+        t0 = pf->now_us(pf->ctx);
         pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, mode);
+        stats_add(&stats, KOBOY_STAGE_REFRESH, pf->now_us(pf->ctx) - t0);
         presented++;
 
         /* A value <= 0 disables cleanup. The explicit guard is required:
@@ -539,6 +551,14 @@ sram_check:
         "%lu large-area full refreshes\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,
         big_refreshes);
+    /* Always printed, even under --quiet, for the same reason presented= is:
+       this is the run's evidence, and a run whose numbers were suppressed is a
+       run that has to be done again. */
+    {
+        char line[256];
+        stats_format(&stats, line, sizeof line);
+        fprintf(stderr, "koboy: stages %s\n", line);
+    }
     /* Always printed, even under --quiet: the smoke tests grep for it.
        --quiet suppresses other chatter only. */
     printf("presented=%lu\n", presented);
