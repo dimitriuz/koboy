@@ -18,6 +18,7 @@
 #include "pacing.h"
 #include "sram.h"
 #include "stats.h"
+#include "text.h"
 #include "video.h"
 
 #include <signal.h>
@@ -83,65 +84,6 @@ static void fatal(const char *fmt, ...)
 #ifdef KOBOY_PLATFORM_KOBO
     if (g_pf) platform_kobo_fatal(g_pf->ctx, msg);
 #endif
-}
-
-/* ------------------------------------------------------- calibration text */
-
-/* A 5x7 bitmap font, one byte per column, bit 0 = top row. Only what the
-   calibration prompts need; anything else renders as a space. Text is the one
-   thing chrome.c does not draw, and pulling in a font library for two
-   sentences shown once would be absurd. */
-static const uint8_t FONT5x7[][5] = {
-    { 0x00,0x00,0x00,0x00,0x00 }, /* space */
-    { 0x7E,0x11,0x11,0x11,0x7E }, /* A */
-    { 0x7F,0x49,0x49,0x49,0x36 }, { 0x3E,0x41,0x41,0x41,0x22 },
-    { 0x7F,0x41,0x41,0x22,0x1C }, { 0x7F,0x49,0x49,0x49,0x41 },
-    { 0x7F,0x09,0x09,0x01,0x01 }, { 0x3E,0x41,0x49,0x49,0x7A },
-    { 0x7F,0x08,0x08,0x08,0x7F }, { 0x00,0x41,0x7F,0x41,0x00 },
-    { 0x20,0x40,0x41,0x3F,0x01 }, { 0x7F,0x08,0x14,0x22,0x41 },
-    { 0x7F,0x40,0x40,0x40,0x40 }, { 0x7F,0x02,0x04,0x02,0x7F },
-    { 0x7F,0x04,0x08,0x10,0x7F }, { 0x3E,0x41,0x41,0x41,0x3E },
-    { 0x7F,0x09,0x09,0x09,0x06 }, { 0x3E,0x41,0x51,0x21,0x5E },
-    { 0x7F,0x09,0x19,0x29,0x46 }, { 0x46,0x49,0x49,0x49,0x31 },
-    { 0x01,0x01,0x7F,0x01,0x01 }, { 0x3F,0x40,0x40,0x40,0x3F },
-    { 0x1F,0x20,0x40,0x20,0x1F }, { 0x7F,0x20,0x18,0x20,0x7F },
-    { 0x63,0x14,0x08,0x14,0x63 }, { 0x03,0x04,0x78,0x04,0x03 },
-    { 0x61,0x51,0x49,0x45,0x43 }, /* Z */
-};
-
-static const uint8_t *glyph(char ch)
-{
-    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
-    if (ch >= 'A' && ch <= 'Z') return FONT5x7[1 + (ch - 'A')];
-    return FONT5x7[0];
-}
-
-static void draw_text(uint8_t *fb, int stride, int W, int H, int x, int y,
-                      const char *s, int px, uint8_t ink)
-{
-    for (const char *p = s; *p; p++, x += 6 * px) {
-        const uint8_t *g = glyph(*p);
-        for (int col = 0; col < 5; col++) {
-            for (int row = 0; row < 7; row++) {
-                if (!(g[col] & (1u << row))) continue;
-                for (int dy = 0; dy < px; dy++) {
-                    int fy = y + row * px + dy;
-                    if (fy < 0 || fy >= H) continue;
-                    for (int dx = 0; dx < px; dx++) {
-                        int fx = x + col * px + dx;
-                        if (fx >= 0 && fx < W) fb[(size_t)fy * stride + fx] = ink;
-                    }
-                }
-            }
-        }
-    }
-}
-
-static void draw_centred(uint8_t *fb, int stride, int W, int H, int y,
-                         const char *s, int px, uint8_t ink)
-{
-    int w = (int)strlen(s) * 6 * px;
-    draw_text(fb, stride, W, H, (W - w) / 2, y, s, px, ink);
 }
 
 /* ------------------------------------------------------------------- args */
@@ -324,12 +266,12 @@ int main(int argc, char **argv)
                 if (k.stage != last_stage) {
                     last_stage = k.stage;
                     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
-                    draw_centred(panel, panel_stride, pw, ph, ph / 2 - 40,
+                    text_draw_centred(panel, panel_stride, pw, ph, ph / 2 - 40,
                                  calib_prompt(&k), 5, 0x00);
                     /* The escape has to be ON THE PANEL. A device that cannot
                        answer the prompt is exactly the device whose user has no
                        terminal and no other way to find out. */
-                    draw_centred(panel, panel_stride, pw, ph, ph / 2 + 40,
+                    text_draw_centred(panel, panel_stride, pw, ph, ph / 2 + 40,
                                  calib_escape_prompt(), 3, 0x00);
                     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
                     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
