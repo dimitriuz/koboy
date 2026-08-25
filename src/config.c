@@ -81,6 +81,7 @@ void config_defaults(koboy_config *c)
     c->dpad_hysteresis = 10;
     snprintf(c->core_path, sizeof c->core_path, "gambatte_libretro.so");
     snprintf(c->save_dir, sizeof c->save_dir, ".");
+    snprintf(c->rom_dir, sizeof c->rom_dir, "roms");
     /* Control geometry, permille of panel. Game rect occupies the top; the
        d-pad sits lower-left under the left thumb, A/B lower-right. */
     koboy_layout l = { .dpad_cx = 220, .dpad_cy = 720, .dpad_r = 150,
@@ -190,6 +191,8 @@ void config_resolve_paths(koboy_config *c)
         snprintf(c->rom_path, sizeof c->rom_path, "%s", tmp);
     if (config_join_sibling(tmp, sizeof tmp, c->save_dir, dir))
         snprintf(c->save_dir, sizeof c->save_dir, "%s", tmp);
+    if (config_join_sibling(tmp, sizeof tmp, c->rom_dir, dir))
+        snprintf(c->rom_dir, sizeof c->rom_dir, "%s", tmp);
 }
 
 static void trim(char *s)
@@ -238,6 +241,7 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "key_a"))            c->key_a = (uint16_t)atoi(v);
         else if (!strcmp(k, "key_b"))            c->key_b = (uint16_t)atoi(v);
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
+        else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
         else if (!strcmp(k, "waveform_fast"))
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;

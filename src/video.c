@@ -167,6 +167,14 @@ void video_destroy(koboy_video *v)
 const uint8_t *video_buffer(const koboy_video *v) { return v->cur; }
 int            video_stride(const koboy_video *v) { return v->stride; }
 
+void video_invalidate(koboy_video *v)
+{
+    if (!v) return;
+    /* 0x01 is not a value the four-level quantiser can ever emit, which is the
+       same trick video_create uses to make the first frame fully dirty. */
+    memset(v->prev, 0x01, (size_t)v->stride * (size_t)v->p.game_h);
+}
+
 koboy_rect video_submit(koboy_video *v, const void *src, int src_w, int src_h,
                         size_t src_pitch, koboy_pixfmt fmt)
 {

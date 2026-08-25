@@ -26,6 +26,7 @@
 
 #include "input.h"          /* must precede platform_if.h: declares struct koboy_input */
 #include "platform_if.h"
+#include "platform_kobo.h"
 
 #include <fbink.h>
 
@@ -653,12 +654,7 @@ static bool kobo_should_quit(void *ctx) { return ((kobo_ctx *)ctx)->quit; }
 
 /* ------------------------------------------------------------------- ctor */
 
-koboy_platform *platform_kobo_create(void);
 bool            platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
-void            platform_kobo_setup_touch(koboy_platform *pf, struct koboy_input *in);
-void            platform_kobo_selftest(koboy_platform *pf);
-void            platform_kobo_refresh_stats(koboy_platform *pf);
-void            platform_kobo_fatal(void *ctx, const char *msg);
 
 koboy_platform *platform_kobo_create(void)
 {

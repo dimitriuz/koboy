@@ -25,6 +25,15 @@ koboy_video   *video_create(const koboy_profile *p, bool force_dither);
 void           video_destroy(koboy_video *v);
 koboy_rect     video_submit(koboy_video *v, const void *src, int src_w, int src_h,
                             size_t src_pitch, koboy_pixfmt fmt);
+
+/* Forces the next video_submit to report the entire game rect dirty.
+   Called on the way back from any UI mode: those modes paint over the game
+   rect, so `prev` stops describing what is on the panel. Without this the
+   first frame back diffs against a screen that is no longer there and leaves
+   the overpainted region stale -- which looks exactly like ghosting and is
+   therefore the kind of bug nobody reports as a bug. */
+void video_invalidate(koboy_video *v);
+
 const uint8_t *video_buffer(const koboy_video *v);
 int            video_stride(const koboy_video *v);
 #endif

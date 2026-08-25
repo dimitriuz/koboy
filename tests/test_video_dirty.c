@@ -1,4 +1,5 @@
 #include "test.h"
+#include "config.h"
 #include "video.h"
 
 #define W 64
@@ -37,4 +38,40 @@ TEST_MAIN({
     r = video_dirty_rect(a, b, W, H, W);
     CHECK_EQ_INT(r.y, 16); CHECK_EQ_INT(r.h, 8);
     CHECK_EQ_INT(r.w, W);
+
+    /* video_invalidate forces the NEXT submit to report the whole game rect
+       dirty. Required because a UI mode paints over the game rect, so the
+       prev buffer no longer describes what is on the panel -- without this the
+       first frame back diffs against a screen that is gone and silently leaves
+       chrome-covered pixels stale. */
+    {
+        koboy_profile p; koboy_config c;
+        config_defaults(&c);
+        config_resolve_profile(&p, &c, 1264, 1680);
+        koboy_video *v = video_create(&p, false);
+        CHECK(v != NULL);
+
+        static uint16_t frame[KOBOY_GB_W * KOBOY_GB_H];
+        for (int i = 0; i < KOBOY_GB_W * KOBOY_GB_H; i++) frame[i] = 0x0000;
+
+        koboy_rect r1 = video_submit(v, frame, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W * 2, KOBOY_PIXFMT_RGB565);
+        CHECK_EQ_INT(r1.w, p.game_w);          /* first frame is fully dirty */
+
+        /* The same frame again changes nothing. */
+        koboy_rect r2 = video_submit(v, frame, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W * 2, KOBOY_PIXFMT_RGB565);
+        CHECK_EQ_INT(r2.w, 0);
+
+        /* After invalidation the identical frame is fully dirty again. */
+        video_invalidate(v);
+        koboy_rect r3 = video_submit(v, frame, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W * 2, KOBOY_PIXFMT_RGB565);
+        CHECK_EQ_INT(r3.w, p.game_w);
+        CHECK_EQ_INT(r3.h, p.game_h);
+        CHECK_EQ_INT(r3.x, 0);
+        CHECK_EQ_INT(r3.y, 0);
+
+        video_destroy(v);
+    }
 })

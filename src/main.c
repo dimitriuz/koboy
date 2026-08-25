@@ -16,9 +16,12 @@
 #include "core.h"
 #include "koboy.h"
 #include "pacing.h"
+#include "romlist.h"
 #include "sram.h"
 #include "stats.h"
 #include "text.h"
+#include "ui.h"
+#include "uiscript.h"
 #include "video.h"
 
 #include <signal.h>
@@ -35,11 +38,7 @@
 extern bool platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
 
 #ifdef KOBOY_PLATFORM_KOBO
-extern koboy_platform *platform_kobo_create(void);
-extern void            platform_kobo_setup_touch(koboy_platform *pf, koboy_input *in);
-extern void            platform_kobo_selftest(koboy_platform *pf);
-extern void            platform_kobo_refresh_stats(koboy_platform *pf);
-extern void            platform_kobo_fatal(void *ctx, const char *msg);
+#include "platform_kobo.h"
 #else
 extern koboy_platform *platform_sdl_create(void);
 extern void            platform_sdl_set_panel(koboy_platform *pf, int w, int h);
@@ -101,8 +100,70 @@ static void usage(const char *argv0)
         "  --selftest        print machine-readable backend facts and continue\n"
         "  --message TEXT    draw TEXT on the panel and exit 3 (launcher errors)\n"
         "  --waveform auto|du4  waveform for fast refreshes (default auto)\n"
-        "  --quiet           suppress everything but the presented= counter\n",
+        "  --quiet           suppress everything but the presented= counter\n"
+        "  --rom-dir PATH    directory the ROM browser lists\n"
+        "  --ui-script PATH  replay synthetic UI input (scripted runs)\n",
         argv0, DEFAULT_INI);
+}
+
+typedef enum { MODE_BROWSE, MODE_PLAY, MODE_MENU, MODE_QUIT } koboy_mode;
+
+/* One definition of "put the faceplate back", replacing three hand-copied
+   blocks (post-calibration, post-fatal, post-SRAM-warning) and now used by
+   every exit from a UI mode as well. */
+static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
+                          int pw, int ph, const koboy_profile *prof,
+                          const koboy_layout *layout)
+{
+    memset(panel, 0xFF, (size_t)stride * (size_t)ph);
+    chrome_render(panel, stride, prof, layout);
+    pf->blit_gray8(pf->ctx, panel, pw, ph, stride, 0, 0);
+    pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+}
+
+/* Drives one list widget to a selection. Returns the chosen index, or -1 if
+   the user quit, the run was stopped, or a script ran out.
+
+   `script`/`script_n` make MODE_BROWSE and MODE_MENU reachable in a bounded
+   unattended run. Without them every automated test would pass --rom and skip
+   these screens entirely -- the same blind spot that hid v1's first-run
+   deadlock through twenty reviews. */
+static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
+                    uint8_t *panel, int stride, int pw, int ph,
+                    const koboy_input_state *script, int script_n)
+{
+    int  chosen = -1;
+    int  si = 0;
+    bool need_draw = true;
+
+    while (!g_stop && !pf->should_quit(pf->ctx)) {
+        if (need_draw) {
+            need_draw = false;
+            memset(panel, 0xFF, (size_t)stride * (size_t)ph);
+            ui_list_render(u, panel, stride, pw, ph);
+            pf->blit_gray8(pf->ctx, panel, pw, ph, stride, 0, 0);
+            /* FULL, i.e. GC16: a list is about to sit still, and the game
+               rect's four-level ceiling does not apply to it. */
+            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+        }
+
+        const koboy_input_state *st;
+        if (script) {
+            if (si >= script_n) break;      /* script exhausted: give up */
+            st = &script[si++];
+        } else {
+            pf->poll_input(pf->ctx, in);
+            st = input_state(in);
+        }
+
+        int idx = -1;
+        ui_action a = ui_list_feed(u, st, &idx);
+        if (a == UI_SELECT) { chosen = idx; break; }
+        if (a == UI_PAGE_NEXT || a == UI_PAGE_PREV) need_draw = true;
+
+        if (!script) usleep(5000);
+    }
+    return chosen;
 }
 
 int main(int argc, char **argv)
@@ -113,6 +174,8 @@ int main(int argc, char **argv)
     int panel_w = 0, panel_h = 0;
     bool selftest = false;
     const char *message = NULL;
+    const char *ui_script_path = NULL;
+    bool        rom_from_argv  = false;
 
     /* --config is read before the file so an alternate ini can be chosen. */
     for (int i = 1; i < argc - 1; i++)
@@ -128,12 +191,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--selftest")) selftest = true;
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(argv[0]); return 0; }
         else if (!has_val) { fprintf(stderr, "koboy: missing value for %s\n", a); return 2; }
-        else if (!strcmp(a, "--rom"))      snprintf(cfg.rom_path,  sizeof cfg.rom_path,  "%s", argv[++i]);
+        else if (!strcmp(a, "--rom"))      { snprintf(cfg.rom_path,  sizeof cfg.rom_path,  "%s", argv[++i]); rom_from_argv = true; }
         else if (!strcmp(a, "--core"))     snprintf(cfg.core_path, sizeof cfg.core_path, "%s", argv[++i]);
         else if (!strcmp(a, "--save-dir")) snprintf(cfg.save_dir,  sizeof cfg.save_dir,  "%s", argv[++i]);
         else if (!strcmp(a, "--config"))   i++;   /* already handled */
         else if (!strcmp(a, "--message"))  message = argv[++i];
         else if (!strcmp(a, "--frames"))   frame_limit = strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(a, "--rom-dir"))  snprintf(cfg.rom_dir, sizeof cfg.rom_dir, "%s", argv[++i]);
+        else if (!strcmp(a, "--ui-script")) ui_script_path = argv[++i];
         else if (!strcmp(a, "--waveform")) {
             const char *w = argv[++i];
             if (!strcmp(w, "auto"))      cfg.wfm_fast_policy = KOBOY_WFM_AUTO;
@@ -204,15 +269,23 @@ int main(int argc, char **argv)
         return 3;
     }
 
-    /* Checked here rather than during argument parsing so that it is reportable:
-       before platform init there is no panel to draw on, and "you forgot to set
-       rom= in koboy.ini" is exactly the mistake a user makes with no terminal
-       in front of them. */
-    if (!cfg.rom_path[0]) {
-        fatal("no rom configured -- set rom= in the ini or pass --rom");
-        pf->shutdown(pf->ctx);
-        return 2;
+    static koboy_input_state ui_script[UISCRIPT_MAX];
+    int ui_script_n = 0;
+    if (ui_script_path) {
+        ui_script_n = uiscript_load(ui_script_path, ui_script, UISCRIPT_MAX);
+        if (ui_script_n < 0) {
+            fatal("cannot read ui script %s", ui_script_path);
+            pf->shutdown(pf->ctx);
+            return 2;
+        }
     }
+
+    /* An explicit --rom or rom= goes straight to play, which keeps every
+       existing smoke test, --frames run and scripted path behaving exactly as
+       it did in v1. The shipped ini leaves rom commented out, so a real user
+       starts in the browser. */
+    koboy_mode mode = cfg.rom_path[0] ? MODE_PLAY : MODE_BROWSE;
+    (void)rom_from_argv;
 
     koboy_profile prof;
     if (!config_resolve_profile(&prof, &cfg, pw, ph)) {
@@ -304,12 +377,53 @@ int main(int argc, char **argv)
             }
 
             /* Put the faceplate back: calibration wrote over it. */
-            memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
-            chrome_render(panel, panel_stride, &prof, &cfg.layout);
-            pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
-            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
         }
     }
+
+    koboy_romlist roms;
+    if (mode == MODE_BROWSE) {
+        int n = romlist_scan(&roms, cfg.rom_dir);
+        if (n < 0) {
+            /* Distinct from "no roms": a wrong rom_dir and an empty one are
+               different mistakes, and this is the only diagnostic a user with
+               no terminal gets. */
+            fatal("cannot read rom directory\n%s", cfg.rom_dir);
+            free(panel); pf->shutdown(pf->ctx); return 2;
+        }
+        if (n == 0) {
+            fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+            free(panel); pf->shutdown(pf->ctx); return 2;
+        }
+
+        koboy_input *ui_in = input_create(&cfg, &prof);
+        if (!ui_in) { fatal("out of memory"); free(panel); pf->shutdown(pf->ctx); return 1; }
+#ifdef KOBOY_PLATFORM_KOBO
+        platform_kobo_setup_touch(pf, ui_in);
+#else
+        input_set_touch_transform(ui_in, pw, ph, false, false, false);
+#endif
+        koboy_ui_list list;
+        ui_list_init(&list, "CHOOSE A GAME", romlist_items(&roms), n,
+                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                     pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+        int pick = run_list(pf, ui_in, &list, panel, panel_stride, pw, ph,
+                            ui_script_n > 0 ? ui_script : NULL, ui_script_n);
+        input_destroy(ui_in);
+
+        if (pick < 0) {
+            say("koboy: no rom chosen, exiting\n");
+            free(panel); pf->shutdown(pf->ctx); return 0;
+        }
+        romlist_path(&roms, pick, cfg.rom_path, sizeof cfg.rom_path);
+        say("koboy: chose %s\n", cfg.rom_path);
+        mode = MODE_PLAY;
+
+        /* The browser painted over the faceplate. */
+        redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+    }
+    (void)mode;
 
     /* --------------------------------------------------- video, input, core */
     koboy_video *vid = video_create(&prof, cfg.force_dither);
@@ -373,10 +487,7 @@ int main(int argc, char **argv)
                FBInk wraps at the column edge, not at word boundaries. */
             fatal("Save file unreadable.\nStarting fresh.\nSaving is OFF this run.");
             /* fatal() drew over the faceplate; put it back. */
-            memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
-            chrome_render(panel, panel_stride, &prof, &cfg.layout);
-            pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
-            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
         }
     } else {
         say("koboy: cartridge has no save RAM\n");
