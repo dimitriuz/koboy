@@ -226,7 +226,16 @@ for 1-bit fast mode and for GBC colour content.
 - **FAST (1-bit):** nearest-scale to output, then Bayer 16x16 -> 1 bit.
   Mid-tones become dot patterns within each scaled block.
 - **GRAY (4-bit):** DMG's 4 shades -> 4 exact levels, no dither. GBC ->
-  luminance, quantised to 16.
+  luminance, also quantised to **4** levels, with dither available to convey
+  tone.
+
+  Correction after measurement: this section originally specified 16 levels for
+  GBC. Appendix A rules that out --- the 16-level waveforms measured 321.7 ms
+  (GL16, 3.1 fps) and 393.3 ms (GC16, 2.5 fps) for a full game rect, against
+  46.7 ms for the 4-level DU4. A 16-level GBC path would be unplayable, so DU4's
+  four levels are the only viable target for GBC as well as DMG. This is why the
+  implementation ships `video_quantise4` and `video_dither_1bit` and no 16-level
+  quantiser.
 
 ### Ordered dithering is a correctness requirement
 
@@ -654,7 +663,7 @@ Kobo Libra 2, firmware 4.38.23684, measured 2026-08-24 over SSH.
 | fb driver | `mxc_epdc_fb` (NXP EPDC), `isSunxi=0` |
 | Panel | 1264 x 1680, 300 DPI, **BPP=32**, `lineLength=5120` |
 | Stride padding | 5120 / 4 = **1280 px stride vs 1264 visible** — blits must honour it |
-| Vertical origin | `viewVertOrigin = viewVertOffset = 8` |
+| Vertical origin | `viewVertOrigin = viewVertOffset = 8` --- **NOT a blit offset, see correction below** |
 | Rotation | `currentRota=1` (CW 90), canonical 0, `ntxRotaQuirk=5`, `canRotate=1` |
 | Extras | `canHWInvert=1`, `hasEclipseWfm=1`, `isKoboNonMT=0` |
 
@@ -747,3 +756,246 @@ Companion processes observed alongside Nickel, which the §8 restore path needs:
 
 Observing these directly removes any need to derive the restart sequence from a
 third-party script.
+
+---
+
+## Appendix B — Second measurement session (2026-08-25)
+
+Taken after the default render scale changed to 5x, and after two failed
+attempts to build a cross-toolchain. Same device, same firmware.
+
+### Toolchain ground truth (this supersedes assumptions in section 6)
+
+| Fact | Value |
+|---|---|
+| Device glibc | **2.19** (`GNU C Library (crosstool-NG 1.24.0.103_75d7525) ... version 2.19`) |
+| Misleading symlink | `/lib/libc.so.6 -> libc-2.11.1.so` --- the filename was kept across an upgrade; the library itself reports 2.19 |
+| Shell | busybox `ash`; no `ldd` on device |
+| Dependency closure of a **working** Kobo ARM binary (`/usr/bin/fbink`) | **`libm.so.6` and `libc.so.6` only** |
+| Same for KOReader's `fbink` | identical --- `libm`, `libc` |
+| Build attributes | `Advanced_SIMD_arch: NEONv1` |
+
+Consequences:
+
+- **The cross-toolchain target must produce binaries against glibc <= 2.19.** A
+  distro `arm-linux-gnueabihf` toolchain targets a far newer glibc and its
+  dynamically-linked output will not run here, so that shortcut is closed.
+- **koxtoolchain's glibc 2.15 target is older than necessary.** 2.15 is safe
+  (older links run on newer) but the actual floor is 2.19, and glibc 2.15's
+  configure scripts loop indefinitely on a 2026 host --- see the failure note
+  below. A prebuilt toolchain targeting any glibc <= 2.19 would sidestep the
+  build entirely.
+- **`verify-core.sh`'s acceptance criterion is confirmed correct by ground
+  truth**: real Kobo binaries carry only `libm` + `libc`. The prebuilt libretro
+  ARM core failed exactly this check (dynamic `libstdc++`, no NEON attributes).
+
+### Refresh at the shipped 5x rect (800 x 720), which was never measured before
+
+| Mode | ms/refresh | fps |
+|---|---|---|
+| **DU4, non-blocking** | **15.0** | **66.7** |
+| DU4, blocking | 39.2 | 25.5 |
+| A2, blocking | 135.8 | 7.4 |
+| GL16, blocking | 310.8 | 3.2 |
+
+Non-blocking DU4 is the figure that governs the real emulator, since the main
+loop issues refreshes without waiting for completion. 66.7 fps against a ~20 fps
+requirement is comfortable headroom.
+
+A2 remains ~3.5x slower than DU4, so the Appendix A waveform decision holds
+robustly across sessions.
+
+### Measurement variance --- read Appendix A's absolute numbers with caution
+
+Re-measuring the **same** 7x rect (1120 x 1008) with the **same** DU4 waveform
+today gave **67.5 ms / 14.8 fps**, against Appendix A's **46.7 ms / 21.4 fps**.
+
+**Widened by a third measurement (Task 18).** `koboy-probe` later measured the
+same region and waveform at **31.2-31.8 ms**. So three readings of identical
+parameters span **31.2 to 67.5 ms — a factor of 2.2**, which is wider than the
+"45%" this section originally claimed. Treat that 45% figure as a floor on the
+spread, not a bound.
+
+There is also a mechanism nobody connected at the time: this device reports
+`unreliable_wait_for=1`, and that flag applies to the very ioctl
+(`MXCFB_WAIT_FOR_UPDATE_COMPLETE`) that every *blocking* measurement depends on.
+Blocking figures on this hardware are therefore suspect by construction, which is
+why `koboy-probe` now prints a caveat beside its timing output when the flag is
+set. Non-blocking submission figures do not depend on that ioctl and are the more
+trustworthy of the two. E-ink refresh timing is temperature- and controller-state
+dependent, so:
+
+- Treat all absolute ms/fps figures as **order-of-magnitude with ~50% spread**,
+  not precise constants.
+- The *relative* findings are what survive: DU4 beats A2 by ~3.5x, cost scales
+  with area, and non-blocking beats blocking by ~2.6x. Every design decision
+  rested on those ratios, and all of them reproduced.
+- The section 5 extrapolation predicted ~34 fps for 5x from the 7x fit; the
+  measured blocking figure is 25.5 fps. The model was optimistic in absolute
+  terms while correct in ordering.
+
+### Toolchain build failure (recorded so it is not retried blindly)
+
+Two attempts at koxtoolchain both hung in **glibc 2.15's `./configure`**, right
+after `running configure fragment for ports/sysdeps/arm/elf`, emitting one
+repeated line indefinitely (2.37M of 2.63M log lines). Binutils and the core
+compiler built successfully; the final gcc never ran. This is a 14-year gap
+between a 2012 libc's autoconf idioms and a 2026 host, not a misconfiguration.
+Viable routes: a prebuilt toolchain targeting glibc <= 2.19, or building
+koxtoolchain inside a container with a period-appropriate host.
+
+---
+
+## Appendix C — Correction: `viewVertOrigin` is not a framebuffer offset
+
+Appendix A recorded `viewVertOrigin = 8` and section 8 stated that blits must
+honour it. **That was wrong**, and using 8 as a pixel origin would have rendered
+every frame 8 px too low on the panel.
+
+FBInk folds its own text row-balancing `viewVertOffset` into the reported
+`viewVertOrigin`. The Libra 2's quirk table sets no `koboVertOffset`, so the
+real viewport origin is `origin - offset` = **0**. The Task 17 implementer
+derived this by reading FBInk's source; it was then confirmed by measurement on
+the device:
+
+```
+viewHeight=1680   screenHeight=1680
+viewVertOrigin=8  viewVertOffset=8
+```
+
+`viewHeight == screenHeight == 1680` is the decisive evidence. A genuine 8 px
+framebuffer origin would leave only 1672 viewable rows; the two being equal
+proves there is no framebuffer offset at all. The 8 is FBInk's own text-row
+shifting, which is why its startup log says "Vertical fit isn't perfect,
+shifting rows down by 8 pixels" --- a statement about text placement, not about
+the framebuffer.
+
+The **stride** fact from Appendix A stands unchanged and does still bind blits:
+`lineLength = 5120` at 32bpp is 1280 px of stride against 1264 visible.
+
+### Two further corrections from the same task
+
+**`hasEclipseWfm` gates DU4.** FBInk silently downgrades `WFM_DU4` to GC4 unless
+that quirk is set, so a backend claiming DU4 without checking it would be making
+a false claim. Measured on this device: `hasEclipseWfm=1`, `devicePlatform='Mark
+9'` --- so DU4 genuinely engages here, but the check is required for correctness
+on other models.
+
+**The power button cannot be excluded from an input grab.** Section 7 required
+grabbing the key node while never grabbing the power button. On this hardware
+those are the same device --- page-turn keys and power both live on `gpio-keys`
+(`event0`) --- so the instruction was impossible as written. The resolution is to
+read that node without grabbing it at all.
+
+---
+
+## Appendix D — Corrections from the device phase (Tasks 17 and 19)
+
+Everything below was learned by running koboy on a real Kobo Libra 2. None of it
+was reachable from the desktop backend, and all of it overrides earlier sections.
+Recorded here because the task reports it came from do not survive the run.
+
+### 1. The fast waveform defaults to AUTO, not DU4 — this supersedes section 5
+
+Section 5 and Appendix A concluded that `KOBOY_REFRESH_FAST` should map to DU4,
+on the strength of DU4 being ~3.5x faster than A2. **That conclusion was drawn
+from a benchmark that could not see the failure mode.** The measurement painted
+solid rectangles, so it never tested *erasing*, and DU4 — a fast non-flashing
+waveform — cannot cleanly erase. In play this produced severe ghosting: a
+falling piece drew at each new position while its previous positions were never
+cleared, so the game looked frozen when it was in fact advancing.
+
+The fix came from studying how the Kindle equivalent handles refreshing, and the
+finding was an absence: **it never selects a waveform at all.** It refreshes
+without specifying one and lets the EPDC driver choose. The controller already
+inspects the actual pixel transitions per update region and picks a waveform
+accordingly — which is exactly the "does this region need erasing?" question we
+were about to answer in software.
+
+Measured on the device, same content, same session, three A/B pairs:
+
+| Policy | mean | worst case |
+|---|---|---|
+| **AUTO** | **155-164 us** | **629 us** |
+| forced DU4 | 206-385 us | 8551 us |
+
+AUTO is both cheaper and far more predictable. `waveform_fast = auto` is the
+default; `du4` remains selectable. Confirmed in play: no ghosting, and the user
+completed a full game.
+
+DU4 is also **gated on `hasEclipseWfm`** — FBInk silently downgrades DU4 to GC4
+without that quirk, so claiming DU4 without checking it would be a false claim.
+
+### 2. The shipped display defaults are the ones validated on hardware
+
+Two mitigations written for forced DU4 became redundant under AUTO and were the
+sole cause of observed flashing. A device trace settled it: 35 AUTO refreshes on
+small rects, **none** flashing; 21 GC16 flashes, **all** attributable to the
+area threshold; and **zero** scheduled cleanups ever firing.
+
+| Key | was | ships as |
+|---|---|---|
+| `full_refresh_permille` | 450 | 1000 |
+| `cleanup_interval` | 60 | 0 |
+| `cleanup_max_ms` | 3000 | 0 |
+| `dpad_mode` | relative | cross |
+
+`full_refresh_permille = 1000` is **not** unreachable, and an earlier version of
+this note wrongly said so. The comparison is `dirty * 1000 >= whole * permille`,
+so at 1000 it fires when the dirty rect covers the game rect corner to corner —
+reachable on a full-screen wipe, and correct behaviour when it happens. A value
+of **1001 or above** is a provable never, since the dirty rect is a bounding box
+contained within the game rect.
+
+### 3. The chrome and the input model must agree — `dpad_mode = cross`
+
+Section 7 chose a relative thumb-pad because the device has no tactile
+landmarks. But the chrome draws an absolute **cross**, and users press its arms.
+A relative pad produces no direction from a tap — only from a drag — so the
+d-pad was effectively unusable while A, B and Start (genuine absolute zones)
+worked fine. Cross mode ships as the default. The lesson generalises: the drawn
+UI is the part people trust, so the input model has to match the drawing.
+
+### 4. `dlopen` never searches the current directory
+
+`config_defaults` originally set a bare `core_path = "gambatte_libretro.so"`.
+A name containing no slash sends `dlopen` to the system library paths and
+**never** the current directory, so the core failed to load on the device while
+sitting beside the binary. Bare names now resolve against the executable's own
+directory via `/proc/self/exe`; a path containing a slash is honoured verbatim.
+No host test could have caught this — on the desktop the core is always passed
+as an absolute path.
+
+### 5. Restarting Nickel requires Nickel's own environment
+
+Section 8's restore path was a bare re-exec. **That corrupts the device.**
+Nickel started outside its normal init environment rewrites
+`/mnt/onboard/.kobo/version` with a placeholder serial and an empty device code,
+after which FBInk reports `Unknown!` / `Mark ?` / `hasEclipseWfm=0` — breaking
+per-device quirks for every FBInk tool on the device, KOReader included. Only a
+reboot repairs it.
+
+KOReader avoids this by being launched *by* Nickel and inheriting its
+environment. So `koboy.sh` gates on that environment being present
+(`PLATFORM`, `PRODUCT`, `NICKEL_HOME`) and refuses to restart Nickel without it,
+rendering the reason on the panel and exiting non-zero. A menu launch exits
+cleanly with no reboot; an SSH launch cannot corrupt anything. The gate is
+spoofable by exporting those names — nothing in userspace can prove a process's
+parent — but it stops the accident, which is what it exists for.
+
+Three further corrections to section 8's restore sequence:
+
+- **`fbdepth -r` is not a restore.** `-r` is `--rota`, requires an argument, and
+  exits 255. Read depth and rotation with `-g`/`-o` and restore by name.
+- **Do not unmount `/mnt/onboard`.** KOReader unmounts the *external* `/mnt/sd`;
+  unmounting onboard pulls the launcher's own partition out from under it.
+- **WiFi must come down before Nickel restarts.** Leaving it up made the
+  restarted Nickel fail to insert its own driver (`File exists`) and the device
+  rebooted itself ~3.5 minutes later.
+
+### 6. A missing touchscreen is a warning, not a fatal error
+
+Section 8 listed "no touchscreen found" among the fatal paths. It is instead a
+warning: a device with working hardware buttons is usable, and refusing to start
+would be worse than running degraded. `dlopen` failure and an unreadable ROM do
+remain fatal, and render on the panel.

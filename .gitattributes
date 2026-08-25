@@ -1,0 +1,3 @@
+# PGM goldens are binary: without this git diffs them as text, because a
+# P5 raster of mostly-0xFF background has no NUL byte in the first 8KB.
+*.pgm binary
