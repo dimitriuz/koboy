@@ -203,7 +203,15 @@ static void trim(char *s)
     while (n && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\r' || s[n-1] == '\n')) s[--n] = 0;
 }
 
-static bool as_bool(const char *v) { return !(strcmp(v,"false")==0 || strcmp(v,"0")==0); }
+/* An EMPTY value leaves the default alone rather than meaning true. This
+   treated everything except "false" and "0" as true, including "", so a
+   blanked `grab_input = ` silently turned the grab on -- the opposite of what
+   clearing a line means, and invisible without reading this function. `trim`
+   has already run, so "" covers whitespace-only values too. */
+static bool as_bool(const char *v, bool dflt) {
+    if (!v || !v[0]) return dflt;
+    return !(strcmp(v,"false")==0 || strcmp(v,"0")==0);
+}
 
 /* The promotion test, extracted from the main loop so it can be tested.
    >= and not >, deliberately: a frame in which the entire game rect changed is
@@ -233,8 +241,8 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "present_divisor"))  c->present_divisor = atoi(v);
         else if (!strcmp(k, "cleanup_interval")) c->cleanup_interval = atoi(v);
         else if (!strcmp(k, "cleanup_max_ms"))   c->cleanup_max_ms = atoi(v);
-        else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v);
-        else if (!strcmp(k, "grab_input"))       c->grab_input = as_bool(v);
+        else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v, c->force_dither);
+        else if (!strcmp(k, "grab_input"))       c->grab_input   = as_bool(v, c->grab_input);
         else if (!strcmp(k, "dpad_deadzone"))    c->dpad_deadzone = atoi(v);
         else if (!strcmp(k, "dpad_hysteresis"))  c->dpad_hysteresis = atoi(v);
         else if (!strcmp(k, "dpad_mode"))        c->dpad_mode = strcmp(v,"cross") ? KOBOY_DPAD_RELATIVE : KOBOY_DPAD_CROSS;
@@ -330,6 +338,7 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 
     /* Read existing file if it exists, filtering out key_a/key_b lines */
     FILE *in = fopen(path, "r");
+    int last_char_written = 0;
     if (in) {
         char line[1024];
         while (fgets(line, sizeof line, in)) {
@@ -354,9 +363,18 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 
             /* Preserve this line (comments, blanks, other keys) */
             fputs(line, out);
+            size_t llen = strlen(line);
+            if (llen) last_char_written = line[llen - 1];
         }
         fclose(in);
     }
+
+    /* A source ini with no trailing newline would otherwise have the
+       calibration block concatenated onto its final line. Harmless today only
+       because config_load truncates at the resulting '#', but it silently
+       rewrites an unrelated line -- against the "preserve everything else"
+       intent this function exists to honour. */
+    if (last_char_written && last_char_written != '\n') fputc('\n', out);
 
     /* Write the new calibration */
     fprintf(out, "# written by first-run calibration\nkey_a = %u\nkey_b = %u\n",

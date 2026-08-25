@@ -1,5 +1,11 @@
+/* mkdtemp() and system(), used by the blank-value/no-trailing-newline test
+   below, are not declared under -std=c11 without this -- matches src/sram.c,
+   src/config.c, tests/test_romlist.c and tests/test_uiscript.c. */
+#define _DEFAULT_SOURCE
 #include "test.h"
 #include "config.h"
+#include <stdio.h>
+#include <stdlib.h>
 
 TEST_MAIN({
     koboy_config c;
@@ -130,11 +136,16 @@ TEST_MAIN({
     CHECK_EQ_INT(c.key_a, 333);
     CHECK_EQ_INT(c.key_b, 444);
 
-    /* Preservation: seed a file with a comment, an unrelated key, and an old
+    /* Preservation: seed a file with a comment, an unrelated key, and a REAL
        key_a line. Call config_save_keys. Verify the comment and unrelated key
-       survive and still parse correctly. */
+       survive, and that the filter actually removed the old key_a line.
+       The previous seed here was literally "old key_a = 999" -- a line the
+       exact strcmp in config_save_keys' filter never matches, since the key
+       name it extracts is "old key_a", not "key_a". That made the filter
+       untested: the line survived whether or not the filter existed, and
+       still would if the filter were deleted entirely. */
     FILE *seed_f = fopen("build/keys2.ini", "w");
-    fprintf(seed_f, "# important comment\nscale = 4\nold key_a = 999\n");
+    fprintf(seed_f, "# important comment\nkey_a = 99\nscale = 4\nkey_b = 98\n");
     fclose(seed_f);
     CHECK(config_save_keys("build/keys2.ini", 555, 666));
 
@@ -148,14 +159,22 @@ TEST_MAIN({
     /* Verify the comment is actually in the file (not just parsed) */
     FILE *verify_f = fopen("build/keys2.ini", "r");
     bool found_comment = false;
+    bool found_old_key_a = false;
+    int keys2_key_a_count = 0, keys2_key_b_count = 0;
     while (fgets(line, sizeof line, verify_f)) {
-        if (strstr(line, "important comment")) {
-            found_comment = true;
-            break;
-        }
+        if (strstr(line, "important comment")) found_comment = true;
+        if (strstr(line, "key_a = 99")) found_old_key_a = true;
+        if (strstr(line, "key_a =")) keys2_key_a_count++;
+        if (strstr(line, "key_b =")) keys2_key_b_count++;
     }
     fclose(verify_f);
     CHECK(found_comment);
+    /* The old key_a = 99 line must be GONE -- this is the check that the
+       previous "old key_a" seed could never fail, because it never matched
+       the filter to begin with. */
+    CHECK(!found_old_key_a);
+    CHECK_EQ_INT(keys2_key_a_count, 1);
+    CHECK_EQ_INT(keys2_key_b_count, 1);
 
     /* Failure path: attempt to save to a non-existent directory.
        Should return false and leave no temp file. */
@@ -189,4 +208,67 @@ TEST_MAIN({
     CHECK(right >= KOBOY_CHROME_MARGIN);
     CHECK(top >= KOBOY_CHROME_MARGIN);
     CHECK(bottom >= KOBOY_CHROME_MARGIN);
+
+    /* #8: a blanked value must not silently mean true. as_bool treated
+       everything except "false" and "0" as true, including "", so
+       `grab_input = ` turned the grab ON -- the opposite of what someone
+       clearing a line intends, and unrecoverable without reading the source. */
+    {
+        char dir[] = "/tmp/koboy_cfg_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        char path[512];
+        snprintf(path, sizeof path, "%s/koboy.ini", dir);
+
+        FILE *f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("grab_input = \nforce_dither =   \n", f);
+        fclose(f);
+
+        koboy_config c; config_defaults(&c);
+        bool grab_default = c.grab_input, dither_default = c.force_dither;
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.grab_input, grab_default);
+        CHECK_EQ_INT(c.force_dither, dither_default);
+
+        /* Explicit values still work in both directions. */
+        f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("grab_input = false\nforce_dither = true\n", f);
+        fclose(f);
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.grab_input, 0);
+        CHECK_EQ_INT(c.force_dither, 1);
+
+        /* #9: an ini with NO trailing newline must not have the calibration
+           block concatenated onto its last line. It is harmless today only
+           because config_load truncates at the resulting '#', but it silently
+           rewrites an unrelated line, against the whole point of preserving
+           everything else. */
+        f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("scale = 4", f);            /* deliberately no newline */
+        fclose(f);
+        CHECK(config_save_keys(path, 193, 194));
+
+        f = fopen(path, "r");
+        CHECK(f != NULL);
+        char first[256] = {0};
+        CHECK(fgets(first, sizeof first, f) != NULL);
+        fclose(f);
+        /* The first line must still be exactly the scale line. */
+        CHECK(strncmp(first, "scale = 4", 9) == 0);
+        CHECK_EQ_INT((int)strlen(first), 10);   /* "scale = 4" plus '\n' */
+
+        /* And the keys survived the round trip. */
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.scale, 4);
+        CHECK_EQ_INT(c.key_a, 193);
+        CHECK_EQ_INT(c.key_b, 194);
+
+        char cmd[1024];
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+        if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
+    }
 })
