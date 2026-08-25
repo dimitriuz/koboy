@@ -13,11 +13,23 @@ OUT="${OUT:-dist/gambatte_libretro.so}"
 
 mkdir -p "$(dirname "$OUT")"
 make -C "$SRC" clean || true
-make -C "$SRC" platform=unix \
-    CC="${CROSS}gcc" CXX="${CROSS}g++" \
-    CFLAGS="-O3 -march=armv7-a -mfpu=neon -mfloat-abi=hard -fPIC" \
-    CXXFLAGS="-O3 -march=armv7-a -mfpu=neon -mfloat-abi=hard -fPIC" \
-    LDFLAGS="-static-libstdc++ -static-libgcc"
+# CC/CXX/CFLAGS/CXXFLAGS/LDFLAGS are exported into the environment rather than
+# passed as `make VAR=...` command-line arguments. GNU Make command-line
+# variables cannot be appended to by the makefile's own `+=` (verified: even
+# without an `override` directive, a later `CXXFLAGS += ...` in the makefile
+# is silently dropped for a variable set on the command line). gambatte-libretro's
+# Makefile.common adds its own required `-Ilibgambatte/include` etc. via
+# `CXXFLAGS += $(INCFLAGS)`; passing CFLAGS/CXXFLAGS as command-line args -- as
+# opposed to environment variables -- makes that append a no-op and the build
+# fails with "gambatte.h: No such file or directory". As environment
+# variables the flag values below reach the compiler unchanged, and the
+# Makefile's own include paths still get appended on top.
+export CC="${CROSS}gcc"
+export CXX="${CROSS}g++"
+export CFLAGS="-O3 -march=armv7-a -mfpu=neon -mfloat-abi=hard -fPIC"
+export CXXFLAGS="-O3 -march=armv7-a -mfpu=neon -mfloat-abi=hard -fPIC"
+export LDFLAGS="-static-libstdc++ -static-libgcc"
+make -C "$SRC" platform=unix
 
 cp "$SRC"/gambatte_libretro.so "$OUT"
 "${CROSS}strip" "$OUT" || true

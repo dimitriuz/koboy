@@ -4,6 +4,7 @@ dist/
 *.so
 *.zip
 third_party/fbink/
+third_party/gambatte-libretro/
 *.srm
 *.log
 koboy
