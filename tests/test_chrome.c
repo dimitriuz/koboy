@@ -2,6 +2,7 @@
 #include "pgm.h"
 #include "chrome.h"
 #include "config.h"
+#include "input.h"
 #include <stdlib.h>
 
 static int render(koboy_config *c, int W, int H, uint8_t *fb, koboy_profile *p)
@@ -10,6 +11,30 @@ static int render(koboy_config *c, int W, int H, uint8_t *fb, koboy_profile *p)
     memset(fb, 0x7F, (size_t)W * H);
     chrome_render(fb, W, p, &c->layout);
     return 1;
+}
+
+/* Press one finger at a panel coordinate, read the resulting buttons, lift it
+   again. Goes through input_feed rather than reimplementing the hit tests, so
+   what is asserted is the zone geometry the emulator actually uses. The caller
+   must have installed an identity touch transform (raw_max == panel - 1), which
+   makes scale_axis a no-op and the probe pixel-exact. */
+static uint16_t touch_probe(koboy_input *in, int x, int y)
+{
+    koboy_ev down[5] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    koboy_ev up[2] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, down, 5);
+    uint16_t b = input_state(in)->buttons;
+    input_feed(in, up, 2);
+    return b;
 }
 
 TEST_MAIN({
@@ -153,5 +178,168 @@ TEST_MAIN({
     }
     CHECK_EQ_INT(corrupted, 0);
 
+    /* Test 4: chrome_render's OWN clamps, with the resolver taken out of the
+       picture. Until now config_resolve_profile was the only thing keeping the
+       two background memsets in chrome_render in range, and it lives in another
+       file -- so a resolver change (there is one, right below) could reintroduce
+       a heap smash here with every test still green. These two profiles violate
+       the invariant directly: a negative game_x, and a game rect running off the
+       right edge. Both lengths are plain ints cast to size_t, so without the
+       local clamps each memset gets a length near SIZE_MAX. Unclamped, this does
+       not "fail" -- it flattens the heap and the test dies. */
+    memset(guarded, SENTINEL, buf_size);
+    panel_start = guarded + (size_t)GUARD * (TW + 2 * GUARD) + GUARD;
+
+    koboy_profile neg;
+    memset(&neg, 0, sizeof neg);
+    neg.scale = 1; neg.panel_w = TW; neg.panel_h = TH;
+    neg.game_x = -20;          /* left band width is NEGATIVE */
+    neg.game_y = 100;
+    neg.game_w = 100;
+    neg.game_h = 100;
+    chrome_render(panel_start, TW + 2 * GUARD, &neg, &c.layout);
+
+    corrupted = 0;
+    for (size_t i = 0; i < buf_size; i++) {
+        int x = (int)(i % (size_t)(TW + 2 * GUARD));
+        int y = (int)(i / (size_t)(TW + 2 * GUARD));
+        int is_guard = (x < GUARD || x >= TW + GUARD || y < GUARD || y >= TH + GUARD);
+        if (is_guard && p_start[i] != SENTINEL) corrupted++;
+    }
+    CHECK_EQ_INT(corrupted, 0);
+
+    memset(guarded, SENTINEL, buf_size);
+    panel_start = guarded + (size_t)GUARD * (TW + 2 * GUARD) + GUARD;
+
+    koboy_profile over;
+    memset(&over, 0, sizeof over);
+    over.scale = 1; over.panel_w = TW; over.panel_h = TH;
+    over.game_x = 350;
+    over.game_y = 100;
+    over.game_w = 200;         /* game_x + game_w = 550 > W: W - rx is NEGATIVE */
+    over.game_h = 100;
+    chrome_render(panel_start, TW + 2 * GUARD, &over, &c.layout);
+
+    corrupted = 0;
+    for (size_t i = 0; i < buf_size; i++) {
+        int x = (int)(i % (size_t)(TW + 2 * GUARD));
+        int y = (int)(i / (size_t)(TW + 2 * GUARD));
+        int is_guard = (x < GUARD || x >= TW + GUARD || y < GUARD || y >= TH + GUARD);
+        if (is_guard && p_start[i] != SENTINEL) corrupted++;
+    }
+    CHECK_EQ_INT(corrupted, 0);
+
+    /* And the upper bound, which is the case that misbehaves PREDICTABLY and so
+       is the one this file leans on. game_x past the right edge makes the left
+       band 500 px wide on a 400 px panel, so without `if (lx > W) lx = W` every
+       game row spills exactly 100 bytes into the right guard: 10,000 bytes,
+       every run, on every libc.
+       The two underflow profiles above hand memset a length near SIZE_MAX
+       instead, and what that overwrites is an implementation detail -- glibc
+       2.41 on x86-64 writes a short block just *below* the destination, which
+       lands in the guard band for the negative game_x (10,800 bytes) and inside
+       the panel for the overhanging rect. That unpredictability is the argument
+       for the clamp, not against the test: the contract is "the length is
+       clamped", not "the crash is reproducible". */
+    memset(guarded, SENTINEL, buf_size);
+    panel_start = guarded + (size_t)GUARD * (TW + 2 * GUARD) + GUARD;
+
+    koboy_profile wide;
+    memset(&wide, 0, sizeof wide);
+    wide.scale = 1; wide.panel_w = TW; wide.panel_h = TH;
+    wide.game_x = 500;         /* left band is WIDER than the panel */
+    wide.game_y = 100;
+    wide.game_w = -200;        /* keeps rx = 300 in range, isolating the lx clamp */
+    wide.game_h = 100;
+    chrome_render(panel_start, TW + 2 * GUARD, &wide, &c.layout);
+
+    corrupted = 0;
+    for (size_t i = 0; i < buf_size; i++) {
+        int x = (int)(i % (size_t)(TW + 2 * GUARD));
+        int y = (int)(i / (size_t)(TW + 2 * GUARD));
+        int is_guard = (x < GUARD || x >= TW + GUARD || y < GUARD || y >= TH + GUARD);
+        if (is_guard && p_start[i] != SENTINEL) corrupted++;
+    }
+    CHECK_EQ_INT(corrupted, 0);
+
     free(guarded);
+
+    /* Test 5: chrome.h's contract at EVERY scale the resolver can choose, on
+       every panel spec §3 supports -- not just at the shipped default 5, which
+       is all it was ever checked at. scale = 0 is documented in koboy.ini as a
+       supported setting ("auto-fit to the largest integer scale that fits"), and
+       auto-fit used to reserve only the 8 px bezel margin: on the Libra 2 it
+       chose 7 and put 15,677 chrome pixels inside the game rect. The touch zones
+       stay live under a rect drawn over them, so the second loop matters as much
+       as the first -- tapping the lower playfield was pressing A. */
+    static const int panels[][2] = {
+        { 1072, 1448 },   /* Clara family, 6"    */
+        { 1264, 1680 },   /* Libra family, 7"    */
+        { 1404, 1872 },   /* Elipsa family, 10.3" */
+        { 1440, 1920 },   /* Sage, 8"            */
+    };
+    static const int scales[] = { 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 99 };
+
+    int chrome_intruded = 0, zone_hits = 0, combos = 0;
+    for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
+        const int W = panels[pi][0], H = panels[pi][1];
+        for (size_t si = 0; si < sizeof scales / sizeof scales[0]; si++) {
+            koboy_config cc; config_defaults(&cc);
+            cc.scale = scales[si];
+            koboy_profile q;
+            CHECK(config_resolve_profile(&q, &cc, W, H));
+            combos++;
+
+            memset(fb, 0x7F, (size_t)W * H);
+            chrome_render(fb, W, &q, &cc.layout);
+
+            int bad = 0;
+            for (int y = q.game_y; y < q.game_y + q.game_h; y++)
+                for (int x = q.game_x; x < q.game_x + q.game_w; x++)
+                    if (fb[(size_t)y * W + x] != 0x7F) bad++;
+            if (bad) {
+                fprintf(stderr, "  chrome inside game rect: %dx%d scale=%d -> "
+                        "resolved %d, %d px\n", W, H, scales[si], q.scale, bad);
+                chrome_intruded += bad;
+            }
+
+            koboy_input *in = input_create(&cc, &q);
+            CHECK(in != NULL);
+            input_set_touch_transform(in, W - 1, H - 1, false, false, false);
+
+            /* POSITIVE CONTROL, and it is not optional: without it a probe that
+               silently returned 0 for every coordinate -- a broken transform, a
+               missing SYN -- would make the whole sweep below vacuous, which is
+               the exact failure mode this branch has already shipped three
+               times. The A button and the Start pill must still be reachable. */
+            CHECK(touch_probe(in, cc.layout.a_cx * W / 1000,
+                              cc.layout.a_cy * H / 1000) == KOBOY_BTN_A);
+            CHECK(touch_probe(in, cc.layout.start_cx * W / 1000,
+                              cc.layout.start_cy * H / 1000) == KOBOY_BTN_START);
+
+            int hits = 0;
+            /* Coarse grid over the whole rect. Step 8 cannot skip a zone: the
+               smallest one is a start/select pill, ~79 px tall on the narrowest
+               supported panel. */
+            for (int y = q.game_y; y < q.game_y + q.game_h; y += 8)
+                for (int x = q.game_x; x < q.game_x + q.game_w; x += 8)
+                    if (touch_probe(in, x, y)) hits++;
+            /* Dense along the bottom edge, where an overlap starts, so a zone
+               poking in by fewer than 8 rows cannot slip between samples. */
+            int y0 = q.game_y + q.game_h - 16;
+            if (y0 < q.game_y) y0 = q.game_y;
+            for (int y = y0; y < q.game_y + q.game_h; y++)
+                for (int x = q.game_x; x < q.game_x + q.game_w; x++)
+                    if (touch_probe(in, x, y)) hits++;
+            if (hits) {
+                fprintf(stderr, "  touch zone inside game rect: %dx%d scale=%d "
+                        "-> resolved %d, %d hits\n", W, H, scales[si], q.scale, hits);
+                zone_hits += hits;
+            }
+            input_destroy(in);
+        }
+    }
+    CHECK_EQ_INT(combos, 52);
+    CHECK_EQ_INT(chrome_intruded, 0);
+    CHECK_EQ_INT(zone_hits, 0);
 })

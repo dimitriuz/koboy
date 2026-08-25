@@ -3,6 +3,8 @@
 #define _POSIX_C_SOURCE 200809L
 
 #include "config.h"
+#include "chrome.h"          /* chrome_controls_top: the resolver must reserve
+                                the control band, and chrome.c owns its geometry */
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -244,7 +246,19 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
     int s = c->scale > 0 ? c->scale : max_fit;
     if (s > max_fit) s = max_fit;        /* configured scale does not fit */
 
-    /* Ensure chrome has at least KOBOY_CHROME_MARGIN pixels on all sides */
+    /* Two reservations, not one. KOBOY_CHROME_MARGIN keeps the bezel inside the
+       buffer; ctrl_top keeps the game rect off the CONTROLS. Reserving only the
+       bezel margin was the bug: at scale = 0 the fitted rect cleared the panel
+       edges comfortably and still covered the drawn A button and d-pad on all
+       four supported panels (on the Libra 2 it chose scale 7 and put 15,677
+       chrome pixels inside the game rect). The touch zones stay live underneath
+       a rect drawn over them, so tapping the lower playfield pressed A or a
+       direction -- unplayable at the one setting whose whole purpose is a bigger
+       picture. Shrinking the controls was the other way out and is explicitly
+       not the fix: they are the only way to play on a device with no buttons.
+       See chrome.h for why chrome.c owns the geometry. */
+    int ctrl_top = chrome_controls_top(&c->layout, panel_w, panel_h);
+
     while (s > 1) {
         int game_w = KOBOY_GB_W * s;
         int game_h = KOBOY_GB_H * s;
@@ -258,11 +272,18 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
         if (left_margin >= KOBOY_CHROME_MARGIN &&
             right_margin >= KOBOY_CHROME_MARGIN &&
             top_margin >= KOBOY_CHROME_MARGIN &&
-            bottom_margin >= KOBOY_CHROME_MARGIN) {
-            break;  /* all margins are sufficient */
+            bottom_margin >= KOBOY_CHROME_MARGIN &&
+            game_y + game_h <= ctrl_top) {
+            break;  /* margins sufficient AND clear of the control band */
         }
         s--;
     }
+    /* The floor stays 1 rather than becoming a failure: at scale 1 the rect is
+       160x144 and every panel spec §3 supports (>= 1072x1448) clears the control
+       band by hundreds of pixels, so this is unreachable there -- and on some
+       hypothetical tiny panel, running with a slightly overlapped control band
+       still beats refusing to start. chrome_render clamps its own writes either
+       way; it does not rely on this loop. */
 
     p->scale   = s;
     p->panel_w = panel_w;

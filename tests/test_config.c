@@ -71,10 +71,13 @@ TEST_MAIN({
     CHECK_EQ_INT(p.scale, 5);
     CHECK_EQ_INT(p.game_x, (1072 - 800) / 2);
 
-    /* an impossible configured scale falls back to the largest that fits */
+    /* An impossible configured scale falls back to the largest that fits -- and
+       "fits" now means fits above the controls, not merely inside the panel.
+       6x would clear the bezel margin on this panel with 176 px to spare and
+       still bury the A button and the d-pad, so the answer is 5. */
     c.scale = 99;
     CHECK(config_resolve_profile(&p, &c, 1072, 1448));
-    CHECK_EQ_INT(p.scale, 6);
+    CHECK_EQ_INT(p.scale, 5);
 
     /* ini overrides defaults; unknown keys are ignored, not fatal */
     FILE *f = fopen("build/t.ini", "w");
