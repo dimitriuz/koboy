@@ -264,6 +264,55 @@ TEST_MAIN({
 
     free(guarded);
 
+    /* The clamp itself, asserted directly rather than by watching for an
+       overrun. This exists because the sentinel guard band above CANNOT cover
+       the right-hand band: with the `rx > W` clamp removed, `W - rx` is a
+       length near SIZE_MAX, and what glibc 2.41/x86-64 does with that is write
+       a short block near the destination -- which for an overhanging rect lands
+       inside the panel, not in the guard. The `over` profile above therefore
+       reports zero corruption whether or not that clamp is present, which was
+       verified by deleting the clamp and watching all 222 checks still pass.
+       A test that cannot fail is not coverage, so the contract gets asserted
+       where it is deterministic: chrome_bands' clamped output, which is the
+       same arithmetic chrome_render depends on, on every libc, with no
+       undefined behaviour needed to observe it. Remove either clamp in
+       chrome_bands and the matching CHECK below fails. */
+    koboy_profile b;
+    int lx = -1, rx = -1;
+    memset(&b, 0, sizeof b);
+    b.scale = 1; b.panel_w = 400; b.panel_h = 300; b.game_y = 100; b.game_h = 100;
+
+    /* the shipped, invariant-respecting case passes through untouched */
+    b.game_x = 100; b.game_w = 200;
+    chrome_bands(&b, b.panel_w, &lx, &rx);
+    CHECK_EQ_INT(lx, 100);
+    CHECK_EQ_INT(rx, 300);
+
+    /* negative game_x: the left band must not become a huge length */
+    b.game_x = -20; b.game_w = 100;
+    chrome_bands(&b, b.panel_w, &lx, &rx);
+    CHECK_EQ_INT(lx, 0);
+    CHECK_EQ_INT(rx, 80);
+
+    /* rect overhanging the right edge: rx must stop at W so that W - rx is 0,
+       not negative. This is the case the guard band cannot see. */
+    b.game_x = 350; b.game_w = 200;
+    chrome_bands(&b, b.panel_w, &lx, &rx);
+    CHECK_EQ_INT(rx, 400);
+    CHECK_EQ_INT(b.panel_w - rx, 0);
+
+    /* game_x past the right edge: the left band must stop at W */
+    b.game_x = 500; b.game_w = -200;
+    chrome_bands(&b, b.panel_w, &lx, &rx);
+    CHECK_EQ_INT(lx, 400);
+    CHECK_EQ_INT(rx, 300);
+
+    /* a rect entirely left of the panel: both must floor at 0 */
+    b.game_x = -600; b.game_w = 100;
+    chrome_bands(&b, b.panel_w, &lx, &rx);
+    CHECK_EQ_INT(lx, 0);
+    CHECK_EQ_INT(rx, 0);
+
     /* Test 5: chrome.h's contract at EVERY scale the resolver can choose, on
        every panel spec §3 supports -- not just at the shipped default 5, which
        is all it was ever checked at. scale = 0 is documented in koboy.ini as a

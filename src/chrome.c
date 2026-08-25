@@ -91,31 +91,43 @@ static void box(uint8_t *fb, int stride, int W, int H, int cx, int cy, int w, in
     }
 }
 
+void chrome_bands(const koboy_profile *p, int panel_w, int *left, int *right_start)
+{
+    int lx = p->game_x;                     /* width of the left band */
+    if (lx < 0) lx = 0;
+    if (lx > panel_w) lx = panel_w;
+    int rx = p->game_x + p->game_w;         /* first column right of the rect */
+    if (rx < 0) rx = 0;
+    if (rx > panel_w) rx = panel_w;
+    *left = lx;
+    *right_start = rx;
+}
+
 void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
                    const koboy_layout *l)
 {
     const int W = p->panel_w, H = p->panel_h;
 
-    /* The left/right band widths below are clamped into [0, W] before the cast
-       to size_t, exactly as hline/vline clamp, and for the same reason: a plain
-       int cast to size_t does not saturate, it wraps. A negative game_x or a
+    /* The left/right band widths come back from chrome_bands already clamped
+       into [0, W] before the cast to size_t, exactly as hline/vline clamp, and
+       for the same reason: a plain int cast to size_t does not saturate, it
+       wraps. A negative game_x or a
        game rect running past the right edge would turn a band width into a
        length near SIZE_MAX and memset the heap flat -- the same underflow
        mechanism that took four rounds and an ASan repro to get out of
        frame()/hline()/vline() in this file.
        config_resolve_profile does keep the invariant for every caller today, so
-       these look dead. They are not: they are the local defence, in the file
-       that does the writing, so that a change to the resolver in another file
-       can never reintroduce a heap overrun here. tests/test_chrome.c drives
-       chrome_render with a deliberately invariant-violating profile (negative
-       game_x, and a rect wider than the panel) to keep this path exercised. Do
-       not remove them as "unreachable". */
-    int lx = p->game_x;                     /* width of the left band */
-    if (lx < 0) lx = 0;
-    if (lx > W) lx = W;
-    int rx = p->game_x + p->game_w;         /* first column right of the rect */
-    if (rx < 0) rx = 0;
-    if (rx > W) rx = W;
+       the clamps look dead. They are not: they are the local defence, in the
+       file that does the writing, so that a change to the resolver in another
+       file can never reintroduce a heap overrun here. tests/test_chrome.c
+       asserts chrome_bands' clamped output directly for every violating case,
+       which is the only way to cover the right-hand band: watching for the
+       overrun cannot, because an unclamped `W - rx` hands memset a length near
+       SIZE_MAX and glibc on x86-64 then writes inside the panel rather than
+       into the guard band, so the sentinel test passes either way. Do not
+       remove the clamps as "unreachable". */
+    int lx, rx;
+    chrome_bands(p, W, &lx, &rx);
 
     /* background everywhere except the game rect */
     for (int y = 0; y < H; y++) {
