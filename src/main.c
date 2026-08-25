@@ -36,6 +36,7 @@ extern bool platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
 extern koboy_platform *platform_kobo_create(void);
 extern void            platform_kobo_setup_touch(koboy_platform *pf, koboy_input *in);
 extern void            platform_kobo_selftest(koboy_platform *pf);
+extern void            platform_kobo_refresh_stats(koboy_platform *pf);
 extern void            platform_kobo_fatal(void *ctx, const char *msg);
 #else
 extern koboy_platform *platform_sdl_create(void);
@@ -155,6 +156,7 @@ static void usage(const char *argv0)
         "  --panel WxH       synthetic panel size for the desktop backend\n"
         "  --frames N        stop after N emulated frames (scripted runs)\n"
         "  --selftest        print machine-readable backend facts and continue\n"
+        "  --waveform auto|du4  waveform for fast refreshes (default auto)\n"
         "  --quiet           suppress everything but the presented= counter\n",
         argv0, DEFAULT_INI);
 }
@@ -186,12 +188,23 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--save-dir")) snprintf(cfg.save_dir,  sizeof cfg.save_dir,  "%s", argv[++i]);
         else if (!strcmp(a, "--config"))   i++;   /* already handled */
         else if (!strcmp(a, "--frames"))   frame_limit = strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(a, "--waveform")) {
+            const char *w = argv[++i];
+            if (!strcmp(w, "auto"))      cfg.wfm_fast_policy = KOBOY_WFM_AUTO;
+            else if (!strcmp(w, "du4"))  cfg.wfm_fast_policy = KOBOY_WFM_DU4;
+            else { fprintf(stderr, "koboy: --waveform wants auto or du4\n"); return 2; }
+        }
         else if (!strcmp(a, "--panel")) {
             if (sscanf(argv[++i], "%dx%d", &panel_w, &panel_h) != 2) {
                 fprintf(stderr, "koboy: --panel wants WxH\n"); return 2;
             }
         } else { fprintf(stderr, "koboy: unknown option %s\n", a); usage(argv[0]); return 2; }
     }
+
+    /* Applied after both the ini and the command line, so a bare name from
+       either source is treated the same. A slashless core name is otherwise
+       unloadable on the device: dlopen never searches the cwd. */
+    config_resolve_paths(&cfg);
 
     /* ------------------------------------------------ platform and profile */
 #ifdef KOBOY_PLATFORM_KOBO
@@ -349,7 +362,7 @@ int main(int argc, char **argv)
     koboy_pacer pace;
     pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
 
-    unsigned long presented = 0, since_cleanup = 0, cleanups = 0;
+    unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
     uint64_t last_sram_us = pf->now_us(pf->ctx);
 
     while (!g_stop && !pf->should_quit(pf->ctx)) {
@@ -377,8 +390,32 @@ int main(int argc, char **argv)
         pf->blit_gray8(pf->ctx, video_buffer(vid) + (size_t)r.y * video_stride(vid) + r.x,
                        r.w, r.h, video_stride(vid),
                        prof.game_x + r.x, prof.game_y + r.y);
-        pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h,
-                    KOBOY_REFRESH_FAST);
+
+        /* Waveform by dirty area, not one waveform for every frame.
+           KOBOY_REFRESH_FAST maps to a non-flashing waveform (DU4 on this
+           panel), which never fully resets pixel state -- residue accumulates
+           on every update regardless of rect size. Observed on the device as
+           several Tetris scenes layered on top of each other.
+           A dirty rect covering most of the game rect means the scene has
+           substantially changed, which is both when layered residue is most
+           objectionable and when the refresh is already expensive, so paying
+           for a flashing waveform there is cheap in relative terms. Small
+           incremental updates keep the fast waveform, and the periodic cleanup
+           sweeps whatever they leave behind.
+           Note this cannot be a substitute for the cleanup: the dirty diff
+           compares our own output buffers, so it tracks what we sent, not what
+           the panel shows. A region that ghosts and then stops changing is
+           never revisited by this test at all. */
+        koboy_refresh_mode mode = KOBOY_REFRESH_FAST;
+        if (cfg.full_refresh_permille > 0) {
+            long dirty = (long)r.w * (long)r.h;
+            long whole = (long)prof.game_w * (long)prof.game_h;
+            if (dirty * 1000L >= whole * (long)cfg.full_refresh_permille) {
+                mode = KOBOY_REFRESH_FULL;
+                big_refreshes++;
+            }
+        }
+        pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, mode);
         presented++;
 
         /* A value <= 0 disables cleanup. The explicit guard is required:
@@ -408,12 +445,19 @@ sram_check:
     }
 
     if (sram && sram_len) sram_save(sram_path, sram, sram_len);
-    say("koboy: %s, %lu presented frames, %lu game-rect cleanups\n",
-        g_stop ? "stopped by signal" : "stopped", presented, cleanups);
+    say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
+        "%lu large-area full refreshes\n",
+        g_stop ? "stopped by signal" : "stopped", presented, cleanups,
+        big_refreshes);
     /* Always printed, even under --quiet: the smoke tests grep for it.
        --quiet suppresses other chatter only. */
     printf("presented=%lu\n", presented);
     fflush(stdout);
+    if (selftest) {
+#ifdef KOBOY_PLATFORM_KOBO
+        platform_kobo_refresh_stats(pf);
+#endif
+    }
 
     core_close(core);
     video_destroy(vid);

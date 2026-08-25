@@ -1,14 +1,42 @@
+/* readlink() and PATH_MAX: config.c needs both for install-relative path
+   resolution, and -std=c11 alone hides them behind __STRICT_ANSI__. */
+#define _POSIX_C_SOURCE 200809L
+
 #include "config.h"
+#include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 void config_defaults(koboy_config *c)
 {
     memset(c, 0, sizeof *c);
     c->scale = 5;
     c->present_divisor = 3;
-    c->cleanup_interval = 200;
+    /* MEASURED consequence of the DU4 mapping: DU4 is a fast *non-flashing*
+       waveform, so it never fully resets pixel state and residue accumulates on
+       every update no matter how small the rect. The only thing that clears it
+       is a flashing GC16, so how often that happens is the whole ghosting/
+       flashing trade-off. 200 presented frames is ~8s at the measured ~25fps,
+       which was far too much: the panel showed several Tetris scenes layered on
+       top of each other. 60 is ~2.4s. Tunable because where you want to sit on
+       that trade is a matter of taste. */
+    c->cleanup_interval = 60;
+    /* A dirty rect covering >= 45% of the game rect means the scene has
+       substantially changed -- exactly when layered residue is most visible,
+       and already an expensive refresh, so the surcharge for flashing it is
+       proportionally small. Measured on the device: only 13 of 84 refreshes in
+       a title-sequence run were that large. */
+    c->full_refresh_permille = 450;
+    /* AUTO, not DU4. Forcing DU4 on every refresh overrides the EPDC's own
+       transition analysis, and DU4 is a non-flashing waveform that cannot
+       erase -- so a Game Boy sprite's previous position was never cleared and
+       the panel showed the piece twice. The controller already inspects what is
+       actually changing in each region and picks a waveform that can handle it;
+       gambatte-k2 on Kindle never selects a waveform for exactly this reason.
+       Set waveform_fast = du4 to force the faster non-erasing waveform. */
+    c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->grab_input = true;
     c->dpad_mode = KOBOY_DPAD_RELATIVE;
     c->dpad_deadzone = 24;
@@ -23,6 +51,107 @@ void config_defaults(koboy_config *c)
                        .start_cx = 610, .start_cy = 920, .start_w = 200, .start_h = 55,
                        .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55 };
     c->layout = l;
+}
+
+/* ------------------------------------------------- install-relative paths
+ *
+ * Why this exists, in full, because it cost a device round-trip to find.
+ *
+ * `core_path` defaults to a bare "gambatte_libretro.so", and core.c hands it
+ * to dlopen(). Per POSIX and glibc, dlopen() given a name containing no slash
+ * treats it as a library *name* and searches DT_RUNPATH, LD_LIBRARY_PATH,
+ * /etc/ld.so.cache and the system library directories -- it NEVER looks in the
+ * current working directory. So on the device it looked everywhere except the
+ * one directory the file was actually in, and failed with "cannot open shared
+ * object file: No such file or directory" while sitting next to it.
+ *
+ * No host test could have caught it: on the desktop the core always arrives as
+ * a path with a slash in it (`--core build/stub_core.so`), which dlopen treats
+ * as a filesystem path.
+ *
+ * The fix resolves against the directory containing the *executable*, not the
+ * cwd. A "./" prefix would also have worked, but only when the cwd happens to
+ * be the install directory -- it fails the moment koboy is launched from
+ * NickelMenu or KFMon, which do not set one. /proc/self/exe is independent of
+ * how the process was started.
+ */
+
+/* Split out from config_exe_dir and taking the directory as an argument so it
+   is testable without depending on where the test binary happens to live.
+   Returns false and leaves `out` untouched on truncation or bad input. */
+bool config_join_sibling(char *out, size_t n, const char *name, const char *dir)
+{
+    if (!out || !n || !name || !name[0] || !dir || !dir[0]) return false;
+
+    /* An explicit path -- absolute or containing a slash anywhere -- is the
+       caller's own decision; honour it verbatim. */
+    if (strchr(name, '/')) {
+        if (strlen(name) >= n) return false;
+        snprintf(out, n, "%s", name);
+        return true;
+    }
+
+    char buf[PATH_MAX];
+    int  len;
+    /* "." means "the install directory", not "the install directory plus a
+       stray /." component that then shows up in every error message. */
+    if (!strcmp(name, "."))
+        len = snprintf(buf, sizeof buf, "%s", dir);
+    else if (!strcmp(dir, "/"))          /* avoid emitting "//name" */
+        len = snprintf(buf, sizeof buf, "/%s", name);
+    else
+        len = snprintf(buf, sizeof buf, "%s/%s", dir, name);
+
+    if (len < 0 || (size_t)len >= sizeof buf) return false;
+    if ((size_t)len >= n) return false;
+    snprintf(out, n, "%s", buf);
+    return true;
+}
+
+/* The directory containing the running executable, with no trailing slash
+   (except at the filesystem root, where it is exactly "/"). */
+bool config_exe_dir(char *out, size_t n)
+{
+    if (!out || !n) return false;
+    char    buf[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", buf, sizeof buf - 1);
+    if (len <= 0 || (size_t)len >= sizeof buf - 1) return false;
+    buf[len] = '\0';
+
+    char *slash = strrchr(buf, '/');
+    if (!slash) return false;            /* not an absolute path: give up */
+    if (slash == buf) buf[1] = '\0';     /* executable sits in "/" */
+    else              *slash = '\0';
+    if (strlen(buf) >= n) return false;
+    snprintf(out, n, "%s", buf);
+    return true;
+}
+
+/* Called once, after the ini and the command line have both been applied, so
+   that a bare name from either source gets the same treatment. Deliberately
+   NOT done inside config_load: the loader's job is to report what the file
+   says, and folding resolution into it would make the parse tests assert on
+   this machine's directory layout.
+
+   All three paths get it, not just core_path. rom_path and save_dir reach
+   fopen(), which does resolve relative to the cwd, so they are not broken the
+   way core_path was -- but they fail the same way for the same reason when
+   launched from a menu that sets no cwd, and save_dir is the worse of the two:
+   the shipped default is ".", which under a menu launch would try to write
+   save files to the read-only rootfs. Resolving all three keeps one rule to
+   remember: no slash means "next to koboy". */
+void config_resolve_paths(koboy_config *c)
+{
+    char dir[PATH_MAX];
+    if (!config_exe_dir(dir, sizeof dir)) return;   /* leave paths as-is */
+
+    char tmp[512];
+    if (config_join_sibling(tmp, sizeof tmp, c->core_path, dir))
+        snprintf(c->core_path, sizeof c->core_path, "%s", tmp);
+    if (config_join_sibling(tmp, sizeof tmp, c->rom_path, dir))
+        snprintf(c->rom_path, sizeof c->rom_path, "%s", tmp);
+    if (config_join_sibling(tmp, sizeof tmp, c->save_dir, dir))
+        snprintf(c->save_dir, sizeof c->save_dir, "%s", tmp);
 }
 
 static void trim(char *s)
@@ -57,6 +186,9 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "key_a"))            c->key_a = (uint16_t)atoi(v);
         else if (!strcmp(k, "key_b"))            c->key_b = (uint16_t)atoi(v);
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
+        else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
+        else if (!strcmp(k, "waveform_fast"))
+            c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
         else if (!strcmp(k, "core"))             snprintf(c->core_path, sizeof c->core_path, "%s", v);
         else if (!strcmp(k, "save_dir"))         snprintf(c->save_dir,  sizeof c->save_dir,  "%s", v);
         /* unknown keys ignored on purpose: forward compatibility */

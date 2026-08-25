@@ -80,6 +80,11 @@ typedef struct {
 
     bool quit;
     bool trace;                     /* KOBOY_TRACE_REFRESH in the environment */
+    bool du4_capable;               /* panel/platform can really do DU4 */
+
+    /* Refresh timing, accumulated per mode so AUTO and forced DU4 can be
+       compared fresh in one session rather than against a stale figure. */
+    uint64_t rf_n[3], rf_us[3], rf_max_us[3];
 
     uint16_t raw[RAWKEY_RING];
     int      raw_head, raw_tail;
@@ -138,8 +143,17 @@ static void map_waveforms(kobo_ctx *k, const FBInkState *st)
 {
     int  mark    = platform_mark(st->device_platform);
     bool has_du4 = !st->is_sunxi && st->has_eclipse_wfm && mark >= 9;
+    k->du4_capable = has_du4;
 
-    if (has_du4) {
+    /* AUTO hands the choice to the EPDC driver, which looks at the actual pixel
+       transitions in the region. That is the right default: it is the only
+       party that knows whether a given update is erasing (dark -> light), which
+       is exactly what a non-flashing waveform cannot do. Forcing a waveform
+       means overriding that judgement on every single refresh. */
+    if (k->cfg.wfm_fast_policy == KOBOY_WFM_AUTO) {
+        k->wfm[KOBOY_REFRESH_FAST] = WFM_AUTO; k->wfm_name[KOBOY_REFRESH_FAST] = "AUTO";
+        k->wfm[KOBOY_REFRESH_GRAY] = WFM_AUTO; k->wfm_name[KOBOY_REFRESH_GRAY] = "AUTO";
+    } else if (has_du4) {
         k->wfm[KOBOY_REFRESH_FAST] = WFM_DU4; k->wfm_name[KOBOY_REFRESH_FAST] = "DU4";
         k->wfm[KOBOY_REFRESH_GRAY] = WFM_DU4; k->wfm_name[KOBOY_REFRESH_GRAY] = "DU4";
     } else {
@@ -227,8 +241,42 @@ static bool node_has_key(int fd, unsigned int code)
    event0 and the accelerometer -- which we want nothing to do with -- is
    event2. SCAN_ONLY means FBInk closes every fd it opened; we reopen the two
    we care about ourselves, so the open flags and the grabs are ours. */
+/* Reads the axis maxima and derives the transposition for an already-open
+   touchscreen fd. Shared by the scan path and the override path below. */
+static void touch_axes(kobo_ctx *k, int fd, const char *path, const char *name)
+{
+    int mx = abs_max(fd, ABS_MT_POSITION_X, 0);
+    int my = abs_max(fd, ABS_MT_POSITION_Y, 0);
+    if (mx <= 0 || my <= 0) {
+        mx = abs_max(fd, ABS_X, k->view_w - 1);
+        my = abs_max(fd, ABS_Y, k->view_h - 1);
+    }
+    k->raw_max_x = mx;
+    k->raw_max_y = my;
+    k->transpose = (mx > my);
+    kobo_say(k, "koboy: touch %s (%s) raw %dx%d transpose=%d\n",
+             path, name, mx, my, k->transpose ? 1 : 0);
+}
+
 static void open_input(kobo_ctx *k)
 {
+    /* Diagnostic override, in the same spirit as KOBOY_TRACE_REFRESH: name the
+       touchscreen node explicitly instead of trusting classification. Needed to
+       drive the emulator from a synthetic uinput device during testing, and a
+       genuine escape hatch on a Kobo whose touch node FBInk does not classify
+       as a touchscreen. */
+    const char *forced = getenv("KOBOY_TOUCH_DEV");
+    if (forced && forced[0]) {
+        int fd = open(forced, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd < 0) {
+            kobo_say(k, "koboy: KOBOY_TOUCH_DEV=%s cannot be opened: %s\n",
+                     forced, strerror(errno));
+        } else {
+            k->touch_fd = fd;
+            touch_axes(k, fd, forced, "forced");
+        }
+    }
+
     size_t            n   = 0;
     FBInkInputDevice *dev = fbink_input_scan(INPUT_TOUCHSCREEN | INPUT_KEY, 0,
                                              SCAN_ONLY | NO_RECAP, &n);
@@ -258,17 +306,7 @@ static void open_input(kobo_ctx *k)
                out at 1680 and ABS_Y at 1264, on a panel 1264 wide and 1680
                tall, i.e. the touch layer is mounted rotated. Comparing the two
                maxima catches that on any device without a per-model table. */
-            int mx = abs_max(fd, ABS_MT_POSITION_X, 0);
-            int my = abs_max(fd, ABS_MT_POSITION_Y, 0);
-            if (mx <= 0 || my <= 0) {
-                mx = abs_max(fd, ABS_X, k->view_w - 1);
-                my = abs_max(fd, ABS_Y, k->view_h - 1);
-            }
-            k->raw_max_x = mx;
-            k->raw_max_y = my;
-            k->transpose = (mx > my);
-            kobo_say(k, "koboy: touch %s (%s) raw %dx%d transpose=%d\n",
-                     d->path, d->name, mx, my, k->transpose ? 1 : 0);
+            touch_axes(k, fd, d->path, d->name);
             continue;
         }
 
@@ -507,6 +545,8 @@ static bool kobo_blit_gray8(void *ctx, const uint8_t *px, int w, int h,
     return true;
 }
 
+static uint64_t kobo_now_us(void *ctx);
+
 /* Submit and return. fbink_wait_for_complete() is NOT called, here or anywhere:
    at the shipped 5x game rect the same refresh measured 15.0 ms submitted
    versus 39.2 ms waited, and the emulator has 16.7 ms of wall clock per core
@@ -525,19 +565,29 @@ static bool kobo_refresh(void *ctx, int x, int y, int w, int h,
     cfg.wfm_mode    = k->wfm[mode];
     cfg.is_flashing = k->flash[mode];
 
+    uint64_t t0 = kobo_now_us(k);
+    bool ok = fbink_refresh(k->fbfd,
+                            (uint32_t)(y + k->origin_y), (uint32_t)(x + k->origin_x),
+                            (uint32_t)w, (uint32_t)h, &cfg) == EXIT_SUCCESS;
+    uint64_t dt = kobo_now_us(k) - t0;
+
+    /* Submission cost only -- we never wait for the panel, so this is what the
+       emulator loop actually pays, not how long the update takes to appear. */
+    k->rf_n[mode]++;
+    k->rf_us[mode] += dt;
+    if (dt > k->rf_max_us[mode]) k->rf_max_us[mode] = dt;
+
     /* Off by default, and the only way to see from off-device which rectangle
        each waveform is actually being asked for -- in particular that the
        periodic cleanup asks for the game rect and not the whole panel. SDL
        ignores waveform modes entirely, so this is not observable on the
        desktop at all. */
     if (k->trace)
-        kobo_say(k, "koboy: refresh %-4s %s %dx%d at (%d,%d) -> fb (%d,%d)\n",
+        kobo_say(k, "koboy: refresh %-4s %s %dx%d at (%d,%d) -> fb (%d,%d) %luus\n",
                  k->wfm_name[mode], k->flash[mode] ? "flash" : "     ",
-                 w, h, x, y, x + k->origin_x, y + k->origin_y);
-
-    return fbink_refresh(k->fbfd,
-                         (uint32_t)(y + k->origin_y), (uint32_t)(x + k->origin_x),
-                         (uint32_t)w, (uint32_t)h, &cfg) == EXIT_SUCCESS;
+                 w, h, x, y, x + k->origin_x, y + k->origin_y,
+                 (unsigned long)dt);
+    return ok;
 }
 
 /* Drains one node. Every event is handed to input.c as a koboy_ev, including
@@ -607,6 +657,7 @@ koboy_platform *platform_kobo_create(void);
 bool            platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
 void            platform_kobo_setup_touch(koboy_platform *pf, struct koboy_input *in);
 void            platform_kobo_selftest(koboy_platform *pf);
+void            platform_kobo_refresh_stats(koboy_platform *pf);
 void            platform_kobo_fatal(void *ctx, const char *msg);
 
 koboy_platform *platform_kobo_create(void)
@@ -681,10 +732,29 @@ void platform_kobo_selftest(koboy_platform *pf)
     printf("stride_bytes=%u\n", k->stride);
     printf("bpp=%u\n", k->bpp);
     printf("origin=%d,%d\n", k->origin_x, k->origin_y);
+    printf("wfm_du4_capable=%d\n", k->du4_capable ? 1 : 0);
     printf("touch_transpose=%d\n", k->transpose ? 1 : 0);
     printf("touch_raw=%dx%d\n", k->raw_max_x, k->raw_max_y);
     printf("input_touch=%d\n", k->touch_fd >= 0 ? 1 : 0);
     printf("input_keys=%d\n", k->n_key);
+    fflush(stdout);
+}
+
+/* Printed after the loop, not with the facts above: these are measured in this
+   run. Cross-session comparison of refresh cost on this panel is worthless --
+   Appendix B records ~45% run-to-run variance -- so AUTO versus forced DU4 has
+   to be measured fresh, side by side, on the same content. */
+void platform_kobo_refresh_stats(koboy_platform *pf)
+{
+    kobo_ctx          *k     = pf->ctx;
+    static const char *nm[3] = { "fast", "gray", "full" };
+    for (int i = 0; i < 3; i++) {
+        if (!k->rf_n[i]) continue;
+        printf("refresh_%s=%s n=%lu mean_us=%lu max_us=%lu\n",
+               nm[i], k->wfm_name[i], (unsigned long)k->rf_n[i],
+               (unsigned long)(k->rf_us[i] / k->rf_n[i]),
+               (unsigned long)k->rf_max_us[i]);
+    }
     fflush(stdout);
 }
 

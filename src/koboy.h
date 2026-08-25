@@ -14,6 +14,13 @@ typedef enum { KOBOY_REFRESH_FAST = 0, KOBOY_REFRESH_GRAY, KOBOY_REFRESH_FULL } 
 typedef enum { KOBOY_PIXFMT_RGB565 = 0, KOBOY_PIXFMT_XRGB8888 } koboy_pixfmt;
 typedef enum { KOBOY_DPAD_RELATIVE = 0, KOBOY_DPAD_CROSS } koboy_dpad_mode;
 
+/* Which waveform KOBOY_REFRESH_FAST asks for.
+   AUTO delegates the choice to the EPDC driver, which inspects the actual pixel
+   transitions in the update region -- including whether anything is being
+   erased -- and picks accordingly. DU4 forces the fast non-flashing waveform:
+   quicker per refresh, but it cannot erase, so trails accumulate. */
+typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
+
 /* libretro RETRO_DEVICE_ID_JOYPAD_* as bits */
 #define KOBOY_BTN_B      (1u << 0)
 #define KOBOY_BTN_SELECT (1u << 2)
