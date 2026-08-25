@@ -20,12 +20,12 @@ TEST_MAIN({
     CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_CORE), 30);
     CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_REFRESH), 1000);
 
-    /* Out-of-range stage indices are ignored, not written through. A bad
-       index here would corrupt the adjacent stage's totals, which is the
-       kind of bug that shows up as a nonsense number in a bug report. */
-    stats_add(&s, -1, 999999);
-    stats_add(&s, KOBOY_STAGE_COUNT, 999999);
-    CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_CORE), 30);
+    /* The bounds guard, asserted directly rather than by invoking undefined
+       behaviour. See stats_stage_valid's comment in stats.h. */
+    CHECK_EQ_INT(stats_stage_valid(-1), 0);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_COUNT), 0);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_CORE), 1);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_COUNT - 1), 1);
 
     char buf[256];
     stats_format(&s, buf, sizeof buf);

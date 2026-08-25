@@ -59,6 +59,7 @@ against, and the run that closes follow-up #3.
 - Consumes: nothing.
 - Produces:
   - `enum { KOBOY_STAGE_CORE, KOBOY_STAGE_SUBMIT, KOBOY_STAGE_BLIT, KOBOY_STAGE_REFRESH, KOBOY_STAGE_COUNT }`
+  - `bool stats_stage_valid(int stage)`
   - `void stats_reset(koboy_stats *s)`
   - `void stats_add(koboy_stats *s, int stage, uint64_t us)`
   - `uint64_t stats_mean_us(const koboy_stats *s, int stage)`
@@ -92,12 +93,12 @@ TEST_MAIN({
     CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_CORE), 30);
     CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_REFRESH), 1000);
 
-    /* Out-of-range stage indices are ignored, not written through. A bad
-       index here would corrupt the adjacent stage's totals, which is the
-       kind of bug that shows up as a nonsense number in a bug report. */
-    stats_add(&s, -1, 999999);
-    stats_add(&s, KOBOY_STAGE_COUNT, 999999);
-    CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_CORE), 30);
+    /* The bounds guard, asserted directly rather than by invoking undefined
+       behaviour. See stats_stage_valid's comment in stats.h. */
+    CHECK_EQ_INT(stats_stage_valid(-1), 0);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_COUNT), 0);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_CORE), 1);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_COUNT - 1), 1);
 
     char buf[256];
     stats_format(&s, buf, sizeof buf);
@@ -123,6 +124,7 @@ Create `src/stats.h`:
 ```c
 #ifndef KOBOY_STATS_H
 #define KOBOY_STATS_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -143,6 +145,13 @@ typedef struct {
     uint64_t      max_us[KOBOY_STAGE_COUNT];
     unsigned long count[KOBOY_STAGE_COUNT];
 } koboy_stats;
+
+/* Exposed only so the bounds guard can be asserted DIRECTLY. Testing it by
+   calling stats_add with an out-of-range index cannot work: those writes land
+   outside the struct or alias a different field, so the test would detect a
+   broken guard only by happening to crash. Same reasoning, and the same fix,
+   as chrome_bands in src/chrome.c. */
+bool     stats_stage_valid(int stage);
 
 void     stats_reset(koboy_stats *s);
 void     stats_add(koboy_stats *s, int stage, uint64_t us);
@@ -166,14 +175,20 @@ Create `src/stats.c`:
 /* Live bounds check, not dead code: main.c passes a stage index derived from
    control flow, and an out-of-range write here would silently corrupt the
    neighbouring stage's totals -- producing a plausible-looking wrong number in
-   a bug report, which is worse than a crash. */
-static int valid(int stage) { return stage >= 0 && stage < KOBOY_STAGE_COUNT; }
+   a bug report, which is worse than a crash. Exposed (see stats.h) rather than
+   static, so the test suite can assert it directly instead of trying to
+   observe it through stats_add: an out-of-range write from a broken guard here
+   lands outside the struct or aliases a different field, so probing it via
+   stats_add would detect a broken guard only by happening to crash on a given
+   compiler/layout -- the same UB-dependent-test mistake chrome_bands in
+   src/chrome.c exists to avoid. */
+bool stats_stage_valid(int stage) { return stage >= 0 && stage < KOBOY_STAGE_COUNT; }
 
 void stats_reset(koboy_stats *s) { memset(s, 0, sizeof *s); }
 
 void stats_add(koboy_stats *s, int stage, uint64_t us)
 {
-    if (!valid(stage)) return;
+    if (!stats_stage_valid(stage)) return;
     s->total_us[stage] += us;
     s->count[stage]++;
     if (us > s->max_us[stage]) s->max_us[stage] = us;
@@ -181,13 +196,13 @@ void stats_add(koboy_stats *s, int stage, uint64_t us)
 
 uint64_t stats_mean_us(const koboy_stats *s, int stage)
 {
-    if (!valid(stage) || s->count[stage] == 0) return 0;
+    if (!stats_stage_valid(stage) || s->count[stage] == 0) return 0;
     return s->total_us[stage] / s->count[stage];
 }
 
 uint64_t stats_max_us(const koboy_stats *s, int stage)
 {
-    return valid(stage) ? s->max_us[stage] : 0;
+    return stats_stage_valid(stage) ? s->max_us[stage] : 0;
 }
 
 void stats_format(const koboy_stats *s, char *out, size_t n)
@@ -213,14 +228,24 @@ void stats_format(const koboy_stats *s, char *out, size_t n)
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `make build/test_stats && ./build/test_stats`
-Expected: PASS — `tests/test_stats.c: 12 checks, 0 failures`
+Expected: PASS — `tests/test_stats.c: 13 checks, 0 failures`
 
 - [ ] **Step 6: Verify the bounds guard is real (mutant)**
 
-Change `valid()` to `return 1;`, rebuild, run. Expected: the two
-`stats_add(&s, -1, ...)` / `KOBOY_STAGE_COUNT` checks make
-`stats_mean_us(&s, KOBOY_STAGE_CORE)` wrong, and the test FAILS. Revert the
-mutant. Record the output in the commit body.
+Change `stats_stage_valid` to `bool stats_stage_valid(int stage) { (void)stage;
+return true; }`, rebuild, run. Expected: a graceful, deterministic failure --
+`FAIL tests/test_stats.c:NN: stats_stage_valid(-1) == 1, expected 0` and the
+same for `KOBOY_STAGE_COUNT` -- with `make build/test_stats && ./build/test_stats`
+reporting a nonzero failure count. This is the whole point of exposing the
+predicate: the earlier version of this test tried to observe the guard by
+calling `stats_add` with an out-of-range index, which writes outside the
+struct or aliases a different field and can therefore only be detected by
+however that undefined behaviour happens to manifest on a given
+compiler/layout (on x86-64/gcc -O2 it segfaulted before any assertion ran,
+rather than failing the assertion it was meant to guard) -- the same class of
+defect `chrome_bands` in `src/chrome.c` exists to avoid. Asserting
+`stats_stage_valid` directly makes the mutant's failure deterministic on every
+libc. Revert the mutant. Record the output in the commit body.
 
 - [ ] **Step 7: Wire the counters into the emulator loop**
 

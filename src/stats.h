@@ -1,5 +1,6 @@
 #ifndef KOBOY_STATS_H
 #define KOBOY_STATS_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -20,6 +21,13 @@ typedef struct {
     uint64_t      max_us[KOBOY_STAGE_COUNT];
     unsigned long count[KOBOY_STAGE_COUNT];
 } koboy_stats;
+
+/* Exposed only so the bounds guard can be asserted DIRECTLY. Testing it by
+   calling stats_add with an out-of-range index cannot work: those writes land
+   outside the struct or alias a different field, so the test would detect a
+   broken guard only by happening to crash. Same reasoning, and the same fix,
+   as chrome_bands in src/chrome.c. */
+bool     stats_stage_valid(int stage);
 
 void     stats_reset(koboy_stats *s);
 void     stats_add(koboy_stats *s, int stage, uint64_t us);
