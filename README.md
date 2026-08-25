@@ -63,17 +63,21 @@ cannot damage the device identity; it just declines to start.
 
 - The two page-turn buttons are A and B. The first launch asks you to press each
   one and records the key codes in `koboy.ini`.
-- The touchscreen is the d-pad: the lower-left region of the faceplate. `cross`
-  mode splits it into four fixed zones, `relative` mode steers from wherever you
-  first touched.
+- The touchscreen is the d-pad: the lower-left region of the faceplate. The
+  default `cross` mode splits the drawn cross into four fixed zones, which is
+  what the drawing implies; `dpad_mode = relative` instead steers from wherever
+  you first touched, thumb-pad style, and needs a drag rather than a tap.
 - The power button quits, and so does `SIGTERM`. Battery saves are written
   atomically every ten seconds and again on exit.
 - Exiting puts the panel back the way Nickel left it and starts Nickel again.
   You should end up back on the home screen without rebooting.
 
 Everything else is in `koboy.ini`, which documents each key inline: render
-scale, how often the ghosting cleanup flashes, which waveform to use for fast
-refreshes, d-pad geometry.
+scale, which waveform to use for fast refreshes, d-pad geometry, and the two
+ghosting mitigations that ship *disabled* --- the driver's own waveform choice
+made them redundant, and measuring showed they were the only thing making the
+panel flash. The file explains that in place, so nobody turns them back on
+thinking they were forgotten.
 
 If something goes wrong, `.adds/koboy/koboy.log` has the whole story --- the
 launcher logs every step of stopping and restarting Nickel, and koboy's own

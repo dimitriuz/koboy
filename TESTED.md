@@ -11,7 +11,16 @@ broken, just unmeasured. If you run koboy on one, please add a row.
 
 | Device | Platform | Firmware | Panel | Buttons | `wfm_fast` | fps at 5x | Status |
 |---|---|---|---|---|---|---|---|
-| Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, both usable after calibration | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- plays, exits to a working Nickel, no reboot |
+| Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, both usable after calibration | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
+
+That row was verified with the shipped defaults, which is the point of shipping
+them: `waveform_fast = auto`, `full_refresh_permille = 1000` (never force a
+flash), `cleanup_interval = 0` and `cleanup_max_ms = 0` (no periodic flash --- 
+AUTO already erases where erasing is needed), and `dpad_mode = cross`. A full
+game of Tetris on those settings: controls responsive, **no flashing at all**,
+and slight ghosting the player was happy to live with. The earlier defaults
+(`450` / `60` / `3000`) were mitigations for a forced-DU4 pipeline and, once
+measured, turned out to cause every flash between them while fixing nothing.
 
 ## How to add a row
 

@@ -6,12 +6,20 @@ TEST_MAIN({
     config_defaults(&c);
     CHECK_EQ_INT(c.scale, 5);
     CHECK_EQ_INT(c.present_divisor, 3);
-    CHECK_EQ_INT(c.cleanup_interval, 60);
-    CHECK_EQ_INT(c.full_refresh_permille, 450);
-    CHECK_EQ_INT(c.cleanup_max_ms, 3000);
+    /* The ghosting mitigations default OFF and the flash-promotion threshold
+       defaults to "never" (the dirty area cannot exceed the game rect). Both
+       were written for forced DU4, which cannot erase; AUTO can, and measuring
+       showed the threshold was the sole source of the flashing while the
+       cleanup never fired. Asserted here so re-enabling them is a deliberate
+       decision with a test to change, not a silent regression. */
+    CHECK_EQ_INT(c.cleanup_interval, 0);
+    CHECK_EQ_INT(c.full_refresh_permille, 1000);
+    CHECK_EQ_INT(c.cleanup_max_ms, 0);
     CHECK_EQ_INT(c.wfm_fast_policy, KOBOY_WFM_AUTO);
     CHECK(c.grab_input);
-    CHECK_EQ_INT(c.dpad_mode, KOBOY_DPAD_RELATIVE);
+    /* CROSS: the chrome draws an absolute cross, so the input model has to be
+       the absolute one. */
+    CHECK_EQ_INT(c.dpad_mode, KOBOY_DPAD_CROSS);
     CHECK_EQ_INT(c.key_a, 0);
 
     /* 5x fits every supported panel */

@@ -14,40 +14,49 @@ void config_defaults(koboy_config *c)
     memset(c, 0, sizeof *c);
     c->scale = 5;
     c->present_divisor = 3;
-    /* MEASURED consequence of the DU4 mapping: DU4 is a fast *non-flashing*
-       waveform, so it never fully resets pixel state and residue accumulates on
-       every update no matter how small the rect. The only thing that clears it
-       is a flashing GC16, so how often that happens is the whole ghosting/
-       flashing trade-off. 200 presented frames is ~8s at the measured ~25fps,
-       which was far too much: the panel showed several Tetris scenes layered on
-       top of each other. 60 is ~2.4s. Tunable because where you want to sit on
-       that trade is a matter of taste. */
-    c->cleanup_interval = 60;
-    /* MEASURED, and the reason a frame counter alone is not enough: the dirty
-       rect logic suppresses unchanged frames, so the *presented* rate is
-       nothing like 60fps. Over 70s of real Tetris gameplay only 45 frames were
-       presented -- 0.64/s. A 60-presented-frame interval is therefore ~90s of
-       wall clock, and a short session never cleans at all (measured: 0
-       cleanups in that run). Ghosting is a function of elapsed time, not of how
-       many frames we happened to send, so there is also a wall-clock ceiling.
-       Whichever trips first wins. */
-    c->cleanup_max_ms = 3000;
-    /* A dirty rect covering >= 45% of the game rect means the scene has
-       substantially changed -- exactly when layered residue is most visible,
-       and already an expensive refresh, so the surcharge for flashing it is
-       proportionally small. Measured on the device: only 13 of 84 refreshes in
-       a title-sequence run were that large. */
-    c->full_refresh_permille = 450;
-    /* AUTO, not DU4. Forcing DU4 on every refresh overrides the EPDC's own
-       transition analysis, and DU4 is a non-flashing waveform that cannot
-       erase -- so a Game Boy sprite's previous position was never cleared and
-       the panel showed the piece twice. The controller already inspects what is
-       actually changing in each region and picks a waveform that can handle it;
-       gambatte-k2 on Kindle never selects a waveform for exactly this reason.
-       Set waveform_fast = du4 to force the faster non-erasing waveform. */
+    /* Ghosting mitigation, DISABLED BY DEFAULT, and the history matters
+       because "off" looks like an oversight otherwise.
+
+       Both this and full_refresh_permille below were written for a forced-DU4
+       pipeline. DU4 is a non-flashing waveform that cannot erase, so residue
+       accumulated on every update and only a flashing GC16 cleared it; a
+       periodic cleanup and a "large dirty area" promotion were the two ways of
+       scheduling that flash. Then the fast waveform became AUTO, and AUTO hands
+       the choice to the EPDC, which inspects the actual pixel transitions in
+       each region and already picks something capable of erasing when a region
+       is erasing. That made both mitigations redundant.
+
+       MEASURED on the Libra 2, from a refresh trace: 35 AUTO refreshes on small
+       rects, none of which flashed, against 21 GC16 flashes -- every single one
+       of them a large region tripping the 450-permille threshold below. Zero
+       scheduled cleanups fired in the whole run. So the threshold was causing
+       all of the flashing the user complained about and the cleanup was doing
+       nothing at all.
+
+       With both off, a full game of Tetris played with no flashing whatever and
+       only slight ghosting, which is the trade the user preferred. Raise
+       cleanup_interval (presented frames) or cleanup_max_ms (wall clock) if you
+       want the periodic flash back; the wall-clock ceiling exists because the
+       dirty-rect pass suppresses unchanged frames, so a presented-frame counter
+       is a poor clock -- 70s of measured gameplay presented only 45 frames. */
+    c->cleanup_interval = 0;
+    c->cleanup_max_ms = 0;
+    /* 1000 permille: never promote a frame to the flashing waveform, because
+       the dirty area cannot exceed the game rect. See the note above -- this
+       threshold, not the cleanup, was the measured source of the flashing.
+       Lower it (450 was the old default) to force a flash on large scene
+       changes, which is worth having only if the driver's own choice leaves
+       residue you can see. */
+    c->full_refresh_permille = 1000;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->grab_input = true;
-    c->dpad_mode = KOBOY_DPAD_RELATIVE;
+    /* CROSS, because the faceplate chrome draws an absolute four-way cross and
+       the drawn UI has to agree with the input model -- the drawing is the part
+       a user trusts. Relative mode steers from wherever the finger first landed,
+       which needs a drag that a drawn cross gives no hint of: the user could not
+       steer at all in relative mode and could immediately in cross mode. Set
+       dpad_mode = relative for the thumb-pad behaviour. */
+    c->dpad_mode = KOBOY_DPAD_CROSS;
     c->dpad_deadzone = 24;
     c->dpad_hysteresis = 10;
     snprintf(c->core_path, sizeof c->core_path, "gambatte_libretro.so");
