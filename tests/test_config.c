@@ -21,7 +21,16 @@ TEST_MAIN({
     /* CROSS: the chrome draws an absolute cross, so the input model has to be
        the absolute one. */
     CHECK_EQ_INT(c.dpad_mode, KOBOY_DPAD_CROSS);
-    CHECK_EQ_INT(c.key_a, 0);
+    /* The shipped button mapping, NOT the 0 "uncalibrated" sentinel. Asserted
+       by value because the sentinel is what deadlocked first run on a Kobo with
+       no page-turn buttons: see the note in config_defaults and test_calib.c.
+       193/194 are KEY_F23/KEY_F24, measured on the Libra 2's gpio-keys node;
+       116 is KEY_POWER and must never appear here. */
+    CHECK_EQ_INT(c.key_a, KOBOY_KEY_PAGE_F23);
+    CHECK_EQ_INT(c.key_b, KOBOY_KEY_PAGE_F24);
+    CHECK_EQ_INT(c.key_a, 193);
+    CHECK_EQ_INT(c.key_b, 194);
+    CHECK(c.key_a != KOBOY_KEY_POWER && c.key_b != KOBOY_KEY_POWER);
 
     /* The promotion DECISION, not just the stored threshold. Checking only that
        the default is 1000 would let a >= silently become a >, or the bounding

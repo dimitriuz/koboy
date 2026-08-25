@@ -21,6 +21,21 @@ typedef enum { KOBOY_DPAD_RELATIVE = 0, KOBOY_DPAD_CROSS } koboy_dpad_mode;
    quicker per refresh, but it cannot erase, so trails accumulate. */
 typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
 
+/* Linux evdev key codes, mirrored rather than #included, for the same reason
+   input.h mirrors input_event: portable code in this project never pulls in
+   <linux/input.h>, so the host tests build on any machine. Only the codes koboy
+   itself names are here.
+
+   MEASURED on the author's Libra 2 (design spec Appendix A, input-device table,
+   and §12): the `gpio-keys` node advertises exactly KEY_F1(59), KEY_POWER(116),
+   KEY_F23(193) and KEY_F24(194). F23/F24 are the two page-turn buttons, which is
+   why they are the shipped default mapping for A and B; POWER is the quit key and
+   must never become a game button (calib.c rejects it, and so does the escape
+   path in calib_escape). */
+#define KOBOY_KEY_POWER    116
+#define KOBOY_KEY_PAGE_F23 193
+#define KOBOY_KEY_PAGE_F24 194
+
 /* libretro RETRO_DEVICE_ID_JOYPAD_* as bits */
 #define KOBOY_BTN_B      (1u << 0)
 #define KOBOY_BTN_SELECT (1u << 2)

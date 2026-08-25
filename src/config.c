@@ -15,6 +15,20 @@ void config_defaults(koboy_config *c)
 {
     memset(c, 0, sizeof *c);
     c->scale = 5;
+    /* SHIPPED BUTTON DEFAULTS, and the history matters because a zero here looks
+       harmless. calib_needed() treats 0 as "not calibrated", the memset above
+       makes both keys 0, and the calibration loop only advances on a hardware key
+       press -- so a first run on a touch-only Kobo (Clara family, Nia, Elipsa,
+       all supported by spec §3) sat on "press the button you want as A" forever
+       with nothing but the power button doing anything. Spec §7 mandates built-in
+       defaults as a starting guess that calibration then overrides; this is that
+       guess, and shipping the sentinel instead was the bug.
+       The codes are the two page-turn buttons MEASURED on the Libra 2's gpio-keys
+       node (spec §12 and the input-device table). Never default either of them to
+       KOBOY_KEY_POWER: the buttons share that node with it and power is the quit
+       key. */
+    c->key_a = KOBOY_KEY_PAGE_F23;
+    c->key_b = KOBOY_KEY_PAGE_F24;
     c->present_divisor = 3;
     /* Ghosting mitigation, DISABLED BY DEFAULT, and the history matters
        because "off" looks like an oversight otherwise.

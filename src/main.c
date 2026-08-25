@@ -296,28 +296,69 @@ int main(int argc, char **argv)
                here would hang the smoke test forever. */
             say("koboy: uncalibrated, skipping calibration for a scripted run\n");
         } else {
+            /* A throwaway input object, whose only job is to let this loop SEE A
+               TOUCH. It exists because the loop used to advance on nothing but
+               platform_poll_raw_key(): on a Kobo with no page-turn buttons there
+               was no key to press, no way to answer the prompt, and the only
+               thing that responded at all was the power button, which quits. The
+               real input object is created below instead of being reused here on
+               purpose -- input_create copies the config by value, so one made
+               before calibration would carry the pre-calibration key mapping for
+               the whole session. */
+            koboy_input *cal_in = input_create(&cfg, &prof);
+            if (!cal_in) {
+                fatal("out of memory");
+                free(panel); pf->shutdown(pf->ctx); return 1;
+            }
+#ifdef KOBOY_PLATFORM_KOBO
+            platform_kobo_setup_touch(pf, cal_in);
+#else
+            input_set_touch_transform(cal_in, pw, ph, false, false, false);
+#endif
             koboy_calib k;
             calib_begin(&k, &cfg);
-            bool done = false;
+            bool done = false, escaped = false;
             int last_stage = -1;
-            while (!done && !g_stop && !pf->should_quit(pf->ctx)) {
+            while (!done && !escaped && !g_stop && !pf->should_quit(pf->ctx)) {
                 if (k.stage != last_stage) {
                     last_stage = k.stage;
                     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
                     draw_centred(panel, panel_stride, pw, ph, ph / 2 - 40,
                                  calib_prompt(&k), 5, 0x00);
+                    /* The escape has to be ON THE PANEL. A device that cannot
+                       answer the prompt is exactly the device whose user has no
+                       terminal and no other way to find out. */
+                    draw_centred(panel, panel_stride, pw, ph, ph / 2 + 40,
+                                 calib_escape_prompt(), 3, 0x00);
                     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
                     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
-                    say("koboy: %s\n", calib_prompt(&k));
+                    say("koboy: %s (%s)\n", calib_prompt(&k), calib_escape_prompt());
                 }
+                /* Touch FIRST, keys second, and the order is load-bearing:
+                   platform_poll_raw_key drains the same event nodes with a NULL
+                   input, which throws away every touch event it passes over. */
+                pf->poll_input(pf->ctx, cal_in);
+                const koboy_input_state *cal_st = input_state(cal_in);
+                for (int t = 0; t < KOBOY_MAX_TOUCH; t++)
+                    if (cal_st->touch[t].down) { escaped = true; break; }
+
                 uint16_t code;
                 while (platform_poll_raw_key(pf, &code))
                     if (calib_feed_key(&k, code)) { done = true; break; }
                 usleep(5000);
             }
+            input_destroy(cal_in);
             if (done && calib_commit(&k, &cfg, ini_path))
                 say("koboy: calibrated a=%u b=%u -> %s\n",
                     (unsigned)cfg.key_a, (unsigned)cfg.key_b, ini_path);
+            if (escaped) {
+                /* Not just "break out of the loop": leaving the zero sentinel in
+                   place would make input_feed_key ignore every key for the rest
+                   of the session. */
+                calib_escape(&cfg);
+                say("koboy: calibration skipped by touch, keeping a=%u b=%u\n",
+                    (unsigned)cfg.key_a, (unsigned)cfg.key_b);
+            }
 
             /* Put the faceplate back: calibration wrote over it. */
             memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
