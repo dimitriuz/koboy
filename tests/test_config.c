@@ -219,16 +219,43 @@ TEST_MAIN({
         char path[512];
         snprintf(path, sizeof path, "%s/koboy.ini", dir);
 
+        /* force_dither's built-in default is false, so blanking it and
+           comparing against that default already distinguishes fixed from
+           broken: the old as_bool("") returns true, which does not equal
+           false. */
         FILE *f = fopen(path, "w");
         CHECK(f != NULL);
-        fputs("grab_input = \nforce_dither =   \n", f);
+        fputs("force_dither =   \n", f);
         fclose(f);
 
         koboy_config c; config_defaults(&c);
-        bool grab_default = c.grab_input, dither_default = c.force_dither;
+        bool dither_default = c.force_dither;
         CHECK(config_load(&c, path));
-        CHECK_EQ_INT(c.grab_input, grab_default);
         CHECK_EQ_INT(c.force_dither, dither_default);
+
+        /* grab_input's built-in default is true, which the broken
+           as_bool("") also returned -- so comparing a blanked value against
+           the compiled-in default cannot fail either way, whichever as_bool
+           is linked in. That was a vacuous assertion, precisely the defect
+           class this task exists to remove. Fix it by making the assertion
+           DISTINGUISHING: set grab_input false on an earlier line, then
+           blank it on a later one. The fixed code must leave the prior
+           (false) value alone; the broken code flips it back to true. */
+        f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("grab_input = false\n", f);
+        fclose(f);
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.grab_input, 0);
+
+        f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("grab_input = false\ngrab_input = \n", f);
+        fclose(f);
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.grab_input, 0);      /* blank did not resurrect it */
 
         /* Explicit values still work in both directions. */
         f = fopen(path, "w");
