@@ -364,6 +364,7 @@ int main(int argc, char **argv)
 
     unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
     uint64_t last_sram_us = pf->now_us(pf->ctx);
+    uint64_t last_cleanup_us = last_sram_us;
 
     while (!g_stop && !pf->should_quit(pf->ctx)) {
         if (frame_limit && pace.frames >= frame_limit) break;
@@ -422,9 +423,20 @@ int main(int argc, char **argv)
            without it, 0 makes this always true (a full refresh every presented
            frame, the inverse of "never") and a negative value wraps the cast so
            cleanup never runs at all. */
-        if (cfg.cleanup_interval > 0 &&
-            ++since_cleanup >= (unsigned long)cfg.cleanup_interval) {
+        bool due = (cfg.cleanup_interval > 0 &&
+                    ++since_cleanup >= (unsigned long)cfg.cleanup_interval);
+        /* Wall-clock ceiling. The presented-frame counter above cannot be
+           trusted to fire on any particular schedule: unchanged frames are
+           suppressed, and 70s of measured Tetris gameplay presented only 45
+           frames. Ghosting accumulates with time, so time is the backstop. */
+        if (!due && cfg.cleanup_max_ms > 0) {
+            uint64_t now = pf->now_us(pf->ctx);
+            if (now - last_cleanup_us >= (uint64_t)cfg.cleanup_max_ms * 1000ull)
+                due = true;
+        }
+        if (due) {
             since_cleanup = 0;
+            last_cleanup_us = pf->now_us(pf->ctx);
             cleanups++;
             /* Scoped to the game rect, never the full panel: a full-panel flash
                would disturb chrome that has no reason to change. */

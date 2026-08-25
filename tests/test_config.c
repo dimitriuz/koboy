@@ -8,6 +8,8 @@ TEST_MAIN({
     CHECK_EQ_INT(c.present_divisor, 3);
     CHECK_EQ_INT(c.cleanup_interval, 60);
     CHECK_EQ_INT(c.full_refresh_permille, 450);
+    CHECK_EQ_INT(c.cleanup_max_ms, 3000);
+    CHECK_EQ_INT(c.wfm_fast_policy, KOBOY_WFM_AUTO);
     CHECK(c.grab_input);
     CHECK_EQ_INT(c.dpad_mode, KOBOY_DPAD_RELATIVE);
     CHECK_EQ_INT(c.key_a, 0);

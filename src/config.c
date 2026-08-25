@@ -23,6 +23,15 @@ void config_defaults(koboy_config *c)
        top of each other. 60 is ~2.4s. Tunable because where you want to sit on
        that trade is a matter of taste. */
     c->cleanup_interval = 60;
+    /* MEASURED, and the reason a frame counter alone is not enough: the dirty
+       rect logic suppresses unchanged frames, so the *presented* rate is
+       nothing like 60fps. Over 70s of real Tetris gameplay only 45 frames were
+       presented -- 0.64/s. A 60-presented-frame interval is therefore ~90s of
+       wall clock, and a short session never cleans at all (measured: 0
+       cleanups in that run). Ghosting is a function of elapsed time, not of how
+       many frames we happened to send, so there is also a wall-clock ceiling.
+       Whichever trips first wins. */
+    c->cleanup_max_ms = 3000;
     /* A dirty rect covering >= 45% of the game rect means the scene has
        substantially changed -- exactly when layered residue is most visible,
        and already an expensive refresh, so the surcharge for flashing it is
@@ -178,6 +187,7 @@ bool config_load(koboy_config *c, const char *path)
         if      (!strcmp(k, "scale"))            c->scale = atoi(v);
         else if (!strcmp(k, "present_divisor"))  c->present_divisor = atoi(v);
         else if (!strcmp(k, "cleanup_interval")) c->cleanup_interval = atoi(v);
+        else if (!strcmp(k, "cleanup_max_ms"))   c->cleanup_max_ms = atoi(v);
         else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v);
         else if (!strcmp(k, "grab_input"))       c->grab_input = as_bool(v);
         else if (!strcmp(k, "dpad_deadzone"))    c->dpad_deadzone = atoi(v);

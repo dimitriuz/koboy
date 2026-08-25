@@ -6,6 +6,7 @@ typedef struct {
     int      scale;              /* 0 = pick the largest that fits */
     int      present_divisor;    /* core frames per presented frame */
     int      cleanup_interval;   /* presented frames between game-rect cleanups */
+    int      cleanup_max_ms;     /* wall-clock ceiling between cleanups; <=0 off */
     int      wfm_fast_policy;    /* koboy_wfm_policy for KOBOY_REFRESH_FAST */
     int      full_refresh_permille; /* dirty area (permille of game rect) above
                                        which a frame is refreshed with FULL
