@@ -27,6 +27,7 @@
 #include "uiscript.h"
 #include "video.h"
 
+#include <limits.h>        /* PATH_MAX, for the exe-dir join below core selection */
 #include <signal.h>
 #include <stdarg.h>
 #include <stdio.h>
@@ -412,7 +413,8 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(argv[0]); return 0; }
         else if (!has_val) { fprintf(stderr, "koboy: missing value for %s\n", a); return 2; }
         else if (!strcmp(a, "--rom"))      { snprintf(cfg.rom_path,  sizeof cfg.rom_path,  "%s", argv[++i]); rom_from_argv = true; }
-        else if (!strcmp(a, "--core"))     snprintf(cfg.core_path, sizeof cfg.core_path, "%s", argv[++i]);
+        /* Explicit, so the ROM's extension does not override it below. */
+        else if (!strcmp(a, "--core"))     { snprintf(cfg.core_path, sizeof cfg.core_path, "%s", argv[++i]); cfg.core_explicit = true; }
         else if (!strcmp(a, "--save-dir")) snprintf(cfg.save_dir,  sizeof cfg.save_dir,  "%s", argv[++i]);
         else if (!strcmp(a, "--config"))   i++;   /* already handled */
         else if (!strcmp(a, "--message"))  message = argv[++i];
@@ -803,6 +805,32 @@ int main(int argc, char **argv)
        the real game rect depends on the core's geometry (config_resolve_profile
        call further down), which libretro only answers honestly once a game is
        loaded -- so the buffers that rect sizes have to wait for it too. */
+    /* The core is picked from the chosen ROM's extension, and only here:
+       everything above ran before the browser knew which file the user would
+       tap, and config_resolve_paths (way up in the argument parsing) could
+       only resolve the DEFAULT. An explicit `core=` or --core wins outright
+       -- core_explicit is the only way to tell "the user named gambatte"
+       from "config_defaults wrote gambatte because it always does".
+       The name goes back through config_join_sibling rather than being used
+       raw, because dlopen never searches the cwd (see config.c's essay): a
+       bare "gw_libretro.so" would be looked for everywhere except beside the
+       binary. If the exe directory cannot be determined the bare name is
+       kept, matching config_resolve_paths' own "leave paths as-is" fallback. */
+    if (!cfg.core_explicit) {
+        const char *want = config_core_for_rom(cfg.rom_path);
+        char        dir[PATH_MAX], joined[512];
+        if (config_exe_dir(dir, sizeof dir) &&
+            config_join_sibling(joined, sizeof joined, want, dir))
+            snprintf(cfg.core_path, sizeof cfg.core_path, "%s", joined);
+        else
+            snprintf(cfg.core_path, sizeof cfg.core_path, "%s", want);
+    }
+
+    /* Logged, not silent: two cores ship now and "which one did it pick?" is
+       otherwise unanswerable on a device with no terminal, where the only
+       symptom of a wrong pick is a core that rejects the ROM. */
+    say("koboy: core %s\n", cfg.core_path);
+
     char err[512];
     koboy_core *core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);
     if (!core) {

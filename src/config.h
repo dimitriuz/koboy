@@ -28,6 +28,14 @@ typedef struct {
     char     rom_path[512];
     char     rom_dir[512];       /* where the browser looks; install-relative */
     char     core_path[512];
+    bool     core_explicit;      /* the user named a core (ini `core=` or
+                                    --core), as opposed to config_defaults'
+                                    gambatte fallback. Needed because the
+                                    default is written into core_path
+                                    unconditionally, so the string alone
+                                    cannot say whether anyone asked for it --
+                                    and only an unasked-for core may be
+                                    overridden by the ROM's extension. */
     char     save_dir[512];
     koboy_layout layout;
 } koboy_config;
@@ -61,6 +69,11 @@ bool config_promote_full(const koboy_config *c, long dirty_px, long whole_px);
    running executable. See the long comment in config.c: dlopen() never looks in
    the cwd for a name with no slash, so a bare core name could not be found on
    the device at all. */
+/* Which core should load this ROM? Returns a bare core filename (no slash) --
+   config_resolve_paths' sibling-join turns it into an absolute path later, for
+   the reason dlopen documents and this project learned the hard way. */
+const char *config_core_for_rom(const char *rom_path);
+
 bool config_join_sibling(char *out, size_t n, const char *name, const char *dir);
 bool config_exe_dir(char *out, size_t n);
 void config_resolve_paths(koboy_config *c);

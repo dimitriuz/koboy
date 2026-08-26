@@ -39,6 +39,14 @@ TEST_MAIN({
     CHECK_EQ_INT(c.key_b, 194);
     CHECK(c.key_a != KOBOY_KEY_POWER && c.key_b != KOBOY_KEY_POWER);
 
+    /* The default core, and -- separately -- the fact that NOBODY ASKED for
+       it. main.c overrides an unasked-for core from the ROM's extension, so
+       these two are different facts and both have to hold: the string alone
+       cannot distinguish "the user configured gambatte" from "config_defaults
+       always writes gambatte". */
+    CHECK(strcmp(c.core_path, "gambatte_libretro.so") == 0);
+    CHECK(!c.core_explicit);
+
     /* key_start/key_select: a GUESS (BTN_TL/BTN_TR, the Xbox pad's measured
        shoulder buttons), unlike key_a/key_b's measured page-turn default --
        asserted by value, same reasoning as key_a/key_b above, and never
@@ -447,6 +455,108 @@ TEST_MAIN({
         CHECK_EQ_INT(c.scale, 4);
         CHECK_EQ_INT(c.key_a, 193);
         CHECK_EQ_INT(c.key_b, 194);
+
+        char cmd[1024];
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+        if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
+    }
+
+    /* ----------------------------------------------- core by extension */
+    {
+        /* Game & Watch content goes to gw-libretro; everything else the
+           browser lists goes to gambatte. Case-insensitive, matching the
+           browser filter, because a collection copied off a PC has both
+           cases in it. */
+        CHECK(strcmp(config_core_for_rom("BALL.mgw"), "gw_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("BALL.MGW"), "gw_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("BALL.Mgw"), "gw_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/mnt/onboard/.adds/koboy/roms/OCTOPUS.mgw"),
+                     "gw_libretro.so") == 0);
+
+        CHECK(strcmp(config_core_for_rom("ZELDA.gb"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("ZELDA.GB"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("KIRBY.gbc"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("KIRBY.GBC"), "gambatte_libretro.so") == 0);
+        /* An extensionless name, and the empty/NULL rom_path a run that
+           reaches core_open with nothing chosen would carry. Falling back to
+           gambatte keeps that run failing exactly the way it used to, in
+           core_open, rather than crashing here. */
+        CHECK(strcmp(config_core_for_rom("SOMETHING"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom(""), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom(NULL), "gambatte_libretro.so") == 0);
+        /* Superstring and prefix, same trap as the browser filter. */
+        CHECK(strcmp(config_core_for_rom("BALL.mgwx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("BALL.mg"), "gambatte_libretro.so") == 0);
+
+        /* The result must stay SLASHLESS. config_join_sibling passes any name
+           containing a slash through verbatim, so a "cores/gw_libretro.so"
+           returned here would reach dlopen as a cwd-relative path and fail on
+           a menu launch that sets no cwd -- the exact bug the sibling-join
+           exists to prevent. */
+        CHECK(strchr(config_core_for_rom("BALL.mgw"), '/') == NULL);
+        CHECK(strchr(config_core_for_rom("ZELDA.gb"), '/') == NULL);
+
+        /* The length guard in ends_with_mgw, made deterministic rather than
+           ASan-only -- same construction as tests/test_romlist.c's short-name
+           case, and for the same reason: with the guard removed the backward
+           read for a 1-character name walks off the front of the string, and
+           spelling ".mgw" into the bytes immediately before it turns that
+           into an observable WRONG ANSWER (a file called "w" routed to the
+           Game & Watch core) instead of undefined behaviour a test cannot
+           legitimately observe. */
+        {
+            char pad[5] = { '.', 'm', 'g', 'w', '\0' };
+            CHECK(strcmp(config_core_for_rom(&pad[3]),   /* pad[3..] is "w" */
+                         "gambatte_libretro.so") == 0);
+        }
+    }
+
+    /* THE SHIPPED ini must not name a core. `core =` is what marks the choice
+       explicit, and an explicit choice turns OFF the .mgw -> gw-libretro
+       routing -- so a config/koboy.ini that merely restated the gambatte
+       default would pin every install to gambatte with every other test in
+       this file still green. It did exactly that until this check was
+       written. Read from the repo-relative path DEFAULT_INI uses, so `make
+       test` (run from the repo root) checks the real shipped file rather
+       than a copy. */
+    {
+        config_defaults(&c);
+        CHECK(config_load(&c, "config/koboy.ini"));
+        CHECK(!c.core_explicit);
+    }
+
+    /* ------------------------------------------- explicit core wins ---- */
+    {
+        char dir[] = "/tmp/koboy_core_ini_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        char path[512];
+
+        /* An ini that names a core marks the choice explicit, which is what
+           stops main.c overriding it from the ROM's extension. */
+        snprintf(path, sizeof path, "%s/explicit.ini", dir);
+        FILE *f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("core = my_libretro.so\n", f);
+        fclose(f);
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK(strcmp(c.core_path, "my_libretro.so") == 0);
+        CHECK(c.core_explicit);
+
+        /* An ini that says nothing about the core leaves the flag alone, so
+           the default stays overridable. Asserted separately because a
+           config_load that set core_explicit unconditionally -- or that never
+           set it -- would pass one of these two and fail the other. */
+        snprintf(path, sizeof path, "%s/quiet.ini", dir);
+        f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("scale = 4\n", f);
+        fclose(f);
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.scale, 4);
+        CHECK(strcmp(c.core_path, "gambatte_libretro.so") == 0);
+        CHECK(!c.core_explicit);
 
         char cmd[1024];
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);

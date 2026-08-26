@@ -99,6 +99,10 @@ void config_defaults(koboy_config *c)
     c->dpad_mode = KOBOY_DPAD_CROSS;
     c->dpad_deadzone = 24;
     c->dpad_hysteresis = 10;
+    /* Written unconditionally, and core_explicit deliberately left false by
+       the memset above: a run with no ini and no browser must still open
+       gambatte exactly as it always has, while config_core_for_rom stays
+       free to override a default nobody asked for. */
     snprintf(c->core_path, sizeof c->core_path, "gambatte_libretro.so");
     snprintf(c->save_dir, sizeof c->save_dir, ".");
     snprintf(c->rom_dir, sizeof c->rom_dir, "roms");
@@ -135,6 +139,45 @@ void config_defaults(koboy_config *c)
                             Sage   1440x1920  x[1080..1368] y[1714..1818] gap 58  clear 133  right-margin 72 */
                        .menu_cx = 850, .menu_cy = 920, .menu_w = 200, .menu_h = 55 };
     c->layout = l;
+}
+
+/* ------------------------------------------------------ core by extension
+ *
+ * koboy now ships two cores, and which one a file needs is knowable from its
+ * name alone: gw-libretro eats .mgw, gambatte eats everything else this
+ * project lists. The browser hands main.c a path long after the config was
+ * read, so this cannot live in config_load -- it is a pure function of the
+ * ROM name, called at load time.
+ *
+ * Its own case-insensitive suffix match rather than strcasecmp, and rather
+ * than borrowing romlist.c's: config is the lower layer of the two (romlist
+ * includes nothing of config's and must keep it that way), and <strings.h>
+ * is the kind of host-dependent header this project keeps out of portable
+ * code. Six lines is cheaper than either coupling.
+ */
+static bool ends_with_mgw(const char *s)
+{
+    static const char ext[] = ".mgw";
+    size_t ls = strlen(s), lx = sizeof ext - 1;
+    /* LIVE GUARD: a name shorter than the suffix ("a.gb" is fine, "gb" is
+       not) would make s + ls - lx read before the string. */
+    if (lx > ls) return false;
+    const char *tail = s + ls - lx;
+    for (size_t i = 0; i < lx; i++) {
+        char c = tail[i];
+        if (c >= 'A' && c <= 'Z') c += 32;
+        if (c != ext[i]) return false;
+    }
+    return true;
+}
+
+const char *config_core_for_rom(const char *rom_path)
+{
+    /* No name at all still answers gambatte: the caller writes the result
+       into core_path unconditionally, and a NULL return would be a crash
+       where the old unconditional default was merely useless. */
+    if (!rom_path || !*rom_path) return "gambatte_libretro.so";
+    return ends_with_mgw(rom_path) ? "gw_libretro.so" : "gambatte_libretro.so";
 }
 
 /* ------------------------------------------------- install-relative paths
@@ -314,7 +357,9 @@ bool config_load(koboy_config *c, const char *path)
         }
         else if (!strcmp(k, "waveform_fast"))
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
-        else if (!strcmp(k, "core"))             snprintf(c->core_path, sizeof c->core_path, "%s", v);
+        /* An ini `core=` is an explicit choice and outranks the ROM's
+           extension -- see core_explicit in config.h. */
+        else if (!strcmp(k, "core"))             { snprintf(c->core_path, sizeof c->core_path, "%s", v); c->core_explicit = true; }
         else if (!strcmp(k, "save_dir"))         snprintf(c->save_dir,  sizeof c->save_dir,  "%s", v);
         else if (!strcmp(k, "menu_cx"))          c->layout.menu_cx = atoi(v);
         else if (!strcmp(k, "menu_cy"))          c->layout.menu_cy = atoi(v);

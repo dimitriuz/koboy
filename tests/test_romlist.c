@@ -45,6 +45,21 @@ TEST_MAIN({
     /* A dotfile that merely CONTAINS gb is not a rom. */
     CHECK_EQ_INT(romlist_is_rom("gbfile"), 0);
 
+    /* .mgw is Game & Watch content for gw-libretro, listed in the SAME
+       browser as Game Boy ROMs because the core is chosen from the extension
+       at load time (config_core_for_rom), not from a per-system list. */
+    CHECK_EQ_INT(romlist_is_rom("BALL.mgw"), 1);
+    CHECK_EQ_INT(romlist_is_rom("BALL.MGW"), 1);
+    CHECK_EQ_INT(romlist_is_rom("BALL.Mgw"), 1);
+    CHECK_EQ_INT(romlist_is_rom(".mgw"), 1);
+    /* Neither a superstring nor a prefix of the extension counts. A filter
+       written with strstr, or with a 3-character compare, would accept both
+       of these -- and the browser would then hand gw-libretro a file it
+       cannot parse. */
+    CHECK_EQ_INT(romlist_is_rom("BALL.mgwx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("BALL.mg"), 0);
+    CHECK_EQ_INT(romlist_is_rom("BALL.gw"), 0);
+
     /* The short-name guard's failure mode, made deterministic instead of
        ASan-only: if ends_with_ci's `if (lx > ls) return false;` is removed,
        the backward read for suffix ".gb" walks off the front of "b" -- but
@@ -74,9 +89,18 @@ TEST_MAIN({
     touch_file(dir, "KIRBY 2.gbc");
     touch_file(dir, "notes.txt");
     touch_file(dir, "TETRIS.srm");
+    /* Sorts LAST of the four ("zz" > "ze"), deliberately: the index-based
+       assertions below were written against a three-entry list, and a name
+       that landed anywhere else would make this addition look like it broke
+       them. */
+    touch_file(dir, "zz BALL.mgw");
+    /* Rejected by the same filter, in a real scan rather than only in the
+       predicate calls above. */
+    touch_file(dir, "zz BALL.mgwx");
 
     int n = romlist_scan(&rl, dir);
-    CHECK_EQ_INT(n, 3);
+    CHECK_EQ_INT(n, 4);
+    CHECK(strcmp(romlist_name(&rl, 3), "zz BALL.mgw") == 0);
 
     /* Sorted case-insensitively, so the list reads the way a person expects
        rather than the way readdir happened to return it. */

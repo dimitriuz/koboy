@@ -173,3 +173,77 @@ echo "$out" | grep -q '^presented=' \
     || { echo "FAIL: menu-capable build did not run"; rm -rf "$romdir"; exit 1; }
 rm -rf "$romdir"
 echo "ok: menu build runs"
+
+# ------------------------------------------------- core chosen by extension
+#
+# The DECISION lives in src/main.c (tests/test_config.c covers the predicate
+# and the core_explicit flag on their own), and it is only observable end to
+# end, because it depends on three things no unit test has: a real
+# /proc/self/exe, config_join_sibling resolving the chosen name against that
+# directory, and dlopen actually being handed the result.
+#
+# So the binary is run from a COPY in its own directory, with two stand-in
+# cores beside it named exactly what the resolver will ask for. Copying
+# rather than running ./build/koboy is the point: the sibling join is against
+# the executable's directory, so an isolated directory is what proves the
+# join happened instead of some cwd-relative accident.
+d="$(mktemp -d)"
+cp build/koboy       "$d/koboy"
+cp build/stub_core.so "$d/gambatte_libretro.so"
+cp build/stub_core.so "$d/gw_libretro.so"
+printf '\0' > "$d/GAME.mgw"
+printf '\0' > "$d/GAME.gb"
+
+# .mgw with no --core: the Game & Watch core, resolved beside the binary.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.mgw" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .mgw run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/gw_libretro.so" \
+    || { echo "FAIL: .mgw did not select the gw core"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q '^presented=' \
+    || { echo "FAIL: .mgw run never reached the emulator loop"; rm -rf "$d"; exit 1; }
+echo "ok: .mgw selects gw_libretro.so"
+
+# .gb with no --core: unchanged behaviour. This is the control -- without it,
+# a config_core_for_rom that answered "gw" for EVERYTHING would still pass
+# the assertion above.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.gb" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .gb run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/gambatte_libretro.so" \
+    || { echo "FAIL: .gb no longer selects gambatte"; rm -rf "$d"; exit 1; }
+echo "ok: .gb still selects gambatte_libretro.so"
+
+# --core beats the extension. A .mgw ROM with an explicit core must open THAT
+# core -- and the explicit path is deliberately a THIRD file, distinguishable
+# from both siblings above, so "it picked the explicit one" cannot be
+# confused with "it picked gw and gw happens to be a stub too".
+cp build/stub_core.so "$d/explicit_core.so"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --core "$d/explicit_core.so" \
+        --rom "$d/GAME.mgw" --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: explicit --core run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/explicit_core.so" \
+    || { echo "FAIL: --core lost to the .mgw extension"; rm -rf "$d"; exit 1; }
+echo "ok: --core beats the extension"
+
+# And the same for an ini `core=`, which is a separate assignment in a
+# separate file (src/config.c, not src/main.c) and can regress on its own.
+cat > "$d/explicit.ini" <<EOF
+core = $d/explicit_core.so
+EOF
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --config "$d/explicit.ini" \
+        --rom "$d/GAME.mgw" --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: ini core= run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/explicit_core.so" \
+    || { echo "FAIL: ini core= lost to the .mgw extension"; rm -rf "$d"; exit 1; }
+echo "ok: ini core= beats the extension"
+
+rm -rf "$d"

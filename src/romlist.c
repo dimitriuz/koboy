@@ -31,7 +31,12 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    return ends_with_ci(name, ".gb") || ends_with_ci(name, ".gbc");
+    /* .mgw is Game & Watch content for gw-libretro, not a Game Boy ROM; the
+       browser lists both because the core is chosen from the extension at
+       load time (config_core_for_rom), so a mixed roms/ directory is one
+       list, not two. */
+    return ends_with_ci(name, ".gb") || ends_with_ci(name, ".gbc")
+        || ends_with_ci(name, ".mgw");
 }
 
 static int name_cmp(const void *a, const void *b)
