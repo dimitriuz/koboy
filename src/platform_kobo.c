@@ -27,6 +27,7 @@
 #include "input.h"          /* must precede platform_if.h: declares struct koboy_input */
 #include "platform_if.h"
 #include "platform_kobo.h"
+#include "btinput.h"
 
 #include <fbink.h>
 
@@ -76,6 +77,15 @@ typedef struct {
     bool key_grabbed[MAX_KEY_NODES];
     bool key_has_power[MAX_KEY_NODES];
     int  n_key;
+
+    /* The gamepad slot. Separate from key_fd[] rather than one more entry in
+       it: it is the only node that can appear and disappear mid-session (see
+       gamepad_rescan and drain's ENODEV handling), and folding hot-plug logic
+       into the fixed-node array would make every key_fd[] loop above carry a
+       branch the built-in nodes never need. */
+    int      pad_fd;
+    char     pad_node[32];        /* "/dev/input/eventN", for the lost-pad log */
+    uint64_t pad_scan_at;         /* next now_us() a rescan is allowed to run */
 
     int  raw_max_x, raw_max_y;
     bool transpose, flip_x, flip_y;
@@ -191,6 +201,10 @@ static void release_input(kobo_ctx *k)
         k->key_fd[i] = -1;
     }
     k->n_key = 0;
+
+    /* No EVIOCGRAB to release here -- the pad is never grabbed in the first
+       place, see gamepad_rescan. Just close it. */
+    if (k->pad_fd >= 0) { close(k->pad_fd); k->pad_fd = -1; }
 }
 
 static kobo_ctx *g_emergency;
@@ -219,6 +233,12 @@ static void install_emergency(kobo_ctx *k)
 }
 
 /* ------------------------------------------------------------- input set-up */
+
+/* Forward-declared here (defined below, beside the rest of the vtable) so
+   both open_input()'s callees and gamepad_rescan() can time-gate against the
+   same clock the main loop uses, instead of a second clock_gettime call site
+   that could drift from it. */
+static uint64_t kobo_now_us(void *ctx);
 
 static int abs_max(int fd, unsigned int axis, int fallback)
 {
@@ -353,6 +373,50 @@ static void open_input(kobo_ctx *k)
                     "it holds EVIOCGRAB on every event node\n");
 }
 
+/* A gamepad is found through btinput_scan (/proc/bus/input/devices), not
+   fbink_input_scan above: FBInk's scan only classifies touchscreen/key/power/
+   accelerometer nodes, and a Bluetooth HID gamepad is none of those to it.
+   Kept out of open_input() and called on its own schedule instead of once at
+   start-up, because MEASURED on the reference device: BlueZ's ReconnectUUIDs
+   policy reconnects a paired gamepad on its own timetable, which frequently
+   lands after koboy has already started -- a start-up-only scan would often
+   find nothing and never look again for the rest of the session.
+
+   Rate-limited to once a second via now_us(), the same clock the rest of the
+   backend already uses: this reads /proc, and calling it once per frame from
+   the 60Hz poll loop would turn a hot-plug convenience into a syscall storm.
+   No-ops immediately whenever a pad is already open -- there is one slot, and
+   a live fd needs no rescanning. */
+static void gamepad_rescan(kobo_ctx *k)
+{
+    if (k->pad_fd >= 0) return;
+
+    uint64_t now = kobo_now_us(k);
+    if (now < k->pad_scan_at) return;
+    k->pad_scan_at = now + 1000000ull;   /* live: caps a /proc read to 1/s */
+
+    char node[32];
+    if (btinput_scan(node, sizeof node) != 1) return;   /* none found this pass */
+
+    int fd = open(node, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        kobo_say(k, "koboy: cannot open gamepad %s: %s\n", node, strerror(errno));
+        return;
+    }
+
+    /* Deliberately NOT EVIOCGRAB'd. MEASURED on the reference device,
+       2026-08-26: Nickel holds EVIOCGRAB on the touchscreen and the key
+       nodes but reads the gamepad node WITHOUT grabbing it, so there is
+       nothing here to compete with or protect against. And an fd this
+       project does grab has to be tracked and released correctly on every
+       exit path (see release_input/emergency above) -- a hazard this file's
+       own header comment calls out. Skipping the grab avoids that class of
+       bug entirely for a device where grabbing buys nothing. */
+    k->pad_fd = fd;
+    snprintf(k->pad_node, sizeof k->pad_node, "%s", node);
+    kobo_say(k, "koboy: gamepad %s\n", k->pad_node);
+}
+
 /* ------------------------------------------------------------------ vtable */
 
 static void raw_push(kobo_ctx *k, uint16_t code)
@@ -456,6 +520,14 @@ static bool kobo_init(void *ctx, const koboy_config *c)
 
     open_input(k);
 
+    /* One attempt right away, so a gamepad already paired and connected before
+       launch shows up in --selftest output and the log's usual place, next to
+       the touch/keys lines above, instead of only after the first poll_input
+       call from inside the frame loop. kobo_poll_input's own call covers the
+       far more common case (plan/progress.md, 2026-08-26 measurement): the
+       pad reconnecting on BlueZ's own schedule, after koboy has started. */
+    gamepad_rescan(k);
+
     /* input.c applies transpose first and the mirrors afterwards, which is the
        same order FBInk defines its quirks in, so the mirror flags carry over
        directly -- but only if the two agree about the swap. If they disagree,
@@ -547,8 +619,6 @@ static bool kobo_blit_gray8(void *ctx, const uint8_t *px, int w, int h,
     return true;
 }
 
-static uint64_t kobo_now_us(void *ctx);
-
 /* Submit and return. fbink_wait_for_complete() is NOT called, here or anywhere:
    at the shipped 5x game rect the same refresh measured 15.0 ms submitted
    versus 39.2 ms waited, and the emulator has 16.7 ms of wall clock per core
@@ -595,8 +665,17 @@ static bool kobo_refresh(void *ctx, int x, int y, int w, int h,
 /* Drains one node. Every event is handed to input.c as a koboy_ev, including
    EV_KEY and the SYN boundaries, so the protocol-B slot tracking and the
    packet-coherency rule live in the one tested place rather than being
-   half-reimplemented here. */
-static void drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
+   half-reimplemented here.
+
+   Returns false only when the node is gone for good: read(2) on an fd whose
+   backing device node was removed returns -1/ENODEV, which is how a
+   hot-plugged gamepad announces a disconnect (an EAGAIN from an empty queue,
+   the ordinary case for every node here, is NOT that). The built-in touch and
+   key nodes are wired to the board and never take this path in practice, but
+   checking it unconditionally means gamepad_rescan's caller does not need a
+   second, parallel drain function just to notice the one node that can
+   actually vanish. */
+static bool drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
 {
     struct input_event ev[EV_BATCH];
     koboy_ev           out[EV_BATCH];
@@ -605,10 +684,11 @@ static void drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
        able to hold the emulator loop open indefinitely. 16 full batches is
        1024 events, orders of magnitude more than one 60Hz tick can produce. */
     for (int pass = 0; pass < 16; pass++) {
+        errno = 0;
         ssize_t n = read(fd, ev, sizeof ev);
-        if (n <= 0) return;                    /* EAGAIN, or the node vanished */
+        if (n <= 0) return !(n < 0 && errno == ENODEV);
         size_t cnt = (size_t)n / sizeof ev[0];
-        if (cnt == 0) return;
+        if (cnt == 0) return true;
 
         size_t m = 0;
         for (size_t i = 0; i < cnt; i++) {
@@ -631,8 +711,9 @@ static void drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
             m++;
         }
         if (in && m) input_feed(in, out, m);
-        if (cnt < EV_BATCH) return;            /* short read: nothing left */
+        if (cnt < EV_BATCH) return true;       /* short read: nothing left */
     }
+    return true;
 }
 
 static bool kobo_poll_input(void *ctx, struct koboy_input *in)
@@ -640,6 +721,23 @@ static bool kobo_poll_input(void *ctx, struct koboy_input *in)
     kobo_ctx *k = ctx;
     if (k->touch_fd >= 0) drain(k, k->touch_fd, false, in);
     for (int i = 0; i < k->n_key; i++) drain(k, k->key_fd[i], true, in);
+
+    /* is_key=true: the pad's buttons are meant to feed raw_push() the same
+       way the page-turn keys do, so a future calibration stage (plan Task 3)
+       can capture them the same way. The hat's ABS_HAT0X/Y events go through
+       regardless of is_key -- drain() forwards every event type to
+       input_feed(), and input.c's hat decode (see input.h) is what turns
+       those into d-pad bits. */
+    if (k->pad_fd >= 0 && !drain(k, k->pad_fd, true, in)) {
+        kobo_say(k, "koboy: gamepad %s lost\n", k->pad_node);
+        close(k->pad_fd);
+        k->pad_fd = -1;
+    }
+
+    /* Cheap when a pad is already open (see gamepad_rescan's own early
+       return) or when the last scan is still within its one-second window,
+       so calling this every poll costs nothing extra in the common case. */
+    gamepad_rescan(k);
     return true;
 }
 
@@ -693,6 +791,7 @@ koboy_platform *platform_kobo_create(void)
 
     k->fbfd     = -1;
     k->touch_fd = -1;
+    k->pad_fd   = -1;
     for (int i = 0; i < MAX_KEY_NODES; i++) k->key_fd[i] = -1;
     /* Quiet by default: stderr goes to the launcher's log file, and FBInk's
        init banner is several lines of hardware recap per run. */
@@ -762,6 +861,7 @@ void platform_kobo_selftest(koboy_platform *pf)
     printf("touch_raw=%dx%d\n", k->raw_max_x, k->raw_max_y);
     printf("input_touch=%d\n", k->touch_fd >= 0 ? 1 : 0);
     printf("input_keys=%d\n", k->n_key);
+    printf("input_pad=%d\n", k->pad_fd >= 0 ? 1 : 0);
     fflush(stdout);
 }
 
