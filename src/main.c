@@ -104,7 +104,8 @@ static void usage(const char *argv0)
         "  --waveform auto|du4  waveform for fast refreshes (default auto)\n"
         "  --quiet           suppress everything but the presented= counter\n"
         "  --rom-dir PATH    directory the ROM browser lists\n"
-        "  --ui-script PATH  replay synthetic UI input (scripted runs)\n",
+        "  --ui-script PATH  replay synthetic UI input into the ROM browser;\n"
+        "                    exits 4 if the script selects nothing\n",
         argv0, DEFAULT_INI);
 }
 
@@ -129,10 +130,13 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
 /* Drives one list widget to a selection. Returns the chosen index, or -1 if
    the user quit, the run was stopped, or a script ran out.
 
-   `script`/`script_n` make MODE_BROWSE and MODE_MENU reachable in a bounded
-   unattended run. Without them every automated test would pass --rom and skip
-   these screens entirely -- the same blind spot that hid v1's first-run
-   deadlock through twenty reviews. */
+   `script`/`script_n` make MODE_BROWSE reachable in a bounded unattended run.
+   Without them every automated test would pass --rom and skip that screen
+   entirely -- the same blind spot that hid v1's first-run deadlock through
+   twenty reviews. MODE_MENU is NOT scripted: nothing passes a script to
+   run_menu or run_slot_picker (they are only ever reached from the emulator
+   loop, which has no --ui-script hook), and saying otherwise here would
+   overclaim coverage the suite does not have. */
 static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
                     uint8_t *panel, int stride, int pw, int ph,
                     const koboy_input_state *script, int script_n)
@@ -140,6 +144,7 @@ static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
     int  chosen = -1;
     int  si = 0;
     bool need_draw = true;
+    bool primed = false;
 
     while (!g_stop && !pf->should_quit(pf->ctx)) {
         if (need_draw) {
@@ -153,12 +158,37 @@ static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
         }
 
         const koboy_input_state *st;
+        koboy_input_state synth;
         if (script) {
-            if (si >= script_n) break;      /* script exhausted: give up */
-            st = &script[si++];
+            /* One RELEASED state before the script's first entry, always.
+               ui_list_init sets prev_touch = true (a fresh list demands a
+               release before it accepts a tap, so a still-down finger cannot
+               carry a selection in from the previous screen), so a script
+               whose first verb is `tap` had its press swallowed and its
+               release consumed as the priming edge -- selecting nothing and
+               exiting 0, i.e. a green CI run that tested nothing. Confirmed
+               on hardware with `printf 'tap 300 300\n'`.
+               Primed here rather than documented in uiscript.h: a note relies
+               on every future author reading it, and the scripted path is
+               precisely the one nobody's tests exercise honestly. */
+            if (!primed) {
+                primed = true;
+                memset(&synth, 0, sizeof synth);
+                st = &synth;
+            } else if (si >= script_n) {
+                break;                      /* script exhausted: give up */
+            } else {
+                st = &script[si++];
+            }
         } else {
             pf->poll_input(pf->ctx, in);
-            st = input_state(in);
+            /* NOT input_state(): the faceplate's A/B touch zones stay live
+               under a full-panel list, and their synthesised joypad bits are
+               eaten by ui_list_feed as page-turns before any row hit-test
+               runs. input_ui_state passes the hardware keys and the touch
+               coordinates and drops the synthesised bits -- see input.h. */
+            input_ui_state(in, &synth);
+            st = &synth;
         }
 
         int idx = -1;
@@ -531,6 +561,18 @@ int main(int argc, char **argv)
         input_destroy(ui_in);
 
         if (pick < 0) {
+            /* A SCRIPTED run that chose nothing is a failure, not a clean
+               exit. Backing out of the browser is a legitimate thing for a
+               person to do, so an interactive run still exits 0 -- but
+               --ui-script exists to make an unattended run exercise the
+               browser, and a run that exercised nothing and reported success
+               is a CI job that is green for having tested nothing. That is
+               the exact shape of failure this project keeps finding, so it
+               gets its own exit code rather than being folded into 1 or 2. */
+            if (ui_script_n > 0) {
+                fatal("ui script selected nothing");
+                free(panel); pf->shutdown(pf->ctx); return 4;
+            }
             say("koboy: no rom chosen, exiting\n");
             free(panel); pf->shutdown(pf->ctx); return 0;
         }
@@ -764,7 +806,12 @@ int main(int argc, char **argv)
                return value is discarded on purpose: this call exists only to
                clear the latch, not to act on it. */
             (void)input_take_menu_request(in);
-            pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
+            /* REBASE, not re-init: pacer_init zeroes p->frames, and the
+               bounded-run test above is `pace.frames >= frame_limit`, so a
+               --frames N run used to restart its whole budget every time the
+               menu closed. The wall clock does need re-anchoring (the menu may
+               have been open for a minute) -- that is all pacer_rebase does. */
+            pacer_rebase(&pace, pf->now_us(pf->ctx));
             continue;
         }
 

@@ -370,6 +370,11 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     text_draw_centred_at(fb, stride, W, H, mcx, mcy - TEXT_GLYPH_H * lbl_px / 2, "MENU", lbl_px, INK);
 }
 
+/* One definition of the label and its scale, so the guard below cannot measure
+   one string while text_draw_centred_at draws a different one. */
+#define BATTERY_LABEL     "BATTERY"
+#define BATTERY_LABEL_PX  1
+
 void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
                            const koboy_layout *l, int percent)
 {
@@ -394,18 +399,51 @@ void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
     if (r < 4) r = 4;
 
     /* Never inside the game rect: the contract chrome_render lives under, and
-       this function is called from the same places. */
-    if (cx + r >= p->game_x) return;
+       this function is called from the same places.
+
+       The extent tested is the LABEL's, not just the disc's. "BATTERY" at
+       px = 1 is ~42 px wide while r is W/60 -- five pixels on a small panel --
+       so a guard that only cleared the disc let the text run into the game
+       rect. Swept against the real resolver, 7,737 panel/scale combinations
+       wrote inside the rect that way. All four supported panels happened to be
+       clear (the Clara family by 48 px), which is luck, not construction:
+       nothing in the layout ties game_x to the width of a word. */
+    /* Exactly the rightmost column text_draw_centred_at will touch, expressed
+       as an offset from cx: it starts at cx - m/2 and writes m columns, so the
+       last one is cx + m - m/2 - 1. Written that way rather than as m/2 so the
+       odd-width case is not silently one pixel short. */
+    int lw = text_measure(BATTERY_LABEL, BATTERY_LABEL_PX);
+    int label_right = lw > 0 ? lw - lw / 2 - 1 : 0;
+    int extent = r > label_right ? r : label_right;
+    if (cx + extent >= p->game_x) return;
 
     disc(fb, stride, W, H, cx, cy, r, BG);
     ring(fb, stride, W, H, cx, cy, r, INK);
     if (percent >= 0) {
         /* Fill proportionally, so the lamp says something rather than merely
-           existing. */
+           existing.
+
+           The fill is a CHORD OF THE LAMP, and the containment test below is
+           what makes it one. The previous version ran hline from cx - r to
+           cx + r, which is the disc's BOUNDING BOX: the level was painted full
+           width and spilled outside the circle, and the ring() afterwards
+           merely outlined a circle on top of the overspill. Reported from the
+           device as "the battery fill is a rectangle". Same test as disc()
+           twenty lines above, deliberately -- there is one definition of what
+           is inside this lamp. */
         int fill = r * 2 * percent / 100;
-        for (int y = cy + r - fill; y <= cy + r; y++)
-            hline(fb, stride, W, H, cx - r, cx + r, y, DARK);
+        int top  = cy + r - fill;
+        for (int y = -r; y <= r; y++) {
+            int py = cy + y;
+            if (py < top || py < 0 || py >= H) continue;
+            for (int x = -r; x <= r; x++) {
+                if (x * x + y * y > r * r) continue;
+                int px = cx + x;
+                if (px >= 0 && px < W) fb[(size_t)py * stride + px] = DARK;
+            }
+        }
         ring(fb, stride, W, H, cx, cy, r, INK);
     }
-    text_draw_centred_at(fb, stride, W, H, cx, cy + r + r / 2, "BATTERY", 1, INK);
+    text_draw_centred_at(fb, stride, W, H, cx, cy + r + r / 2,
+                         BATTERY_LABEL, BATTERY_LABEL_PX, INK);
 }

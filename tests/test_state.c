@@ -8,6 +8,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unistd.h>
 
 TEST_MAIN({
     char dir[] = "/tmp/koboy_state_XXXXXX";
@@ -55,6 +58,46 @@ TEST_MAIN({
     FILE *leftover = fopen(tmp, "rb");
     CHECK(leftover == NULL);
     if (leftover) fclose(leftover);
+
+    /* ATOMICITY, ASSERTED POSITIVELY.
+
+       The check above is not enough on its own and used to be all there was:
+       mutating safefile.c's "%s.tmp" to "%s" -- no temp file, no fsync, no
+       rename, a plain truncating write straight onto the destination -- left
+       the whole suite green, because "no .tmp left behind" is equally true of
+       an implementation that never makes one.
+
+       So make the temp path IMPOSSIBLE to open and watch what happens. A
+       DIRECTORY at "<path>.tmp" cannot be fopen'd for writing, so an atomic
+       implementation must fail the write and, crucially, leave the existing
+       destination byte-for-byte intact -- which is the whole property. A
+       non-atomic one opens the destination directly, succeeds, and destroys
+       the previous contents. Both halves are asserted: the return value AND
+       the surviving file. */
+    {
+        CHECK_EQ_INT(mkdir(tmp, 0700), 0);
+
+        unsigned char before[64];
+        CHECK_EQ_INT(safefile_read_exact(p1, before, sizeof before), 1);
+
+        unsigned char other[64];
+        for (int i = 0; i < 64; i++) other[i] = (unsigned char)(0xF0 ^ i);
+        CHECK_EQ_INT(safefile_write(p1, other, sizeof other), 0);
+
+        unsigned char after[64];
+        CHECK_EQ_INT(safefile_read_exact(p1, after, sizeof after), 1);
+        CHECK_EQ_INT(memcmp(before, after, sizeof before), 0);
+
+        CHECK_EQ_INT(rmdir(tmp), 0);
+
+        /* And with the obstruction gone the same write must now succeed and
+           actually land, so the block above proves atomicity rather than
+           merely proving that safefile_write can be made to fail. */
+        CHECK_EQ_INT(safefile_write(p1, other, sizeof other), 1);
+        CHECK_EQ_INT(safefile_read_exact(p1, after, sizeof after), 1);
+        CHECK_EQ_INT(memcmp(other, after, sizeof other), 0);
+        CHECK_EQ_INT(safefile_write(p1, blob, sizeof blob), 1);
+    }
 
     unsigned char back[64];
     memset(back, 0xAA, sizeof back);
@@ -105,11 +148,23 @@ TEST_MAIN({
 
     /* Labels tell the user which slot they are about to overwrite, which is
        most of the value of having slots at all. */
+    /* SAVED and EMPTY must be DISTINGUISHABLE. The old assertion here was
+       CHECK(strstr(label, "1")), which the slot number itself satisfies:
+       hardcoding state.c's status to "EMPTY" left the suite green even though
+       slot 1 had just been written. A label that cannot tell the user whether
+       they are about to overwrite a save is the one thing it exists to do. */
     char label[64];
+    CHECK_EQ_INT(state_exists(dir, rom, 1), 1);
     state_slot_label(label, sizeof label, dir, rom, 1);
     CHECK(strstr(label, "1") != NULL);
+    CHECK(strstr(label, "SAVED") != NULL);
+    CHECK(strstr(label, "EMPTY") == NULL);
+
+    CHECK_EQ_INT(state_exists(dir, rom, 2), 0);
     state_slot_label(label, sizeof label, dir, rom, 2);
+    CHECK(strstr(label, "2") != NULL);
     CHECK(strstr(label, "EMPTY") != NULL);
+    CHECK(strstr(label, "SAVED") == NULL);
 
     char cmd[1024];
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);

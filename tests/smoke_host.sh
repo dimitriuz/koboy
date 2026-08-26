@@ -19,7 +19,15 @@ echo "PASS smoke_host presented=$presented"
 romdir="$(mktemp -d)"
 : > "$romdir/AAA TEST.gb"
 script="$(mktemp)"
-printf 'idle 2\ntap 40 200\n' > "$script"
+# TAP FIRST, deliberately: no leading `idle`. ui_list_init sets prev_touch =
+# true so a fresh list demands a release before it accepts a tap, and a script
+# beginning with `tap` therefore had its press swallowed and its release eaten
+# as the priming edge -- selecting nothing and exiting 0, i.e. a CI run that
+# went green having tested nothing. Confirmed on hardware with
+# `printf 'tap 300 300\n'`. run_list now feeds one released state before the
+# script's first entry; this line is what proves it, so do not "helpfully" put
+# an `idle` back in front of it.
+printf 'tap 40 200\n' > "$script"
 
 # Explicit rc capture, not the bare `out=$(...)` the run above uses: under
 # set -e a nonzero exit from inside a command substitution assignment aborts
@@ -45,7 +53,32 @@ echo "$out" | grep -q "chose $romdir/AAA TEST.gb" \
 echo "$out" | grep -q '^presented=' \
     || { echo "FAIL: run did not reach the emulator loop"; rm -rf "$romdir" "$script"; exit 1; }
 rm -rf "$romdir" "$script"
-echo "ok: rom browser"
+echo "ok: browser selects from a tap-first script"
+
+# A bounded unattended run that chose NO rom must fail loudly. Exiting 0 there
+# is how a scripted browser run reports success for having tested nothing --
+# the same failure shape as the tap-first bug above, one layer out.
+romdir="$(mktemp -d)"; : > "$romdir/AAA TEST.gb"
+script="$(mktemp)"
+printf 'idle 4\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$romdir" --ui-script "$script" \
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out"
+if [ "$rc" -eq 0 ]; then
+    echo "FAIL: a script that selected nothing exited 0"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+if [ "$rc" -eq 124 ]; then
+    echo "FAIL: a script that selected nothing hung until the 30s timeout"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+echo "$out" | grep -q '^presented=' && {
+    echo "FAIL: a run that chose no rom still entered the emulator loop"
+    rm -rf "$romdir" "$script"; exit 1; }
+rm -rf "$romdir" "$script"
+echo "ok: an unselecting script fails the run (rc=$rc)"
 
 # The menu is reachable only through a live touch (input_take_menu_request is
 # fed by pf->poll_input, and MODE_PLAY's poll loop has no --ui-script hook the

@@ -88,16 +88,18 @@ Found during the v2-core plan (ROM browser, in-game MENU, save states,
 multi-rect dirty regions, the redrawn faceplate). Same rule as above: real,
 deliberately deferred, not a known live bug.
 
-17. **A `--ui-script` whose first verb is `tap` selects nothing.**
+17. ~~**A `--ui-script` whose first verb is `tap` selects nothing.**~~ FIXED.
     `src/ui.c:32` initialises a freshly built list's `prev_touch = true` so it
     requires one release before it will accept a tap -- deliberate, to survive
     a still-down finger chained across screens (see the comment there). A
-    script that opens with `tap X Y` therefore emits touch-down then release
-    with nothing in between, and both land on the wrong side of the edge: the
-    down is swallowed as "already held", the up produces no tap either. The
-    run exhausts and returns "no selection" exactly as if the user had quit,
-    so a script that starts this way passes while testing nothing. Script
-    authors need an `idle 1` (or a second `tap`) before the one meant to land.
+    script that opened with `tap X Y` therefore had its press swallowed as
+    "already held" and its release eaten as the priming edge, so the run
+    exhausted and returned "no selection" exactly as if the user had quit --
+    confirmed on hardware, `printf 'tap 300 300\n'` printed "no rom chosen"
+    and exited **0**. `run_list`'s scripted branch now feeds one released
+    state before the script's first entry, so a script is robust whatever its
+    opening verb, and a scripted run that selected nothing exits 4 instead of
+    0. `tests/smoke_host.sh` drives a deliberately tap-first script.
 
 18. **`MODE_MENU`'s interactive branches are verified by construction, not by
     an executed test.** `src/main.c:647` (the `input_take_menu_request`
@@ -106,7 +108,8 @@ deliberately deferred, not a known live bug.
     loop itself never accepts scripted input, so SAVE/LOAD/RESET/CHOOSE
     ROM/QUIT are exercised by inspection and by hand, never by `make test`.
     Extending `--ui-script` through the emulator loop is the obvious
-    follow-up, and #17 above should be fixed before anything relies on it.
+    follow-up; #17's prerequisite is now cleared. `src/uiscript.h` and
+    `run_list`'s comment no longer claim MODE_MENU coverage they do not have.
 
 19. **The d-pad horizontal-arm term in `chrome_controls_top` is provably
     dead.** `src/chrome.c:41-42`. `top = min2(top, dcy - arm/2 - 1)` can never

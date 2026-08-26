@@ -32,6 +32,15 @@ koboy_input *input_create(const koboy_config *c, const koboy_profile *p)
 void input_destroy(koboy_input *in) { free(in); }
 const koboy_input_state *input_state(const koboy_input *in) { return &in->st; }
 
+/* Contract and the full rationale in input.h. key_bits is exactly the hardware
+   half of what recompute() folds into st.buttons; the touch coordinates come
+   over untouched so the list can still hit-test rows. */
+void input_ui_state(const koboy_input *in, koboy_input_state *out)
+{
+    *out = in->st;
+    out->buttons = in->key_bits;
+}
+
 void input_set_touch_transform(koboy_input *in, int raw_max_x, int raw_max_y,
                                bool transpose, bool flip_x, bool flip_y)
 {

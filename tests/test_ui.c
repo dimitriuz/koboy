@@ -1,6 +1,35 @@
 #include "test.h"
+#include "chrome.h"
+#include "config.h"
+#include "input.h"
 #include "ui.h"
 #include <string.h>
+
+/* Press one finger at a panel coordinate through the REAL evdev decode path,
+   the same way tests/test_chrome.c's zone sweep does. Nothing here builds a
+   koboy_input_state by hand: a synthetic state is precisely what made the
+   faceplate-versus-list bug invisible, because it skips input.c entirely and
+   input.c is where the touch-to-joypad synthesis lives. */
+static void feed_down(koboy_input *in, int x, int y)
+{
+    koboy_ev down[5] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, down, 5);
+}
+
+static void feed_up(koboy_input *in)
+{
+    koboy_ev up[2] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, up, 2);
+}
 
 static koboy_input_state touch_at(int x, int y)
 {
@@ -72,8 +101,19 @@ TEST_MAIN({
     CHECK_EQ_INT(idx, 2);
     CHECK_EQ_INT(ui_list_feed(&u, &up, &idx), UI_NONE);
 
-    /* Paging with the page-turn buttons, also edge-triggered. */
-    if (ui_list_pages(&u) > 1) {
+    /* Paging with the page-turn buttons, also edge-triggered.
+
+       UNCONDITIONAL, and that matters more than it looks. Every assertion
+       below used to sit inside `if (ui_list_pages(&u) > 1)` -- gated on the
+       very function under test. Mutating ui_list_pages() to `return 1` left
+       the whole 820-check suite green, including the CHECK_EQ_INT(idx, rows)
+       below that exists to catch "loads the wrong ROM". So the geometry this
+       list is built with is asserted OUTRIGHT first: 13 items at 10 rows a
+       page is two pages, and if that ever stops being true the two lines
+       below fail loudly instead of silently skipping the rest. */
+    CHECK_EQ_INT(ui_list_rows(&u), 10);
+    CHECK_EQ_INT(ui_list_pages(&u), 2);
+    {
         koboy_input_state b = button(KOBOY_BTN_B);
         CHECK_EQ_INT(ui_list_feed(&u, &b, &idx), UI_PAGE_NEXT);
         CHECK_EQ_INT(u.page, 1);
@@ -169,6 +209,118 @@ TEST_MAIN({
     CHECK_EQ_INT(ui_list_feed(&second, &rel_second, &idx), UI_NONE);
     CHECK_EQ_INT(ui_list_feed(&second, &held, &idx), UI_SELECT); /* fresh down selects */
     CHECK_EQ_INT(idx, 0);
+
+    /* ------------------------------------------------------------------
+       REGRESSION, C1: the faceplate's A and B touch zones must not hijack a
+       UI list.
+
+       In every UI mode the drawn faceplate is still underneath the list, and
+       input.c's recompute() hit-tests the A and B discs against the layout
+       permille unconditionally -- it has no notion of a UI mode. ui_list_feed
+       tests a rising A/B FIRST and returns early, so those synthesised bits
+       were consumed as page-turns before any row hit-test ran. Measured at the
+       shipped defaults on 1264x1680: a tap at (1049,1125), which is row 7 of
+       the browser, produced buttons=0x0100 and UI_NONE; a tap at (834,1276),
+       row 8, produced 0x0001 and UI_PAGE_NEXT. Rows 6, 7 and 8 were unusable
+       over ~17% of the panel width each, on every panel, because the layout is
+       permille.
+
+       Driven through input_feed on purpose. tests/test_ui.c never touched
+       input.c before, which is exactly why this shipped: a test that builds
+       its own koboy_input_state reproduces the blind spot instead of closing
+       it. */
+    {
+        const int W = 1264, H = 1680;
+        koboy_config c; config_defaults(&c);
+        koboy_profile prof;
+        CHECK(config_resolve_profile(&prof, &c, W, H));
+
+        koboy_input *in = input_create(&c, &prof);
+        CHECK(in != NULL);
+        /* Identity transform: raw_max == panel - 1 makes scale_axis a no-op,
+           so the coordinates below are pixel-exact panel coordinates. */
+        input_set_touch_transform(in, W - 1, H - 1, false, false, false);
+
+        koboy_ui_list br;
+        ui_list_init(&br, "CHOOSE A GAME", items, N,
+                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                     W - 2 * KOBOY_CHROME_MARGIN, H - 2 * KOBOY_CHROME_MARGIN);
+
+        int acx = c.layout.a_cx * W / 1000, acy = c.layout.a_cy * H / 1000;
+        int bcx = c.layout.b_cx * W / 1000, bcy = c.layout.b_cy * H / 1000;
+
+        /* The rows those two discs sit on, computed from the widget's own
+           geometry rather than hardcoded. CHECKed, not `if`-ed: if a layout
+           change ever moved the discs off the list's rows this block would
+           quietly stop testing anything, which is the failure mode this whole
+           branch keeps finding. */
+        int a_row = (acy - br.y - br.row_h) / br.row_h;
+        int b_row = (bcy - br.y - br.row_h) / br.row_h;
+        int foot_top = br.y + br.h - br.row_h;
+        CHECK(acy >= br.y + br.row_h && acy < foot_top);
+        CHECK(bcy >= br.y + br.row_h && bcy < foot_top);
+        CHECK(a_row >= 0 && a_row < ui_list_rows(&br));
+        CHECK(b_row >= 0 && b_row < ui_list_rows(&br));
+        CHECK(a_row != b_row);
+
+        koboy_input_state ui;
+
+        /* Clear the fresh-list guard with a genuinely released poll. */
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        /* POSITIVE CONTROL. The raw game-facing state really does carry the A
+           bit for this coordinate -- so when the assertion below passes it is
+           because the UI projection dropped the bit, not because the hit-test
+           moved or the probe silently pressed nothing. */
+        feed_down(in, acx, acy);
+        CHECK((input_state(in)->buttons & KOBOY_BTN_A) != 0);
+
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, 0);
+        idx = -1;
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_SELECT);
+        CHECK_EQ_INT(idx, a_row);
+        CHECK_EQ_INT(br.page, 0);            /* it selected, it did not page */
+        feed_up(in);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        /* Same for B, whose disc paged the list forward instead. */
+        feed_down(in, bcx, bcy);
+        CHECK((input_state(in)->buttons & KOBOY_BTN_B) != 0);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, 0);
+        idx = -1;
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_SELECT);
+        CHECK_EQ_INT(idx, b_row);
+        CHECK_EQ_INT(br.page, 0);
+        feed_up(in);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        /* And the other half of the contract: REAL page-turn hardware must
+           still page. Dropping A/B inside ui.c would have "fixed" the taps by
+           breaking the buttons the list is named after. */
+        CHECK(c.key_a != 0 && c.key_b != 0);
+        input_feed_key(in, c.key_b, true);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, KOBOY_BTN_B);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_PAGE_NEXT);
+        CHECK_EQ_INT(br.page, 1);
+        input_feed_key(in, c.key_b, false);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        input_feed_key(in, c.key_a, true);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, KOBOY_BTN_A);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_PAGE_PREV);
+        CHECK_EQ_INT(br.page, 0);
+        input_feed_key(in, c.key_a, false);
+
+        input_destroy(in);
+    }
 
     /* Rendering is clipped and draws something. */
     enum { W = 1264, H = 1680 };

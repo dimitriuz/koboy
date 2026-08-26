@@ -2,8 +2,14 @@
 #define KOBOY_UISCRIPT_H
 #include "koboy.h"
 
-/* Replays synthetic input states into the UI modes, so a bounded, unattended
-   run can reach MODE_BROWSE and MODE_MENU.
+/* Replays synthetic input states into the ROM browser, so a bounded,
+   unattended run can reach MODE_BROWSE.
+
+   MODE_MENU is NOT reachable this way, and saying otherwise here would
+   overclaim the suite's coverage: no call site passes a script to run_menu or
+   run_slot_picker (src/main.c), because both are only ever entered from
+   inside the emulator loop and that loop has no --ui-script hook. Driving the
+   in-game menu unattended is deferred, not done.
 
    This exists because of a recorded v1 failure: the first-run deadlock was
    invisible to twenty reviews because the scripted-run branch skipped

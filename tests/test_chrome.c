@@ -341,13 +341,21 @@ TEST_MAIN({
 
             memset(fb, 0x7F, (size_t)W * H);
             chrome_render(fb, W, &q, &cc.layout);
+            /* The battery lamp is chrome too, and it is drawn from the same
+               places chrome_render is -- but this sweep did not call it, which
+               is exactly how a BATTERY label that escaped the game-rect guard
+               shipped. Both a full lamp (the largest fill) and an unknown
+               battery (no fill at all, label only) go into the same buffer, so
+               the intrusion count below covers every shape it can take. */
+            chrome_render_battery(fb, W, &q, &cc.layout, 100);
+            chrome_render_battery(fb, W, &q, &cc.layout, -1);
 
             int bad = 0;
             for (int y = q.game_y; y < q.game_y + q.game_h; y++)
                 for (int x = q.game_x; x < q.game_x + q.game_w; x++)
                     if (fb[(size_t)y * W + x] != 0x7F) bad++;
             if (bad) {
-                fprintf(stderr, "  chrome inside game rect: %dx%d scale=%d -> "
+                fprintf(stderr, "  chrome/battery inside game rect: %dx%d scale=%d -> "
                         "resolved %d, %d px\n", W, H, scales[si], q.scale, bad);
                 chrome_intruded += bad;
             }
@@ -622,6 +630,105 @@ TEST_MAIN({
             for (int x = p.game_x; x < p.game_x + p.game_w; x++)
                 if (a[y * W + x] != 0x7F) intruded++;
         CHECK_EQ_INT(intruded, 0);
+
+        /* THE FILL IS A CHORD OF THE LAMP, not a band across its bounding
+           box. Reported from the device as "the battery fill is a rectangle":
+           the fill ran hline from cx - r to cx + r, so the level was painted
+           the full width of the disc's bounding box and spilled outside the
+           circle; the ring() drawn afterwards just outlined a circle over the
+           overspill.
+
+           Neither existing assertion could catch that. "100% and 5% render
+           differently" is true of a rectangle too, and so is "unknown does not
+           intrude". So: diff each level against the 0% render -- which cancels
+           the disc, the ring and the label, leaving only the fill -- and
+           require every differing pixel to lie within radius r of the lamp
+           centre. */
+        {
+            int cx = p.game_x / 2;
+            int cy = p.game_y + p.game_h / 2;
+            int r  = W / 60; if (r < 4) r = 4;
+
+            memset(a, 0xFF, (size_t)W * H);
+            chrome_render_battery(a, W, &p, &c.layout, 0);
+
+            static const int levels[] = { 5, 25, 50, 75, 100 };
+            int outside = 0, inside = 0;
+            for (size_t li = 0; li < sizeof levels / sizeof levels[0]; li++) {
+                memset(b, 0xFF, (size_t)W * H);
+                chrome_render_battery(b, W, &p, &c.layout, levels[li]);
+                for (int y = 0; y < H; y++)
+                    for (int x = 0; x < W; x++) {
+                        if (a[(size_t)y * W + x] == b[(size_t)y * W + x]) continue;
+                        long dx = x - cx, dy = y - cy;
+                        if (dx * dx + dy * dy > (long)r * r) outside++;
+                        else inside++;
+                    }
+            }
+            if (outside)
+                fprintf(stderr, "  battery fill outside the lamp: %d px\n", outside);
+            CHECK_EQ_INT(outside, 0);
+            /* Positive control: the diff is not empty, so "no pixel outside"
+               is not passing because nothing was drawn at all. */
+            CHECK(inside > 0);
+        }
+    }
+
+    /* The battery lamp's game-rect guard, swept against the REAL resolver over
+       a wide range of panel widths rather than only the four supported ones.
+
+       chrome_render_battery guarded the DISC (r = W/60, five pixels on a small
+       panel) and not the ~42 px "BATTERY" label beneath it. All four supported
+       panels happen to be clear -- the Clara family by 48 px of margin -- so a
+       sweep restricted to them proves nothing about the guard; it proves the
+       four panels are lucky. Sweeping the resolver finds thousands of
+       width/scale combinations where the label ran into the game rect.
+
+       Only the game-rect columns are examined, and the lamp is drawn into a
+       freshly filled buffer, so this measures the battery element alone. */
+    {
+        int intruding_combos = 0, checked = 0;
+        static const int sweep_scales[] = { 0, 1, 2, 3, 4, 5 };
+        enum { SWEEP_MAX_W = 1440, SWEEP_MAX_H = SWEEP_MAX_W * 4 / 3 };
+        /* One buffer for the whole sweep, sized for the largest panel below.
+           Allocated once rather than per width so the sweep contributes one
+           check to the suite's count instead of three hundred. */
+        uint8_t *sfb = malloc((size_t)SWEEP_MAX_W * SWEEP_MAX_H);
+        CHECK(sfb != NULL);
+        for (int W = 176; sfb && W <= SWEEP_MAX_W; W += 4) {
+            int H = W * 4 / 3;
+            for (size_t si = 0; si < sizeof sweep_scales / sizeof sweep_scales[0]; si++) {
+                koboy_config cc; config_defaults(&cc);
+                cc.scale = sweep_scales[si];
+                koboy_profile q;
+                if (!config_resolve_profile(&q, &cc, W, H)) continue;
+                checked++;
+
+                int bad = 0;
+                /* Every shape the lamp can take: unknown (label only), empty,
+                   and full. */
+                static const int pcts[] = { -1, 0, 100 };
+                for (size_t pi = 0; pi < sizeof pcts / sizeof pcts[0]; pi++) {
+                    memset(sfb, 0x7F, (size_t)W * H);
+                    chrome_render_battery(sfb, W, &q, &cc.layout, pcts[pi]);
+                    for (int y = q.game_y; y < q.game_y + q.game_h; y++)
+                        for (int x = q.game_x; x < q.game_x + q.game_w; x++)
+                            if (sfb[(size_t)y * W + x] != 0x7F) bad++;
+                }
+                if (bad) {
+                    if (intruding_combos < 5)
+                        fprintf(stderr, "  battery inside game rect: %dx%d scale=%d"
+                                " -> resolved %d, game_x=%d, %d px\n",
+                                W, H, sweep_scales[si], q.scale, q.game_x, bad);
+                    intruding_combos++;
+                }
+            }
+        }
+        free(sfb);
+        /* The sweep must actually have swept: a resolver change that made
+           every combination unresolvable would otherwise leave this vacuous. */
+        CHECK(checked > 1000);
+        CHECK_EQ_INT(intruding_combos, 0);
     }
 
     /* NO NINTENDO MARKS. This is a public GPLv3 repo; the faceplate is an

@@ -13,7 +13,7 @@ was attached for any of that plan. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 22 binaries, 820 checks. Runs on x86_64.
+make test        # host suite: 22 binaries, 880 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -74,7 +74,9 @@ src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
                       browser and the in-game MENU (MODE_BROWSE / MODE_MENU)
 src/romlist.c         scans rom_dir for .gb/.gbc, feeds ui.c's list widget
 src/uiscript.c        replays a synthetic input script (tap/key/idle) into
-                      the UI modes -- --ui-script, for bounded unattended runs
+                      the ROM BROWSER only -- --ui-script, for bounded
+                      unattended runs. MODE_MENU is not scripted; a run whose
+                      script selects nothing exits 4.
 src/state.c           save-state paths and slot labels, KOBOY_STATE_SLOTS (3)
                       slots per ROM, 1-based
 src/safefile.c        temp-file/fsync/rename write + all-or-nothing read,
