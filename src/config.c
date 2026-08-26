@@ -68,6 +68,12 @@ void config_defaults(koboy_config *c)
        flash on large scene changes, which is worth having only if the driver's
        own choice leaves residue you can see. */
     c->full_refresh_permille = 1000;
+    /* UNVALIDATED ON HARDWARE: this default is a starting guess, not a
+       measurement -- unlike full_refresh_permille above, no device run has
+       tuned it yet (that is Task 13's deferred Step 10). Pick it from a
+       koboy.log `stages` line and `rects` count at 20/40/80 the first time a
+       device is available, and record the result in TESTED.md. */
+    c->refresh_fixed_tiles = 40;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->grab_input = true;
     /* CROSS, because the faceplate chrome draws an absolute four-way cross and
@@ -276,6 +282,7 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
         else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
+        else if (!strcmp(k, "refresh_fixed_tiles"))   c->refresh_fixed_tiles = atoi(v);
         else if (!strcmp(k, "waveform_fast"))
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
         else if (!strcmp(k, "core"))             snprintf(c->core_path, sizeof c->core_path, "%s", v);

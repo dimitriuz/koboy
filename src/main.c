@@ -620,6 +620,7 @@ int main(int argc, char **argv)
     stats_reset(&stats);
 
     unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
+    unsigned long rects_emitted = 0;
     uint64_t last_sram_us = pf->now_us(pf->ctx);
     uint64_t last_cleanup_us = last_sram_us;
 
@@ -771,26 +772,28 @@ int main(int argc, char **argv)
         bool present = pacer_tick(&pace);
         if (!present) goto sram_check;
 
-        /* A NULL g_frame is the core's can-dupe signal, which video_submit turns
-           into an empty rect -- so an unchanged frame costs no refresh at all. */
+        /* A NULL g_frame is the core's can-dupe signal, which video_submit_rects
+           turns into zero rects -- so an unchanged frame costs no refresh at
+           all. Up to KOBOY_MAX_RECTS disjoint rects instead of one merged box:
+           video_split_dirty (src/video.c) only splits when the summed cost of
+           the pieces beats the merged box's, so a full-screen scroller still
+           comes back as a single rect here. */
+        koboy_rect rects[KOBOY_MAX_RECTS];
         t0 = pf->now_us(pf->ctx);
-        koboy_rect r = video_submit(vid, g_frame, (int)g_fw, (int)g_fh,
-                                    g_fpitch, core_pixfmt(core));
+        int nrects = video_submit_rects(vid, g_frame, (int)g_fw, (int)g_fh,
+                                        g_fpitch, core_pixfmt(core),
+                                        cfg.refresh_fixed_tiles,
+                                        rects, KOBOY_MAX_RECTS);
         stats_add(&stats, KOBOY_STAGE_SUBMIT, pf->now_us(pf->ctx) - t0);
-        if (r.w == 0) goto sram_check;          /* nothing changed: skip the panel */
+        if (nrects == 0) goto sram_check;       /* nothing changed: skip the panel */
 
-        t0 = pf->now_us(pf->ctx);
-        pf->blit_gray8(pf->ctx, video_buffer(vid) + (size_t)r.y * video_stride(vid) + r.x,
-                       r.w, r.h, video_stride(vid),
-                       prof.game_x + r.x, prof.game_y + r.y);
-        stats_add(&stats, KOBOY_STAGE_BLIT, pf->now_us(pf->ctx) - t0);
-
-        /* Waveform by dirty area, not one waveform for every frame.
-           KOBOY_REFRESH_FAST maps to a non-flashing waveform (DU4 on this
-           panel), which never fully resets pixel state -- residue accumulates
-           on every update regardless of rect size. Observed on the device as
-           several Tetris scenes layered on top of each other.
-           A dirty rect covering most of the game rect means the scene has
+        /* Waveform by TOTAL dirty area across every emitted rect, not one
+           waveform for every frame. KOBOY_REFRESH_FAST maps to a non-flashing
+           waveform (DU4 on this panel), which never fully resets pixel state
+           -- residue accumulates on every update regardless of rect size.
+           Observed on the device as several Tetris scenes layered on top of
+           each other.
+           A dirty area covering most of the game rect means the scene has
            substantially changed, which is both when layered residue is most
            objectionable and when the refresh is already expensive, so paying
            for a flashing waveform there is cheap in relative terms. Small
@@ -799,7 +802,16 @@ int main(int argc, char **argv)
            Note this cannot be a substitute for the cleanup: the dirty diff
            compares our own output buffers, so it tracks what we sent, not what
            the panel shows. A region that ghosts and then stops changing is
-           never revisited by this test at all. */
+           never revisited by this test at all.
+           Summing before deciding, rather than promoting per rect, matters
+           precisely because splitting exists now: two small pieces that
+           individually look nowhere near the promotion threshold could
+           together represent most of the game rect having changed, and
+           deciding rect-by-rect would miss exactly the scene change this
+           promotion exists to catch. */
+        long dirty_px = 0;
+        for (int i = 0; i < nrects; i++) dirty_px += (long)rects[i].w * rects[i].h;
+
         /* Named wfm, not mode: koboy_mode mode is the outer loop's live
            control variable (MODE_PLAY/MODE_QUIT), declared far above this
            point. Reusing "mode" here for the waveform shadowed it silently --
@@ -809,15 +821,28 @@ int main(int argc, char **argv)
            anywhere after this point in the loop, would have assigned a
            waveform instead of ending the run. */
         koboy_refresh_mode wfm = KOBOY_REFRESH_FAST;
-        if (config_promote_full(&cfg, (long)r.w * (long)r.h,
+        if (config_promote_full(&cfg, dirty_px,
                                 (long)prof.game_w * (long)prof.game_h)) {
             wfm = KOBOY_REFRESH_FULL;
             big_refreshes++;
         }
-        t0 = pf->now_us(pf->ctx);
-        pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, wfm);
-        stats_add(&stats, KOBOY_STAGE_REFRESH, pf->now_us(pf->ctx) - t0);
+
+        for (int i = 0; i < nrects; i++) {
+            const koboy_rect *r = &rects[i];
+            t0 = pf->now_us(pf->ctx);
+            pf->blit_gray8(pf->ctx,
+                           video_buffer(vid) + (size_t)r->y * video_stride(vid) + r->x,
+                           r->w, r->h, video_stride(vid),
+                           prof.game_x + r->x, prof.game_y + r->y);
+            stats_add(&stats, KOBOY_STAGE_BLIT, pf->now_us(pf->ctx) - t0);
+
+            t0 = pf->now_us(pf->ctx);
+            pf->refresh(pf->ctx, prof.game_x + r->x, prof.game_y + r->y,
+                        r->w, r->h, wfm);
+            stats_add(&stats, KOBOY_STAGE_REFRESH, pf->now_us(pf->ctx) - t0);
+        }
         presented++;
+        rects_emitted += (unsigned long)nrects;
 
         /* A value <= 0 disables cleanup. The explicit guard is required:
            without it, 0 makes this always true (a full refresh every presented
@@ -858,9 +883,9 @@ sram_check:
 
     if (sb.mem && sb.len && sb.writeback) sram_save(sb.path, sb.mem, sb.len);
     say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
-        "%lu large-area full refreshes\n",
+        "%lu large-area full refreshes, %lu rects over %lu presented frames\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,
-        big_refreshes);
+        big_refreshes, rects_emitted, presented);
     /* Always printed, even under --quiet, for the same reason presented= is:
        this is the run's evidence, and a run whose numbers were suppressed is a
        run that has to be done again. */

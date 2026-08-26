@@ -55,4 +55,33 @@ TEST_MAIN({
     CHECK_EQ_INT(distinct, 4);
 
     video_destroy(v);
+
+    /* #4: force_dither=true was only ever exercised by calling
+       video_dither_1bit directly (tests/test_video_quant.c) -- the
+       `if (v->dither)` wiring in the pipeline itself, which is what an actual
+       GBC user with force_dither on hits, had no end-to-end coverage. Same
+       pattern as above (four-level check), but through the dithered path:
+       the 1-bit disher's only two output values are 0x00 and 0xFF, so
+       anything else surviving into the buffer is a real regression, not a
+       rounding difference. */
+    {
+        koboy_video *dv = video_create(&p, true);
+        CHECK(dv != NULL);
+
+        fill565(fb, KOBOY_GB_W, KOBOY_GB_H, 0);
+        koboy_rect dr = video_submit(dv, fb, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(dr.w > 0);
+
+        int dseen[256] = {0}, ddistinct = 0;
+        const uint8_t *dbuf = video_buffer(dv);
+        for (int y = 0; y < 720; y++)
+            for (int x = 0; x < 800; x++) dseen[dbuf[y * video_stride(dv) + x]] = 1;
+        for (int i = 0; i < 256; i++) ddistinct += dseen[i];
+        CHECK_EQ_INT(ddistinct, 2);
+        CHECK(dseen[0x00]);
+        CHECK(dseen[0xFF]);
+
+        video_destroy(dv);
+    }
 })
