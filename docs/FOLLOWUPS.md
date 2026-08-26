@@ -274,7 +274,12 @@ value that disables splitting until a workload is found where it pays.
 
 ## Game & Watch (multi-system, 2026-08-26)
 
-### 28. Nothing about Game & Watch has run on the device
+### 28. ~~Nothing about Game & Watch has run on the device~~ -- CLOSED 2026-08-26
+
+Verified by the device owner: a title launched from the browser, rendered at
+full panel width, and was playable. See `TESTED.md` for what that does and
+does not establish (one title, not all 59). Original text follows.
+
 
 The core cross-builds, ships in `dist/`, passes `verify-core.sh` with a
 closure of `libm` + `libc` only, and the browser lists and loads `.mgw`
@@ -318,3 +323,20 @@ produces the alarming number, and the Game Boy never renders at 160x144.
 Estimates, not measurements -- the constant comes from a host-era sweep and
 every absolute timing this project has taken moved by up to 2.2x between
 sessions.
+
+### 31. RECENT can show two identically-named rows
+
+Folder navigation strips the folder prefix from a row's DISPLAY label. Paths
+are unchanged and existing `recent.dat` rows are untouched, but two ROMs with
+the same filename in different folders now render as the same row in RECENT.
+Harmless until it happens; the fix is to show the folder on the row when a
+duplicate label exists, not to put the prefix back on every row.
+
+### 32. `present_divisor` may want to be per-system, not per-config
+
+Filling the panel roughly doubled `submit` (see TESTED.md's LCD table), and
+Game & Watch has no scrolling, so #26's divisor-versus-smearing tradeoff --
+measured on a scrolling platformer -- does not apply to it at all. The
+shipped `3` was chosen against Darkwing Duck. A per-layout default would let
+Game & Watch present more often without touching the Game Boy's tuning.
+Config question, not a code one, until someone reports a title feeling slow.

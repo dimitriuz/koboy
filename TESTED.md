@@ -22,17 +22,42 @@ and slight ghosting the player was happy to live with. The earlier defaults
 (`450` / `60` / `3000`) were mitigations for a forced-DU4 pipeline and, once
 measured, turned out to cause every flash between them while fixing nothing.
 
-### Game & Watch: builds and runs, but not on the device
+### Game & Watch: VERIFIED on the device, 2026-08-26
 
-The `gw-libretro` core ships as of 2026-08-26 and koboy picks it from a
-`.mgw` extension. Verified **on the host only**: the core loads, reports
-its real canvas, renders correctly through the four-grey pipeline
-(Parachute 658x395, Mario Bros. 973x532 composited across both LCDs,
-Donkey Kong Circus 498x771), and the browser lists and launches `.mgw`
-files end to end.
+Confirmed working by the device owner on the Kobo Libra 2: a Game & Watch
+title launched from the ROM browser, rendered at full panel width in the LCD
+layout, and was playable using the control strip.
 
-**It has never run on a Kobo.** No row is claimed here until it does. See
-`docs/FOLLOWUPS.md` #28 for exactly what a device run needs to establish.
+What that establishes, and no more:
+
+| | |
+|---|---|
+| The core loads and runs on-device | yes |
+| Geometry resolves (late, from inside the first `retro_run`) | yes |
+| The LCD layout renders at full width | yes, `1264x765` for Mickey Mouse (654x396 source) |
+| The strip's controls drive the game | yes |
+| Every one of the 59 titles | **not established** -- one title was played |
+| A full round, scoring, game-over | **not established** |
+
+Measured on-device, LCD layout, per presented frame:
+
+| Title | Source | Rendered | `submit` | `blit` | `refresh` |
+|---|---|---|---|---|---|
+| Mickey Mouse (Wide Screen) | 654x396 | 1264x765 | 23.9 ms | 10.5 ms | 13.1 ms |
+| Donkey Kong (Multi Screen) | 606x748 | 1020x1260 | 32.9 ms | 15.0 ms | 4.3 ms |
+
+`submit` scales with the RENDERED size, so filling the panel roughly doubled
+it against the 1x this layout replaced (Mickey was ~12 ms at 654x396). That
+is the price of the size, not a regression --- see `docs/FOLLOWUPS.md` #30 for
+why the Game Boy comparison people reach for is the wrong one.
+
+**How these titles are driven**, because it is not guessable and cost a
+session to establish: `SELECT` moves a cursor over the unit's own buttons
+(GAME A / GAME B / TIME), and `START` presses the highlighted one. Game
+controls are per-title retropad bindings --- Mickey Mouse is
+`up`=NORTHWEST, `down`=SOUTHWEST, `x`=NORTHEAST, `b`=SOUTHEAST; Donkey Kong
+is the full d-pad plus a JUMP button. `START` with no cursor active opens the
+core's own overlay, which names that title's bindings.
 
 ### Second title, an action game (Darkwing Duck, MBC1)
 

@@ -324,6 +324,36 @@ TEST_MAIN({
         CHECK_EQ_INT(input_state(li)->buttons, 0);
         input_feed(li, up, 2);
 
+        /* THE PROBE THAT MAKES THE LINE ABOVE MEAN SOMETHING.
+           (0,397) is the game rect's own corner: no DMG control lives there
+           either, so `buttons == 0` holds whether or not the faceplate's
+           zones are still live and the check cannot fail. Found by scanning
+           the panel: 12864 points press a DMG control and nothing under LCD;
+           (1032,1020) is one of them -- dead centre of the DMG A button
+           (buttons 0x100 in the DMG layout), and under LCD it is the gap
+           between the game rect's bottom edge (247+765 = 1012) and the top
+           of the control strip (1260), where nothing at all is drawn.
+
+           So this asserts what the comment above claims: feed the same touch
+           under LCD and no joypad bit appears. Mutant: delete the
+           KOBOY_LAYOUT_LCD branch in input.c's recompute() so LCD falls
+           through to the faceplate's zones -- this line then reports 0x100
+           and fails, while the corner probe above stays green. */
+        koboy_ev dmg_a[5] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  1032 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  1020 },
+            { KOBOY_EV_SYN, 0, 0 },
+        };
+        input_feed(li, dmg_a, 5);
+        CHECK_EQ_INT(input_state(li)->buttons, 0);
+        /* Nor is it a pointer press: 1020 is below the game rect, so this
+           point is inert under LCD in both channels, not merely silent in
+           the one being asserted. */
+        CHECK(!input_state(li)->pointer.pressed);
+        input_feed(li, up, 2);
+
         koboy_ev br[5] = {
             { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
             { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
