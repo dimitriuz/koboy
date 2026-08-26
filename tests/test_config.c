@@ -982,16 +982,24 @@ TEST_MAIN({
         /* config_save_keys still works, and the two writers do not clobber
            each other's key -- they share one implementation, so a regression
            in the shared filter would show up as one erasing the other. */
-        CHECK(config_save_keys(path, 193, 194));
+        /* 304/305 (an Xbox pad's A and B), NOT the page-turn 193/194: those
+           two ARE config_defaults' built-in values, so asserting them after a
+           reload cannot tell "the line survived" from "the line was deleted
+           and the default filled the field back in". That vacuous form was
+           caught by a mutant -- config_save_gray_map dropping key_a/key_b as
+           well turned NOTHING red -- which is the whole reason this note
+           exists. The same trap is already noted at the key_start/key_select
+           check above. */
+        CHECK(config_save_keys(path, 304, 305));
         config_defaults(&c);
         CHECK(config_load(&c, path));
         CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_BRIGHT);
-        CHECK_EQ_INT(c.key_a, 193);
+        CHECK_EQ_INT(c.key_a, 304);
         CHECK(config_save_gray_map(path, KOBOY_GRAY_LUMA));
         config_defaults(&c);
         CHECK(config_load(&c, path));
-        CHECK_EQ_INT(c.key_a, 193);
-        CHECK_EQ_INT(c.key_b, 194);
+        CHECK_EQ_INT(c.key_a, 304);
+        CHECK_EQ_INT(c.key_b, 305);
         CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_LUMA);
 
         remove(path); remove(dir);
