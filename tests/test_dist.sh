@@ -77,6 +77,7 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
 
     for f in .adds/koboy/koboy .adds/koboy/koboy-probe .adds/koboy/koboy.sh \
              .adds/koboy/koboy.ini .adds/koboy/gambatte_libretro.so \
+             .adds/koboy/gw_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
              .adds/koboy/README.md .adds/koboy/TESTED.md \
              .adds/koboy/roms/README.txt; do

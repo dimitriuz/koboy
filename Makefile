@@ -95,7 +95,19 @@ $(CORE_SO):
 	CROSS=$(CROSS) sh scripts/build-core.sh
 
 core: $(CORE_SO)
-.PHONY: kobo fbink
+
+# The Game & Watch core, same non-phony reasoning as $(CORE_SO) above: its
+# cross-build is minutes of work and `make dist` must not repeat it every
+# time. OUT is passed so the script writes straight into dist/ under the
+# shipped name (its own default is build/gw_libretro_arm.so, which is where
+# an exploratory build belongs, not a packaged one). Delete the .so to force
+# a rebuild.
+CORE_GW_SO := dist/gw_libretro.so
+$(CORE_GW_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-gw-core.sh kobo
+
+core-gw: $(CORE_GW_SO)
+.PHONY: kobo fbink core core-gw
 
 # ------------------------------------------------------------------ packaging
 # The archive unzips onto the device's user partition and touches nothing else:
@@ -104,7 +116,7 @@ core: $(CORE_SO)
 # directory and a bad build cannot brick anything.
 VERSION := 0.1.0
 
-dist: kobo $(CORE_SO) | build
+dist: kobo $(CORE_SO) $(CORE_GW_SO) | build
 	rm -rf build/pkg && mkdir -p build/pkg/.adds/koboy
 	cp build/koboy-arm           build/pkg/.adds/koboy/koboy
 	cp scripts/koboy.sh          build/pkg/.adds/koboy/
@@ -113,6 +125,7 @@ dist: kobo $(CORE_SO) | build
 	cp config/koboy.ini          build/pkg/.adds/koboy/
 	cp README.md TESTED.md       build/pkg/.adds/koboy/
 	cp $(CORE_SO)                build/pkg/.adds/koboy/
+	cp $(CORE_GW_SO)             build/pkg/.adds/koboy/
 	# `kobo` (a prerequisite above) now always produces build/koboy-probe-arm
 	# too, so this branch is normally taken -- kept as a guard rather than an
 	# unconditional cp so a partial/manual build still packages the emulator
@@ -130,7 +143,7 @@ dist: kobo $(CORE_SO) | build
 	# the browser's first run would report a missing directory -- the
 	# README.txt is what actually makes the directory exist in the zip.
 	mkdir -p build/pkg/.adds/koboy/roms
-	printf 'Put .gb and .gbc files in this directory.\nkoboy lists them at startup.\n' \
+	printf 'Put .gb, .gbc and .mgw files in this directory.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch).\n' \
 	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from
