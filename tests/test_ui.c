@@ -524,20 +524,21 @@ TEST_MAIN({
     {
         char out[256];
 
-        /* A name that already fits is returned unchanged BUT with a known
-           ROM extension stripped -- display only. */
+        /* A name that already fits is returned VERBATIM, extension and all.
+           This asserted stripped labels until the device owner asked for the
+           extensions back: with two systems in one tree, the extension is
+           what says which system a row is, and the folder it sits in is not
+           a reliable substitute -- nothing stops a .gb beside a .mgw. */
         ui_fit_label("TETRIS.GB", 100000, TEST_LABEL_PX, out, sizeof out);
-        CHECK(strcmp(out, "TETRIS") == 0);
+        CHECK(strcmp(out, "TETRIS.GB") == 0);
         ui_fit_label("KIRBY 2.gbc", 100000, TEST_LABEL_PX, out, sizeof out);
-        CHECK(strcmp(out, "KIRBY 2") == 0);
-        /* Game & Watch content too: a folder of these is 59 rows ending in
-           the same four characters. */
+        CHECK(strcmp(out, "KIRBY 2.gbc") == 0);
         ui_fit_label("Fire (Silver).mgw", 100000, TEST_LABEL_PX, out, sizeof out);
-        CHECK(strcmp(out, "Fire (Silver)") == 0);
+        CHECK(strcmp(out, "Fire (Silver).mgw") == 0);
         ui_fit_label("BALL.MGW", 100000, TEST_LABEL_PX, out, sizeof out);
-        CHECK(strcmp(out, "BALL") == 0);
-        /* A near-miss is not an extension: nothing is stripped from a name
-           that merely ends in something similar. */
+        CHECK(strcmp(out, "BALL.MGW") == 0);
+        /* Case is preserved too, both ways -- a label is not normalised on
+           its way to the panel. */
         ui_fit_label("BALL.mgwx", 100000, TEST_LABEL_PX, out, sizeof out);
         CHECK(strcmp(out, "BALL.mgwx") == 0);
         /* Not a ROM extension: left alone. */

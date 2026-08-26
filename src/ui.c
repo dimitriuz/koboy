@@ -145,36 +145,6 @@ static int item_at_row(const koboy_ui_list *u, int r)
    was measured on. */
 static int strip_w(const koboy_ui_list *u) { return u->row_h; }
 
-/* Length `s` would have with a trailing ".gb"/".gbc"/".mgw" (any case)
-   removed, or strlen(s) unchanged if it has none of them. A local,
-   case-insensitive check rather than a call into romlist.c: this widget also
-   draws MENU and slot-picker strings that were never ROM names at all, and
-   for those the check is simply never going to match -- a harmless no-op, not
-   a reason to couple ui.c to romlist.h.
-
-   ".mgw" is here for the same reason the other two are: with the browser
-   listing one folder at a time, a Game & Watch folder is 59 rows that all end
-   in the same four characters, and the extension is the one part of a row
-   that tells the reader nothing they cannot see from where they are
-   standing. Keep this in step with romlist_is_rom -- an extension listed
-   there and missing here is only ever cosmetic, which is why it can drift. */
-static size_t strip_known_ext_len(const char *s, size_t len)
-{
-    static const char *const exts[] = { ".gb", ".gbc", ".mgw" };
-    for (size_t e = 0; e < sizeof exts / sizeof exts[0]; e++) {
-        size_t xl = strlen(exts[e]);
-        if (len < xl) continue;
-        bool match = true;
-        for (size_t i = 0; i < xl && match; i++) {
-            char a = s[len - xl + i], b = exts[e][i];
-            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
-            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
-            if (a != b) match = false;
-        }
-        if (match) return len - xl;
-    }
-    return len;
-}
 
 void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
 {
@@ -183,7 +153,13 @@ void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
     if (px < 1) px = 1;
     if (outsz > (size_t)INT_MAX) outsz = (size_t)INT_MAX; /* keeps the casts below sane */
 
-    size_t len = strip_known_ext_len(s, strlen(s));
+    /* The FULL name, extension included. An earlier version stripped
+       .gb/.gbc (and later .mgw) on the theory that the extension told the
+       reader nothing. The device owner asked for it back, and they are
+       right: with two systems in one tree the extension is exactly what
+       says which system a row is, and a folder is not always a reliable
+       substitute -- nothing stops a .gb sitting beside a .mgw. */
+    size_t len = strlen(s);
     if (len >= outsz) len = outsz - 1;      /* defensive; UI_LABEL_BUF dwarfs any real name */
 
     int adv = TEXT_ADVANCE * px;
