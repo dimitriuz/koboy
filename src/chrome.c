@@ -20,7 +20,18 @@ static int min2(int a, int b) { return a < b ? a : b; }
 /* Contract and rationale in chrome.h. Every term below is the exact expression
    the corresponding draw call in chrome_render() uses for its top edge, so the
    two cannot drift: box() spans cy - h/2, disc() spans cy - r, and frame() with
-   thickness t reaches t-1 rows above its y. */
+   thickness t reaches t-1 rows above its y.
+
+   tests/test_chrome.c duplicates this exact chain independently (computing
+   its own expected minimum from the layout, not by calling this function)
+   and asserts EQUALITY, at all four supported panel sizes. That duplication
+   is deliberate: an inequality check against a pixel sample only catches a
+   deleted term when that term happens to be the chain's current binding
+   minimum -- five of the seven terms here were provably unguarded that way
+   before this comment was written (see the task report's mutant table). An
+   independent equality check catches all seven, because deleting any one of
+   them changes this function's return value away from what the test believes
+   is correct, full stop. */
 int chrome_controls_top(const koboy_layout *l, int panel_w, int panel_h)
 {
     const int W = panel_w, H = panel_h;
@@ -209,8 +220,13 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        Four filled bands, entirely outside the game rect by construction (the
        top band stops at game_y - 1, the bottom band starts at
        game_y + game_h, and the side bands are cut to exactly the rect's own
-       y-span), so this can never intrude on it regardless of side_t/bot_t. */
-    int side_t = perm(18, W);
+       y-span), so this can never intrude on it regardless of side_t/bot_t.
+       side_t is kept modest on purpose: the mandatory game_h/12 addition to
+       bot_t already consumes most of the gap above chrome_controls_top on
+       the narrowest supported panel (Clara), and a fatter side_t would eat
+       further into the band the wordmark and grille need below -- see the
+       "free full-width band" comment further down. */
+    int side_t = perm(8, W);
     if (side_t < 4) side_t = 4;
     int bot_t = side_t + p->game_h / 12;      /* the asymmetry */
 
@@ -243,6 +259,64 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     int strap_y = p->game_y + p->game_h + (bot_t - TEXT_GLYPH_H * strap_px) / 2;
     text_draw_centred(fb, stride, W, H, strap_y, STRAPLINE, strap_px, BG);
 
+    /* Wordmark and speaker grille: both live in the free full-width band
+       between the bezel's bottom edge and the topmost drawn control --
+       chrome_controls_top() already computes exactly that boundary, so
+       reusing it here means neither element can ever grow into a button
+       regardless of how the bezel or the layout change later. Neither
+       feeds back INTO that function, on purpose: they are decoration, not
+       a drawn control or a live touch zone, so they have no business in
+       its chain (chrome.h's contract is explicit that the chain covers
+       controls and touch zones only).
+
+       The band is split at the panel's own centreline: koboy sits
+       lower-left, like the original console's own logotype below its
+       screen; the grille sits lower-right and angled, like its speaker
+       grille -- both kept KOBOY_CHROME_MARGIN clear of their own panel
+       edge. On the tightest supported panel (Clara, 1072x1448) this band
+       is under twenty pixels tall at the shipped scale, so both elements
+       size themselves to whatever room is actually there instead of
+       assuming Libra 2 (1264x1680) headroom, and the whole block is
+       skipped -- not crushed into garbage -- if some future layout leaves
+       no room at all. */
+    int ctrl_top = chrome_controls_top(l, W, H);
+    int deco_y0 = p->game_y + p->game_h + bot_t;
+    int deco_y1 = ctrl_top;
+    if (deco_y1 - deco_y0 > TEXT_GLYPH_H + 2) {
+        int pad = KOBOY_CHROME_MARGIN;
+        int mid = W / 2;
+        int avail_h = deco_y1 - deco_y0;
+
+        /* koboy, lower-left. */
+        int word_avail_w = mid - 2 * pad;
+        int word_px = 1;
+        while (word_px < 6 &&
+              text_measure("koboy", word_px + 1) <= word_avail_w &&
+              TEXT_GLYPH_H * (word_px + 1) <= avail_h - 2)
+            word_px++;
+        int word_x = pad;
+        int word_y = deco_y0 + (avail_h - TEXT_GLYPH_H * word_px) / 2;
+        text_draw(fb, stride, W, H, word_x, word_y, "koboy", word_px, DARK);
+
+        /* Speaker grille, lower-right: six parallel diagonal slashes,
+           stepped a column at a time with hline -- there is no line
+           primitive in this file and six short diagonals do not justify
+           adding one. */
+        int gx0 = mid + pad, gx1 = W - pad;
+        int gy0 = deco_y0 + 1, gy1 = deco_y1 - 1;
+        if (gx1 - gx0 > 12 && gy1 - gy0 > 6) {
+            int gw = gx1 - gx0, gh = gy1 - gy0;
+            int n = 6;
+            for (int i = 1; i <= n; i++) {
+                int glx0 = gx0 + (i * gw) / (n + 1);
+                int len = gh;
+                if (glx0 + len > gx1) len = gx1 - glx0;
+                for (int s = 0; s < len; s++)
+                    hline(fb, stride, W, H, glx0 + s, glx0 + s + 1, gy0 + s, DARK);
+            }
+        }
+    }
+
     /* d-pad cross */
     int dcx = perm(l->dpad_cx, W), dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
     int arm = dr / 3;
@@ -250,24 +324,6 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     box(fb, stride, W, H, dcx, dcy, 2 * dr, arm, MID);
     frame(fb, stride, W, H, dcx - arm / 2, dcy - dr, arm, 2 * dr, 2, INK);
     frame(fb, stride, W, H, dcx - dr, dcy - arm / 2, 2 * dr, arm, 2, INK);
-
-    /* koboy wordmark, where the original console's own logotype sits: to the
-       left of the d-pad, at the d-pad's own height. That spot -- not the open
-       band below the screen -- is deliberate: on the narrowest supported panel
-       (Clara, 1072x1448) the gap between the screen's bottom bezel and
-       chrome_controls_top is under ten pixels at the shipped scale, nowhere
-       near enough room for a wordmark, while the margin to the left of the
-       d-pad is comfortable on every panel because the d-pad's own permille
-       position scales with it. Sized to the widest px that clears that margin,
-       the same technique as the strapline above. */
-    int word_avail = dcx - dr - perm(10, W);
-    if (word_avail < 0) word_avail = 0;
-    int word_px = 1;
-    while (word_px < 6 && text_measure("koboy", word_px + 1) <= word_avail)
-        word_px++;
-    int word_x = perm(10, W);
-    int word_y = dcy - TEXT_GLYPH_H * word_px / 2;
-    text_draw(fb, stride, W, H, word_x, word_y, "koboy", word_px, DARK);
 
     /* A and B */
     int acx = perm(l->a_cx, W), acy = perm(l->a_cy, H), ar = perm(l->a_r, W);
@@ -287,32 +343,6 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
         lbl_px++;
     text_draw_centred_at(fb, stride, W, H, acx, acy + ar + perm(6, H), "A", lbl_px, INK);
     text_draw_centred_at(fb, stride, W, H, bcx, bcy + br + perm(6, H), "B", lbl_px, INK);
-
-    /* Speaker grille: six parallel diagonal slashes in the lower-right case
-       area, beside the A button -- there is no line primitive in this file
-       and six short diagonals do not justify adding one, so each is stepped a
-       column at a time with hline, the same primitive frame() and fill_rect
-       already use. Skipped rather than crushed if the panel leaves no room:
-       every supported panel does, but a hypothetical narrow one should not
-       draw garbage instead of nothing. */
-    {
-        int gx0 = acx + ar + perm(15, W);
-        int gx1 = W - perm(20, W);
-        int gcy = bcy;
-        int gh2 = ar;
-        int gy0 = gcy - gh2, gy1 = gcy + gh2;
-        if (gx1 - gx0 > 12 && gy1 - gy0 > 12) {
-            int gw = gx1 - gx0, gh = gy1 - gy0;
-            int n = 6;
-            for (int i = 1; i <= n; i++) {
-                int lx0 = gx0 + (i * gw) / (n + 1);
-                int len = gh;
-                if (lx0 + len > gx1) len = gx1 - lx0;
-                for (int s = 0; s < len; s++)
-                    hline(fb, stride, W, H, lx0 + s, lx0 + s + 1, gy0 + s, DARK);
-            }
-        }
-    }
 
     /* Start and Select pills */
     int scx = perm(l->start_cx, W), scy = perm(l->start_cy, H);
@@ -344,6 +374,18 @@ void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
                            const koboy_layout *l, int percent)
 {
     (void)l;
+    /* Defensive: percent arrives from a platform backend
+       (kobo_battery_percent) that reads a raw sysfs node on hardware
+       nobody has tested yet -- the only defined values are 0..100 or -1
+       for "unknown", but nothing stops a stray value outside that range
+       from arriving, and this file clamps everything else it draws from
+       caller-supplied numbers (see chrome_bands' note). Any value below 0
+       collapses to the same "unknown" the caller would send explicitly;
+       anything above 100 is capped so the fill loop below can never paint
+       past the lamp's own circle. Live guard, not dead code. */
+    if (percent > 100) percent = 100;
+    if (percent < 0) percent = -1;
+
     const int W = p->panel_w, H = p->panel_h;
     /* Left of the screen, like the DMG's power LED. */
     int cx = p->game_x / 2;

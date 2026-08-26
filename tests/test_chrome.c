@@ -392,87 +392,170 @@ TEST_MAIN({
     CHECK_EQ_INT(chrome_intruded, 0);
     CHECK_EQ_INT(zone_hits, 0);
 
-    /* The MENU zone is a LIVE TOUCH ZONE, so chrome_controls_top must account
-       for it. That function's contract is "the topmost row any drawn control
-       or live touch zone occupies", and it exists because a scale = 0
-       auto-fitted rect once swallowed the A button while its touch zone stayed
-       live underneath -- tapping the lower playfield pressed A. A new zone the
-       function does not know about reintroduces exactly that. */
+    /* GENERAL guard, carried forward from Task 8, REDESIGNED after a review
+       found the first version too weak. That version compared each control's
+       rendered pixels against chrome_controls_top()'s RETURN VALUE, which is
+       a min() over seven terms (two for the d-pad's arms, one each for A, B,
+       Start, Select, Menu). Deleting a non-binding term leaves the min()
+       unchanged, so nothing the pixel probe looked at moved -- the review
+       deleted each of the seven terms in turn and only one (`a`, the term
+       that happened to be the binding minimum on the one profile tested) was
+       caught. The other six were provably unguarded. A second, independent
+       bug in that version: the `menu` column probe (750..950 permille) and
+       the `a` probe (745..915 permille) overlap, so the menu check was
+       silently reading A's pixels rather than the MENU box's.
+
+       The fix: compute the SAME seven-term minimum independently here, from
+       koboy_layout and the panel size, and assert EQUALITY with
+       chrome_controls_top()'s actual return value -- not an inequality
+       against a pixel sample. This deliberately duplicates chrome.c's min2
+       chain. That duplication IS the guard: a future edit to the chain
+       either updates this expected value to match (which is a deliberate,
+       visible part of the same diff) or it does not, and then EVERY one of
+       the seven terms makes this fail, not just whichever one happens to be
+       binding on whichever panel is tested -- because any single term
+       increasing means chrome_controls_top()'s actual minimum can only stay
+       the same or drop, while this independently-computed value tracks
+       whatever the test author believes each control's real top edge is.
+       There is no pixel sampling left to overlap, either.
+
+       Run at all four supported panel sizes, not only the Libra 2 this file
+       otherwise defaults to: Clara (1072x1448) is the one where the margin
+       between the bezel and chrome_controls_top is tightest (nine pixels
+       before this task's fix-round redesign of the bezel/decoration sizing),
+       which is exactly where a future strapline or bezel change would erode
+       it first without this catching it. */
     {
+        static const int panels[][2] = {
+            { 1072, 1448 },   /* Clara family, 6"     -- tightest margin  */
+            { 1264, 1680 },   /* Libra family, 7"                        */
+            { 1404, 1872 },   /* Elipsa family, 10.3"                    */
+            { 1440, 1920 },   /* Sage, 8"                                */
+        };
         koboy_config c; config_defaults(&c);
-        const int W = 1264, H = 1680;
-        int top = chrome_controls_top(&c.layout, W, H);
-        int menu_top = (c.layout.menu_cy * H / 1000) - (c.layout.menu_h * H / 1000) / 2;
-        CHECK(top <= menu_top);
+        const koboy_layout *l = &c.layout;
+
+        for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
+            int W = panels[pi][0], H = panels[pi][1];
+
+            int dcy = l->dpad_cy * H / 1000, dr = l->dpad_r * W / 1000;
+            int arm = dr / 3;
+            int expected = dcy - dr - 1;
+            if (dcy - arm / 2 - 1 < expected) expected = dcy - arm / 2 - 1;
+            int a_top = l->a_cy * H / 1000 - l->a_r * W / 1000;
+            if (a_top < expected) expected = a_top;
+            int b_top = l->b_cy * H / 1000 - l->b_r * W / 1000;
+            if (b_top < expected) expected = b_top;
+            int start_top = l->start_cy * H / 1000 - (l->start_h * H / 1000) / 2;
+            if (start_top < expected) expected = start_top;
+            int select_top = l->select_cy * H / 1000 - (l->select_h * H / 1000) / 2;
+            if (select_top < expected) expected = select_top;
+            int menu_top = l->menu_cy * H / 1000 - (l->menu_h * H / 1000) / 2;
+            if (menu_top < expected) expected = menu_top;
+            if (expected < 0) expected = 0;
+
+            int got = chrome_controls_top(l, W, H);
+            if (got != expected)
+                fprintf(stderr, "  %dx%d: chrome_controls_top=%d, expected %d\n",
+                        W, H, got, expected);
+            CHECK_EQ_INT(got, expected);
+        }
     }
 
-    /* GENERAL guard, carried forward from Task 8: the check above covers only
-       MENU, which is exactly the gap that let a reviewer delete a term from
-       chrome_controls_top's min2 chain with nothing noticing -- five of its
-       six terms had no test at all. Task 12 adds several new drawn elements
-       (labels, a bezel, a wordmark, a speaker grille), which is exactly the
-       kind of change that tends to nudge one of the six upward, so this is
-       where the guard has to earn its place for real.
+    /* The default-layout, 4-panel check above is necessary but not
+       sufficient: on the SHIPPED layout, `a` beats every other term on all
+       four supported panels by a comfortable margin (measured -- see the
+       task report's table), which means deleting any of the other six terms
+       leaves chrome_controls_top()'s return value completely unchanged and
+       an equality check against it, however it is computed, cannot observe
+       the deletion. That is not a flaw in comparing with equality instead of
+       inequality; it is a property of min(): whichever comparison operator
+       is used, a term that is never the actual minimum is invisible to any
+       test that only inspects the aggregate result on a layout where it
+       never wins.
 
-       This scans the ACTUAL RENDERED PIXELS rather than recomputing each
-       control's expected top edge from the layout -- recomputing would only
-       re-derive the same formula the chain uses and could never observe a
-       chain/drawing mismatch. Each control's own fill/frame colour (MID or
-       INK) is unique to controls: the case, bezel, strapline, grille and
-       wordmark added by this task use BG/CASE_HI/CASE_LO/DARK and never MID
-       or INK, so restricting the scan to those two values finds each
-       control's true topmost pixel without the surrounding decoration
-       (which legitimately sits above chrome_controls_top -- it lives in the
-       gap between the screen and the control band on purpose) ever being
-       mistaken for one. */
+       So each term is isolated in its own synthetic layout instead: every
+       OTHER control is parked far down the panel with a negligible radius
+       (cy = 990 permille, r/half-extent = 5 permille), and the one control
+       under test is brought up to an unmistakably dominant position (cy =
+       300 permille, a generous size). With every rival out of contention,
+       chrome_controls_top()'s return value can only equal what that term's
+       own formula produces (if the term is present) or something larger --
+       whatever the next surviving term computes -- if it has been deleted.
+       That is what makes each of these individually decisive. */
     {
-        koboy_config c; config_defaults(&c);
-        koboy_profile p;
         const int W = 1264, H = 1680;
-        static uint8_t fb5[1264 * 1680];
-        config_resolve_profile(&p, &c, W, H);
-        memset(fb5, 0xFF, (size_t)W * H);
-        chrome_render(fb5, W, &p, &c.layout);
 
-        int top = chrome_controls_top(&c.layout, W, H);
-
-        struct { const char *name; int cx, half; } zones[] = {
-            /* dpad's column span (cx +- dr) covers both the vertical and the
-               narrower horizontal arm, so one probe finds whichever is
-               topmost. */
-            { "dpad",   c.layout.dpad_cx,   c.layout.dpad_r },
-            { "a",      c.layout.a_cx,      c.layout.a_r },
-            { "b",      c.layout.b_cx,      c.layout.b_r },
-            { "start",  c.layout.start_cx,  c.layout.start_w / 2 },
-            { "select", c.layout.select_cx, c.layout.select_w / 2 },
-            { "menu",   c.layout.menu_cx,   c.layout.menu_w / 2 },
+        struct { const char *name; int dpad, a, b, start, select, menu; } cases[] = {
+            { "dpad",   1, 0, 0, 0, 0, 0 },
+            { "a",      0, 1, 0, 0, 0, 0 },
+            { "b",      0, 0, 1, 0, 0, 0 },
+            { "start",  0, 0, 0, 1, 0, 0 },
+            { "select", 0, 0, 0, 0, 1, 0 },
+            { "menu",   0, 0, 0, 0, 0, 1 },
         };
-        for (size_t zi = 0; zi < sizeof zones / sizeof zones[0]; zi++) {
-            int x0 = zones[zi].cx * W / 1000 - zones[zi].half * W / 1000;
-            int x1 = zones[zi].cx * W / 1000 + zones[zi].half * W / 1000;
-            if (x0 < 0) x0 = 0;
-            if (x1 >= W) x1 = W - 1;
+        for (size_t ci = 0; ci < sizeof cases / sizeof cases[0]; ci++) {
+            koboy_layout l;
+            memset(&l, 0, sizeof l);
+            /* Parked: negligible footprint, far down the panel. */
+            l.dpad_cx = l.a_cx = l.b_cx = l.start_cx = l.select_cx = l.menu_cx = 500;
+            l.dpad_cy = l.a_cy = l.b_cy = l.start_cy = l.select_cy = l.menu_cy = 990;
+            l.dpad_r = l.a_r = l.b_r = 5;
+            l.start_w = l.select_w = l.menu_w = 10;
+            l.start_h = l.select_h = l.menu_h = 10;
 
-            int found = -1;
-            for (int y = 0; y < H && found < 0; y++)
-                for (int x = x0; x <= x1; x++)
-                    if (fb5[(size_t)y * W + x] == 0xAA || fb5[(size_t)y * W + x] == 0x00) {
-                        found = y;
-                        break;
-                    }
+            /* Bring exactly one control up to a clearly dominant position. */
+            if (cases[ci].dpad)   { l.dpad_cy   = 300; l.dpad_r   = 80; }
+            if (cases[ci].a)      { l.a_cy      = 300; l.a_r      = 80; }
+            if (cases[ci].b)      { l.b_cy      = 300; l.b_r      = 80; }
+            if (cases[ci].start)  { l.start_cy  = 300; l.start_h  = 160; }
+            if (cases[ci].select) { l.select_cy = 300; l.select_h = 160; }
+            if (cases[ci].menu)   { l.menu_cy   = 300; l.menu_h   = 160; }
 
-            /* POSITIVE CONTROL: a probe that silently found nothing would
-               make the CHECK below pass vacuously. */
-            if (found < 0)
-                fprintf(stderr, "  %s: no MID/INK pixel found in its column span\n",
-                        zones[zi].name);
-            CHECK(found >= 0);
+            int expected;
+            if (cases[ci].dpad) {
+                int dcy = l.dpad_cy * H / 1000, dr = l.dpad_r * W / 1000;
+                int arm = dr / 3;
+                int v = dcy - dr - 1, h = dcy - arm / 2 - 1;
+                expected = v < h ? v : h;
+            } else if (cases[ci].a) {
+                expected = l.a_cy * H / 1000 - l.a_r * W / 1000;
+            } else if (cases[ci].b) {
+                expected = l.b_cy * H / 1000 - l.b_r * W / 1000;
+            } else if (cases[ci].start) {
+                expected = l.start_cy * H / 1000 - (l.start_h * H / 1000) / 2;
+            } else if (cases[ci].select) {
+                expected = l.select_cy * H / 1000 - (l.select_h * H / 1000) / 2;
+            } else {
+                expected = l.menu_cy * H / 1000 - (l.menu_h * H / 1000) / 2;
+            }
 
-            if (found >= 0 && found < top)
-                fprintf(stderr, "  %s drawn at row %d, above chrome_controls_top=%d\n",
-                        zones[zi].name, found, top);
-            CHECK(found >= top);
+            int got = chrome_controls_top(&l, W, H);
+            if (got != expected)
+                fprintf(stderr, "  isolated %s: chrome_controls_top=%d, expected %d\n",
+                        cases[ci].name, got, expected);
+            CHECK_EQ_INT(got, expected);
         }
+
+        /* The d-pad's HORIZONTAL arm term cannot be isolated the same way,
+           and this is a proven mathematical property of the current code,
+           not a gap in this test: arm = dr / 3 inside chrome_controls_top,
+           and dcy - dr - 1 <= dcy - arm / 2 - 1 for every dr >= 0 (equal
+           only at the degenerate dr = 0, otherwise strictly less), because
+           the vertical bar of a plus-shaped d-pad is always taller than the
+           horizontal bar is thick. So the horizontal-arm term can never be
+           chrome_controls_top's binding minimum under any layout, and
+           deleting it changes the function's return value for NO input --
+           verified exhaustively for dr in [0, 2000). No test that only
+           observes chrome_controls_top's aggregate output -- this one
+           included -- can distinguish "the term is present" from "the term
+           is absent" for that reason alone; the two are behaviourally
+           identical. It stays in the chain because it is what the actual
+           frame() call for the horizontal arm draws (see the function's own
+           doc comment), matching drawing to formula the same way the other
+           six terms do, and because a future change to how `arm` relates to
+           `dr` could make it stop being dominated -- at which point this
+           very comment is what should be revisited. */
     }
 
     /* The faceplate must be LABELLED. Before this task A, B, Start and Select
