@@ -219,3 +219,55 @@ deliberately deferred, not a known live bug.
     suspect by construction too. `refresh_fixed_tiles` stays shipped at 40
     (the untuned starting guess) with this recorded as a limit of the
     measurement method, not a verdict on the split heuristic.
+
+---
+
+## v2-core, open after the 2026-08-26 play session
+
+### 25. Full-screen scrollers smear, on v1 and v2 alike — the biggest open problem
+
+**Not a regression.** The player confirms v1 looked the same. On a horizontal
+scroll the picture degrades into heavy horizontal streaking within a few
+seconds: a fast non-erasing waveform draws each frame's background without
+clearing the last, and because a scroll offsets that background horizontally
+every frame, successive frames superimpose.
+
+`waveform_fast = auto` solved this for Tetris — small changed region, controller
+picks an erasing waveform. It does not solve it for a scroller, where nearly the
+whole rect changes every frame and the controller still picks a fast one.
+
+The lever is `full_refresh_permille`, which promotes a frame to a flashing
+erasing refresh once the changed area crosses a threshold. Its shipped value of
+**1000 was tuned on Tetris, where it essentially never fires**, and that value
+was carried into v2 unexamined. Untested candidates, in order: lower the
+threshold (400 was tried, result unrecorded here); re-enable `cleanup_interval`;
+or accept the tradeoff and document scrollers as out of scope.
+
+Whatever the answer, it is a **policy** question about when to spend a flash,
+not a bug — and the v1 design spec predicted it: "Full-screen scrollers get no
+benefit and hit the worst case."
+
+### 26. `present_divisor` trades frame rate directly against smearing
+
+Measured 2026-08-26 on Darkwing Duck, 600 core frames, wall clock 10.24 s in
+every case (the core holds 60 Hz regardless):
+
+| `present_divisor` | presented | fps |
+|---|---|---|
+| 3 (shipped) | 76 | 7.4 |
+| 2 | 102 | 10.0 |
+| 1 | 115 | 11.2 |
+
+Lowering it is free in emulation speed but costs *smearing*: more partial
+updates per second means residue accumulates proportionally faster. Tried at 2
+during the session and the player reported it looked the same or worse. Any
+future tuning of this must be judged on the panel, not on the frame counter.
+
+### 27. Multi-rect splitting shows no measurable benefit on real content
+
+Six device runs, splitting on versus off, produced **identical** presented-frame
+counts at every `present_divisor` (76/76, 102/102, 115/115), with rect counts
+differing by two. Combined with #23 — `refresh` is ~0.4 ms of a ~23 ms frame
+while `video_submit` is ~16 ms — v2-core's multi-rect work optimised a stage
+that was never the constraint. Consider defaulting `refresh_fixed_tiles` to a
+value that disables splitting until a workload is found where it pays.

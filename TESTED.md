@@ -40,7 +40,30 @@ device and the same shipped defaults. Measured from the launcher log:
 13.1 presented fps against Tetris's headroom is the honest cost of a game that
 dirties most of the screen most of the time: the pipeline pushes changed
 rectangles, and in a scrolling platformer the changed rectangle is nearly the
-whole picture. It was judged good to play at that rate.
+whole picture.
+
+**Correction, 2026-08-26.** This section previously ended "It was judged good to
+play at that rate." That was too generous, and the player has since said so
+directly: on a horizontal scroll the picture degrades into heavy horizontal
+smearing within a few seconds, and v1 and v2-core look **the same** doing it. So
+this is not a v2 regression -- it is a standing limitation of the whole
+approach, and it was under-reported here.
+
+The mechanism is the one v1 Appendix D already names for a different game: a
+fast non-erasing waveform draws the new content without clearing the old, and
+during a scroll every frame's background is offset horizontally from the last,
+so successive frames superimpose into horizontal streaks. `waveform_fast = auto`
+fixed this for Tetris, where the changed region is small and the controller
+picks an erasing waveform for it. It does not fix a scroller, where nearly the
+whole rect changes every frame.
+
+`full_refresh_permille` is the lever -- it promotes a frame to a flashing,
+erasing refresh once the changed area crosses a threshold -- and its shipped
+value of 1000 was tuned on Tetris, where it essentially never fires. Tuning it
+for scrollers is open; see `docs/FOLLOWUPS.md`. What is settled is that the
+honest characterisation of this device is: **excellent for games with small
+dirty regions, poor for full-screen scrollers**, which is what the v1 design
+spec predicted before any of it was built.
 
 The clean exit matters as much as the frame rate. Getting back to a working
 Nickel without a reboot is what the launcher's environment gate and `restore()`
