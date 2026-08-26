@@ -314,6 +314,17 @@ spec's appendices are the record; the short version:
   upscaled 160x144 -> 800x720 = 576k px = 16.6 ms. G&W runs at 1x: Parachute
   260k px (10.1 ms), Mario Bros. 518k px (15.4 ms). Comparing G&W's canvas to
   the Game Boy's 160x144 *source* suggests a 20x cost blowup and is wrong.
+- **The arcade "portrait panel, portrait game" win is real but smaller than it
+  sounds, and two of its headline titles smear anyway.** A vertical board
+  presents at 672x864 inside a square 864x864 reserved rect — 580,608 pixels
+  against the Game Boy's 576,000, in the panel's own aspect. It is NOT the
+  1264x1626 a fractional 5.6x fit would give, because the DMG faceplate
+  reserves everything below `chrome_controls_top` for the touch controls and
+  the scale search is integer. And the "single-screen boards cannot smear"
+  premise is wrong for the two most famous ones: measured with koboy's own
+  dirty diff, Galaga changes 67% of the game rect per frame and Galaxian 86%,
+  because the STARFIELD scrolls. Dig Dug, Donkey Kong and Ms. Pac-Man are 1.5
+  to 2.6%.
 - Scale 5 with a procedural faceplate, not full-width 7x.
 - `viewVertOrigin` is **not** a blit offset.
 - "Grab the buttons but not power" is impossible: they share `gpio-keys`.
@@ -341,15 +352,16 @@ hiding.
 
 ## Known unfinished
 
-- **SIX OF THE TEN SYSTEMS HAVE NEVER RUN ON A KOBO.** Game Boy and Game &
-  Watch are verified; NES and Pokemon Mini have run on the device. NOTHING
+- **SEVEN OF THE ELEVEN SYSTEMS HAVE NEVER RUN ON A KOBO.** Game Boy and Game
+  & Watch are verified; NES and Pokemon Mini have run on the device. NOTHING
   device-side exists for WonderSwan, Neo Geo Pocket, Atari 2600,
-  ColecoVision, Intellivision or Master System / Game Gear — every figure in
-  `TESTED.md` for those six is a host measurement through koboy's own
-  `config.c`/`video.c`/`chrome.c` plus a cross-build that passes
+  ColecoVision, Intellivision, Master System / Game Gear or ARCADE — every
+  figure in `TESTED.md` for those seven is a host measurement through koboy's
+  own `config.c`/`video.c`/`chrome.c` plus a cross-build that passes
   `verify-core.sh`. In particular the two BIOS files have never been read off
-  a FAT32 partition, and the K1/K2 and KEY/TOP discs have never been touched
-  by a real finger.
+  a FAT32 partition, the K1/K2 and KEY/TOP discs have never been touched by a
+  real finger, and **the picture has never been ROTATED on the panel** —
+  which is the difference between Galaga and Galaga sideways.
 - **Every Atari 2600 title renders about 1.75x too tall**, found by rendering
   frames and looking at them after every numeric check passed. The 2600 is
   the only non-square-pixel system koboy runs. Not fixed here because the fix
