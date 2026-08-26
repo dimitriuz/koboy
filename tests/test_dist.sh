@@ -105,7 +105,7 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     rd=$(mktemp -d)
     unzip -qo "$Z" .adds/koboy/roms/README.txt -d "$rd"
     for ext in .gb .gbc .mgw .nes .min; do
-        grep -q -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
+        grep -qF -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not mention $ext"; rm -rf "$rd"; exit 1; }
     done
     rm -rf "$rd"
