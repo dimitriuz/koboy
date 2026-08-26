@@ -271,3 +271,50 @@ differing by two. Combined with #23 — `refresh` is ~0.4 ms of a ~23 ms frame
 while `video_submit` is ~16 ms — v2-core's multi-rect work optimised a stage
 that was never the constraint. Consider defaulting `refresh_fixed_tiles` to a
 value that disables splitting until a workload is found where it pays.
+
+## Game & Watch (multi-system, 2026-08-26)
+
+### 28. Nothing about Game & Watch has run on the device
+
+The core cross-builds, ships in `dist/`, passes `verify-core.sh` with a
+closure of `libm` + `libc` only, and the browser lists and loads `.mgw`
+end-to-end on the host against real titles. **None of that is a device
+run.** Needed: one NickelMenu launch that opens a `.mgw`, to confirm the
+canvas lands on the panel at the right size and that the printed artwork
+survives four-level quantisation in a way that is actually readable.
+
+The rendered host output (Parachute, Mario Bros., Donkey Kong Circus) looks
+good in four greys, which is evidence but not proof: the host renders to a
+PNG, not to an e-ink panel with its own contrast curve.
+
+### 29. `present_divisor` may want to be per-core
+
+G&W has **no scrolling**, so #25's smearing cannot occur and #26's
+divisor/smearing tradeoff has nothing to trade. The shipped `3` was chosen
+against a scrolling platformer; for a segment-LCD game where only a handful
+of tiles change per frame it is probably too conservative. This is a config
+question, not a code one, until someone measures it on the panel.
+
+Do NOT reason about this from a G&W-vs-Game-Boy pixel-count comparison
+against 160x144 -- see the correction in #30.
+
+### 30. The G&W cost comparison that looks alarming and is wrong
+
+`video_submit` scales with **destination** pixels (~4.7 ms + 20.7 ns/px, #23).
+The Game Boy is upscaled 160x144 -> 800x720 = 576k px = 16.6 ms. G&W renders
+at 1x, so:
+
+| Title | Canvas | dst px | est. submit | vs Game Boy |
+|---|---|---|---|---|
+| Parachute | 658x395 | 260k | 10.1 ms | 0.45x |
+| Donkey Kong Circus | 498x771 | 384k | 12.6 ms | 0.67x |
+| Mario Bros. | 973x532 | 518k | 15.4 ms | 0.90x |
+| upper bound | 1073x777 | 834k | 22.0 ms | 1.45x |
+
+Typical G&W titles are **cheaper** than the Game Boy, not 9-20x more
+expensive. Comparing a G&W canvas to the Game Boy's 160x144 *source* is what
+produces the alarming number, and the Game Boy never renders at 160x144.
+
+Estimates, not measurements -- the constant comes from a host-era sweep and
+every absolute timing this project has taken moved by up to 2.2x between
+sessions.

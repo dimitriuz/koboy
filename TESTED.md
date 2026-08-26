@@ -22,6 +22,18 @@ and slight ghosting the player was happy to live with. The earlier defaults
 (`450` / `60` / `3000`) were mitigations for a forced-DU4 pipeline and, once
 measured, turned out to cause every flash between them while fixing nothing.
 
+### Game & Watch: builds and runs, but not on the device
+
+The `gw-libretro` core ships as of 2026-08-26 and koboy picks it from a
+`.mgw` extension. Verified **on the host only**: the core loads, reports
+its real canvas, renders correctly through the four-grey pipeline
+(Parachute 658x395, Mario Bros. 973x532 composited across both LCDs,
+Donkey Kong Circus 498x771), and the browser lists and launches `.mgw`
+files end to end.
+
+**It has never run on a Kobo.** No row is claimed here until it does. See
+`docs/FOLLOWUPS.md` #28 for exactly what a device run needs to establish.
+
 ### Second title, an action game (Darkwing Duck, MBC1)
 
 Tetris is a generous first test: small dirty rectangles, no scrolling. An action
