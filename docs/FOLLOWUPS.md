@@ -591,3 +591,100 @@ and text-heavy screens and the owner is entitled to see it -- but if a
 `koboy.ini`'s comment says so in as many words. Recorded so the day someone
 reports "the score vanished", the answer is one line away.
 
+## Four more systems (added 2026-08-27)
+
+### 49. Ten of the ColecoVision's twelve keypad keys are unreachable
+
+The DMG faceplate has room for two extra discs and a ColecoVision controller
+has a twelve-key keypad. `config_extra_buttons_for_rom` spends both slots on
+keypad 1 and 2, because those are the two the console's own BIOS option
+screen asks for and without keypad 1 a cartridge cannot be started at all.
+Gearcoleco puts 3-8 on the shoulders and thumbsticks and 9/0 on an analog
+axis; koboy answers `RETRO_DEVICE_JOYPAD` only, so those eight are gone.
+`*` and `#` are reachable, but only because the core binds them to
+`JOYPAD_START` / `JOYPAD_SELECT`, which means koboy's START and SELECT discs
+are LYING about what they do on this system -- the faceplate's labels are
+moulded into `chrome.c` and are not per-system.
+
+The titles this actually costs are the ones with in-play menus (Fortune
+Builder, the Super Action titles), not the ones with a start screen. Two ways
+out if it ever matters: a per-system label for the START/SELECT pillows, or
+the modal trick FreeIntv uses -- but Gearcoleco has no such mode, so koboy
+would have to draw the keypad itself.
+
+### 50. The Intellivision disc is 16-way and koboy offers 8
+
+FreeIntv maps the four cardinals to the retropad d-pad and synthesises the
+four diagonals from pairs, which is what koboy's touch pad already produces.
+The remaining EIGHT intermediate positions of the real 16-direction disc are
+offered only on the LEFT ANALOG STICK, and koboy has no analog source at all
+(`src/core.c` answers `RETRO_DEVICE_JOYPAD` and `RETRO_DEVICE_POINTER`).
+Titles that steer finely -- Astrosmash's ship, Auto Racing, Night Stalker --
+are coarser here than on the hardware. Nothing is unplayable; nothing is
+exact either. A touch d-pad that reported an ANGLE rather than a bitmask
+could feed the analog axes, which is a real feature and not a small one.
+
+### 51. Every Atari 2600 title renders about 1.75x too tall
+
+Found by rendering frames and looking at them, which is the only way it could
+have been found -- every numeric check passes. The 2600's pixels are ~1.6:1,
+not square: 160 TIA pixels span a 4:3 frame. stella2014 says so the only way
+the API lets it, by declaring `base_width = 160 * 2 = 320` while delivering a
+160-wide frame, and koboy's DMG path scales squarely. Result on a Libra 2:
+480x630 where the correct shape is about 840x630. Ms. Pac-Man's maze is a
+narrow vertical strip.
+
+It is the only system koboy runs with the problem -- ColecoVision,
+Intellivision, Master System and Game Gear are all square-pixel by
+arithmetic, and so is every handheld here.
+
+The machinery to fix it already exists and is already used: the LCD layout's
+`video_scale_gray_frac` does arbitrary `dw x dh`. What is needed is (a) a
+per-frame pixel-aspect input to `video_fit_rect`'s DMG branch and (b) making
+`video_submit`'s DMG scaler fall back to the fractional path when `dw` is not
+`src_w * (dh / src_h)`. Both touch the hot path of the ONE presentation that
+has been verified on hardware, which is why this was not done in the same
+batch that added the system. Whoever does it should keep the Game Boy's
+block-copy path bit-for-bit and prove it with the existing goldens.
+
+Where the aspect number should come from is the second question. The core's
+`aspect_ratio` (1.3333 here) is the honest source and `src/core.c` does not
+currently read it; `base_width / delivered width` also works for stella2014
+but only because that core is encoding the hint in a field it is supposed to
+be reporting a fact in.
+
+### 52. An Intellivision frame is mostly black border, on a reflective panel
+
+FreeIntv's output is a fixed 352x224 with the 320x192 playfield inside it;
+the rest is the console's border, which most titles leave black. On a Libra 2
+that is a solid black band around a 1056x672 game rect -- both hard to read
+on paper and the worst case for the panel's waveforms, which is the same
+reasoning that already picked the Pokemon Mini's inverted palette
+(`src/core.c`). The core has no option to trim it, so the fix would be
+koboy's: either crop the known border on submit, or grow the existing
+"unused corner is paper" idea into "a border the core draws every frame is
+not content". Neither is obviously right, which is why it is written down
+rather than done.
+
+### 53. `stella2014_libretro.so` is the largest ARM core shipped, and GPGX is larger
+
+Genesis Plus GX cross-builds to 5.9 MB stripped, against gambatte's 2.6 MB
+and RACE's 208 KB, because it carries a Mega Drive, a Sega CD (libchdr,
+zstd, tremor, an MP3 decoder) and an SVP DSP that koboy will never load a
+single ROM for -- `config_core_for_rom` routes only `.sms` and `.gg` there.
+Nothing is broken and `dist/` is not size-constrained, but if it ever
+becomes so, GPGX's Makefile has `HAVE_CDROM`/`USE_LIBCHDR` switches and the
+right answer is to turn them off rather than to change core.
+
+### 54. `.bin` is a legitimate ROM extension on three of these systems and koboy claims none of it
+
+stella2014 accepts `a26|bin|mvc`, Gearcoleco `col|cv|bin|rom`, FreeIntv
+`int|bin|rom`. koboy's allowlist claims only `.a26`, `.col` and `.int`, and
+`tests/test_romlist.c` asserts that `exec.bin`, `grom.bin` and
+`colecovision.rom` are NOT listed as games -- which is the whole reason. A
+user whose Atari 2600 collection is named `*.bin` (a common TOSEC shape) will
+see an empty browser and no explanation. If that is ever reported, the fix is
+not to claim `.bin` -- it is to say so in `roms/README.txt`, or to add a
+rename hint, because the two BIOS files this project now asks users to
+install are literally `.bin`.
+

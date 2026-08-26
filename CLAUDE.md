@@ -3,9 +3,16 @@
 A retro emulator front-end for modern Kobo e-readers, built Game-Boy-first.
 No C++ of its own. It `dlopen`s a libretro core chosen from the ROM's
 extension — gambatte (.gb/.gbc), gw-libretro (.mgw), fceumm (.nes),
-PokeMini (.min), beetle-wswan (.ws/.wsc), RACE (.ngp/.ngc) — renders four
-greys through FBInk to the e-ink panel, and
-reads the page-turn buttons and touchscreen straight from evdev.
+PokeMini (.min), beetle-wswan (.ws/.wsc), RACE (.ngp/.ngc), stella2014
+(.a26), Gearcoleco (.col), FreeIntv (.int), Genesis Plus GX (.sms/.gg) —
+renders four greys through FBInk to the e-ink panel, and reads the page-turn
+buttons and touchscreen straight from evdev.
+
+**Two of the ten systems need a BIOS, and it is the owner's to supply.**
+ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
+`grom.bin`. Both go in `.adds/koboy/` (what koboy answers
+`GET_SYSTEM_DIRECTORY` with). Nothing ships them and `tests/test_dist.sh`
+asserts nothing ever will.
 
 **v1 is merged and verified on real hardware** (a Kobo Libra 2, playing Tetris
 and an action platformer, exiting to a working Nickel without a reboot).
@@ -21,7 +28,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 25 binaries, 2868 checks. Runs on x86_64.
+make test        # host suite: 25 binaries, 3525 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -86,11 +93,15 @@ src/romlist.c         lists ONE directory of rom_dir at a time -- folders
                       feeds ui.c's list widget. It does NOT recurse: the
                       flatten it replaced put the same "Game and Watch/"
                       prefix on 59 rows. romlist_is_rom is an ALLOWLIST of
-                      extensions (.gb/.gbc/.mgw/.nes/.min/.ws/.wsc/.ngp/.ngc)
-                      and must stay in step with config_core_for_rom's table
-                      -- a real NES collection ships .pal files beside the
-                      ROMs, and WonderSwan and Neo Geo Pocket ones ship
-                      boot.rom / boot1.rom
+                      extensions (.gb/.gbc/.mgw/.nes/.min/.ws/.wsc/.ngp/
+                      .ngc/.a26/.col/.int/.sms/.gg) and must stay in step
+                      with config_core_for_rom's table -- a real NES
+                      collection ships .pal files beside the ROMs,
+                      WonderSwan and Neo Geo Pocket ones ship boot.rom /
+                      boot1.rom, and an Intellivision one ships boot0-boot3,
+                      two of which ARE the BIOS. `.bin` is deliberately not
+                      claimed even though three cores accept it: exec.bin
+                      and grom.bin are .bin
 src/uiscript.c        replays a synthetic input script (tap/key/idle) into
                       the ROM BROWSER only -- --ui-script, for bounded
                       unattended runs. MODE_MENU is not scripted; a run whose
@@ -104,13 +115,20 @@ src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
 
 -- multi-system: koboy is no longer Game-Boy-only ------------------------
-Six cores ship. Extension -> core -> layout, all decided in config.c:
+Ten cores ship. Extension -> core -> layout, all decided in config.c:
   .gb/.gbc  gambatte_libretro.so         DMG faceplate
   .mgw      gw_libretro.so               LCD strip (the unit draws its own buttons)
   .nes      fceumm_libretro.so           DMG faceplate
   .min      pokemini_libretro.so         DMG faceplate + a C disc
   .ws/.wsc  mednafen_wswan_libretro.so   DMG faceplate + L1 and R1 discs
   .ngp/.ngc race_libretro.so             DMG faceplate
+  .a26      stella2014_libretro.so       DMG faceplate (its A disc is DEAD --
+                                         stella2014 puts fire on JOYPAD_B)
+  .col      gearcoleco_libretro.so       DMG faceplate + K1 and K2 discs, and
+                                         NEEDS colecovision.rom
+  .int      freeintv_libretro.so         DMG faceplate + KEY and TOP discs,
+                                         and NEEDS exec.bin + grom.bin
+  .sms/.gg  genesis_plus_gx_libretro.so  DMG faceplate
 Adding a system is a build script plus four wiring points: the table in
 config_core_for_rom, romlist_is_rom, a non-phony $(CORE_*_SO) rule in the
 Makefile, and the generated roms/README.txt.
@@ -131,8 +149,26 @@ scripts/build-race-core.sh    RACE (Neo Geo Pocket + Color). Chosen over
                       pure C and ~3x faster; beetle-ngp needs
                       -static-libstdc++ and then libm + ld-linux-armhf too.
                       The script's header carries the numbers.
-All five are pure C: closure is libm+libc or less, SMALLER than gambatte's --
-no libdl, no libgcc_s, no ld-linux-armhf. The two newest need libc ALONE.
+scripts/build-stella-core.sh  libretro/stella2014-libretro (Atari 2600).
+                      NOT libretro/stella2014 (404s) and NOT libretro/stella,
+                      which forces -std=c++17 -- a flag Linaro 4.9.2 rejects
+                      outright. That is the whole choice.
+scripts/build-gearcoleco-core.sh  drhelius/Gearcoleco (ColecoVision;
+                      libretro/gearcoleco 404s too). The libretro port is a
+                      SUBDIRECTORY of the emulator repo. NEEDS A BIOS: with
+                      none it draws a static NO BIOS bitmap forever, which
+                      only a rendered frame reveals.
+scripts/build-freeintv-core.sh  libretro/FreeIntv (Intellivision). The only
+                      core for the system, and the only one koboy ships that
+                      asks for XRGB8888. NEEDS exec.bin + grom.bin.
+scripts/build-gpgx-core.sh    libretro/Genesis-Plus-GX (Master System AND
+                      Game Gear). Chosen over Gearsystem by MEASUREMENT
+                      (pure C, ~2.5x faster over 121 titles); SMS Plus GX is
+                      DISQUALIFIED -- it segfaults in retro_load_game calling
+                      a null log pointer kept from a refused
+                      GET_LOG_INTERFACE, which koboy also refuses.
+Six of the ten are pure C: closure is libm+libc or less. The two WonderSwan/
+Neo Geo cores need libc ALONE.
 scripts/probe_core.c  standalone: dlopens ANY core with no koboy code in the
                       way and reports geometry BEFORE and AFTER the first
                       retro_run(). This is how the 128x128 placeholder was
@@ -142,12 +178,21 @@ src/text.c            the 5x7 bitmap font, lifted out of main.c because v2
 
 koboy_layout's extra[] holds the DMG faceplate's OPTIONAL discs -- position,
 KOBOY_BTN_* bit and label per slot, r == 0 meaning "empty". A Pokemon Mini
-fills one ("C"); a WonderSwan fills two ("L1", "R1") because beetle-wswan's
-rotated key map puts the console's own A and B on JOYPAD_L/R. Three consumers
-guard on r (chrome_controls_top, the DMG renderer, input.c's hit test) and
-each has a distinct failure if the guard goes -- see the commit and
+fills one ("C"); a WonderSwan fills two ("L1", "R1"); a ColecoVision fills
+two ("K1", "K2" -- keypad 1 and 2, without which no cartridge can be
+started); an Intellivision fills two ("KEY", "TOP"), where KEY is not a
+button at all but FreeIntv's hold-to-show-the-mini-keypad modifier, and is
+what makes all twelve of that console's keypad keys reachable. Three
+consumers guard on r (chrome_controls_top, the DMG renderer, input.c's hit
+test) and each has a distinct failure if the guard goes -- see the commit and
 test_chrome.c. The bit is always the CORE's choice, read off its input
 descriptors, never picked here.
+
+TWO of the ten systems have a 12-KEY KEYPAD the faceplate cannot draw, and on
+both of them titles refuse to start without it. Check any new system's real
+control set against what the faceplate offers BEFORE assuming DMG is enough;
+this has now cost a round on Game & Watch, Pokemon Mini, WonderSwan, and both
+of these.
 ```
 
 Path resolution is against `/proc/self/exe`'s directory — **`dlopen` never
@@ -164,7 +209,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 48 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 is the live one: neither WonderSwan nor Neo Geo Pocket has run on hardware at all**, and #46 is its twin for the new greyscale default. |
+| `docs/FOLLOWUPS.md` | 54 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 is the live one: six of the ten systems have never run on hardware at all**; #46 is its twin for the greyscale default, and #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall). |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -256,6 +301,21 @@ hiding.
 
 ## Known unfinished
 
+- **SIX OF THE TEN SYSTEMS HAVE NEVER RUN ON A KOBO.** Game Boy and Game &
+  Watch are verified; NES and Pokemon Mini have run on the device. NOTHING
+  device-side exists for WonderSwan, Neo Geo Pocket, Atari 2600,
+  ColecoVision, Intellivision or Master System / Game Gear — every figure in
+  `TESTED.md` for those six is a host measurement through koboy's own
+  `config.c`/`video.c`/`chrome.c` plus a cross-build that passes
+  `verify-core.sh`. In particular the two BIOS files have never been read off
+  a FAT32 partition, and the K1/K2 and KEY/TOP discs have never been touched
+  by a real finger.
+- **Every Atari 2600 title renders about 1.75x too tall**, found by rendering
+  frames and looking at them after every numeric check passed. The 2600 is
+  the only non-square-pixel system koboy runs. Not fixed here because the fix
+  is anisotropic fitting in `video.c`'s hot path, which is the one
+  presentation verified on hardware. `docs/FOLLOWUPS.md` #51 has the
+  mechanism.
 - **The save path (cartridge SRAM) has now run on hardware, and the
   destructive-truncation bug it was carried to test has been proven fixed.**
   2026-08-26 device session: Zelda (cart type `0x03`, `rambanks: 1`, the
@@ -297,6 +357,9 @@ is not an oversight ("DISABLED BY DEFAULT, and the history matters because 'off'
 looks like an oversight otherwise"). Clamps and guards carry a note saying they
 are live so nobody deletes them as dead code. Match that voice.
 
-ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`) and must never be committed.
+ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`, and the eleven extensions the
+other nine systems use) and must never be committed. Neither may a BIOS: two
+systems need one now, and `tests/test_dist.sh` asserts no `.rom` or `.bin`
+reaches the package.
 `*.pgm` is marked binary in `.gitattributes` — without it git diffs a golden
 image as text and a review package balloons to megabytes.

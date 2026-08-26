@@ -4,10 +4,16 @@ A retro emulator for Kobo e-readers, built Game-Boy-first. It runs a libretro
 core picked from the ROM's own extension --- gambatte for `.gb`/`.gbc`,
 gw-libretro for Game & Watch `.mgw`, fceumm for NES `.nes`, PokeMini for
 Pokemon Mini `.min`, beetle-wswan for WonderSwan and WonderSwan Color
-`.ws`/`.wsc`, RACE for Neo Geo Pocket and Pocket Color `.ngp`/`.ngc` ---
-renders four greys straight onto the e-ink panel through FBInk, and reads the
-page-turn buttons and the touchscreen directly from evdev. No BIOS file is
-needed for any of them.
+`.ws`/`.wsc`, RACE for Neo Geo Pocket and Pocket Color `.ngp`/`.ngc`,
+stella2014 for Atari 2600 `.a26`, Gearcoleco for ColecoVision `.col`,
+FreeIntv for Intellivision `.int`, Genesis Plus GX for Master System `.sms`
+and Game Gear `.gg` --- renders four greys straight onto the e-ink panel
+through FBInk, and reads the page-turn buttons and the touchscreen directly
+from evdev.
+
+Eight of the ten systems need no BIOS file. **ColecoVision and Intellivision
+do**, and neither file ships with koboy because neither is ours to
+distribute --- see "BIOS files" below.
 
 The two greyscale handhelds suit the panel best: a WonderSwan and a Neo Geo
 Pocket both drive eight shades of grey natively, so a mono title loses almost
@@ -31,13 +37,34 @@ Game Boy.
   "Launching" below for why that is a hard requirement.
 - **Your own ROMs.** None are included, and none ever will be. Either point
   `rom=` in `koboy.ini` at a specific `.gb`/`.gbc`/`.mgw`/`.nes`/`.min`/
-  `.ws`/`.wsc`/`.ngp`/`.ngc` file,
+  `.ws`/`.wsc`/`.ngp`/`.ngc`/`.a26`/`.col`/`.int`/`.sms`/`.gg` file,
   or drop several into `.adds/koboy/roms/` (the `rom_dir` default) and pick
   one from koboy's own on-panel menu at launch -- see "Playing" below.
   Subfolders work: the browser walks them one level at a time, which is what
   makes a 1386-file NES collection usable. Files that are not ROMs are not
-  listed, so the `.pal` palettes, `boot.rom` and `boot1.rom` a real collection
-  carries stay out of the way.
+  listed, so the `.pal` palettes, `boot.rom`, `boot1.rom` and `boot0`-`boot3`
+  a real collection carries stay out of the way --- including the two files
+  that ARE a BIOS.
+
+## BIOS files
+
+Two of the ten systems cannot run without the console's own boot ROM, which
+is copyrighted and is not distributed here. Put the files in `.adds/koboy/`
+itself --- the directory the `koboy` binary lives in, not `roms/`:
+
+| System | File | Size | Without it |
+|---|---|---|---|
+| ColecoVision | `colecovision.rom` (or `coleco.rom`) | 8192 | every game shows a `NO BIOS` screen |
+| Intellivision | `exec.bin` | 8192 | nothing runs |
+| Intellivision | `grom.bin` | 2048 | nothing runs |
+
+If you have a MiSTer Intellivision setup, `boot0.rom` **is** `exec.bin` and
+`boot1.rom` **is** `grom.bin`, byte for byte. `boot2.rom` (Intellivoice) and
+`boot3.rom` (ECS) are not needed. Rename copies rather than the originals.
+
+Every other system here needs nothing: the Game Boy, Game & Watch, NES,
+WonderSwan, Neo Geo Pocket, Atari 2600, Master System and Game Gear cores
+either need no boot ROM or link a free replacement.
 
 ## Install
 

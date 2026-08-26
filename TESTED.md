@@ -178,6 +178,201 @@ one environment callback that nothing pinned until now
 figure exists, the L1/R1 discs have never been touched by a real finger, and
 no WonderSwan `.srm` or Neo Geo Pocket `.ngf` has survived a real session.
 
+### Atari 2600, ColecoVision, Intellivision, Master System + Game Gear: NOT RUN ON THE DEVICE, 2026-08-27
+
+Four systems added on one day and **none has been on a Kobo**. Everything
+below was measured on the x86_64 dev host with `scripts/probe_core.c` and a
+throwaway harness driving koboy's own `config.c`/`video.c`/`chrome.c` against
+ROMs from a real collection; the ARM cores were cross-built and passed
+`scripts/verify-core.sh`, and that is the whole of the device-side evidence.
+
+| | Atari 2600 (stella2014) | ColecoVision (Gearcoleco) | Intellivision (FreeIntv) | SMS + Game Gear (Genesis Plus GX) |
+|---|---|---|---|---|
+| Geometry before the first `retro_run` | 320xH base (a LIE, see below), **320x256 max** | 256x192 base, **512x288 max** | 352x224 base and max | 256x192 (SMS) / 160x144 (GG) base, **284x240 max** |
+| ...and after | unchanged | unchanged | unchanged | unchanged |
+| Frame the core actually delivers | **160**x210 (NTSC) or 160x250/256 (PAL) | 256x192 | 352x224 | 256x192 / 160x144 |
+| `SET_GEOMETRY` at runtime | never | never | never | yes, but never above 284x240 |
+| Pixel format | RGB565 | RGB565 | **XRGB8888** -- the only one | RGB565 |
+| Asks for a system directory | no | **yes, and needs it** | **yes, and needs it** | yes, but runs without one |
+| `valid_extensions` | `a26\|bin\|mvc` | `col\|cv\|bin\|rom` | `int\|bin\|rom` | `m3u\|...\|sms\|gg\|sg\|...` |
+| `RETRO_MEMORY_SAVE_RAM` | **0, all 82 titles** | **0, all 28 titles** | **0, all 26 titles** | **0x10000 at load** -- see below |
+| BIOS required | no | **YES: `colecovision.rom`** | **YES: `exec.bin` + `grom.bin`** | no |
+| ARM closure | libm, libc, ld-linux-armhf | libm, libc, ld-linux-armhf | libm, libc, ld-linux-armhf | **libm, libc** |
+| ARM size, stripped | 1.7 MB | 682 KB | 526 KB | 5.9 MB |
+| Host emulation cost | 0.118-0.305 ms/frame (82 titles) | 0.201-0.232 (28) | 0.044-0.085 (26) | 0.094-0.247 (121) |
+| Titles that load and run | 82 / 82 | 28 / 28 | 26 / 26 | 68 / 68 `.sms`, 53 / 53 Game Gear |
+
+**The BIOS question, and it is the first time this project has answered yes.**
+Settled by running with an EMPTY system directory and looking at the frame,
+because on one of these cores "it loaded" and "it works" are different
+questions:
+
+- *Gearcoleco* loads the cartridge, reports 256x192, runs 300 frames without
+  an error -- and every one of those frames is a static bitmap that reads
+  `NO BIOS`. `src/no_bios.h` is chosen over the real framebuffer whenever the
+  BIOS is missing. With `colecovision.rom` (8192 bytes,
+  sha1 `45bedc4c...`) in place, BurgerTime runs to its option screen. The
+  core tries `colecovision.rom` then falls back to `coleco.rom`.
+- *FreeIntv* logs `HALT!` every frame without `exec.bin` and `grom.bin`, and
+  runs everything with them.
+- *stella2014* never asks for a system directory at all. *Genesis Plus GX*
+  asks, but only for the optional Master System boot ROM behind its own
+  `genesis_plus_gx_bios` option, which defaults to disabled; all 121 Sega
+  titles run against an empty directory.
+
+Neither BIOS ships. Both go in `.adds/koboy/` -- the directory koboy already
+answers `GET_SYSTEM_DIRECTORY` with (`src/core.c`, from `koboy.ini`'s
+`save_dir`). `tests/test_dist.sh` asserts no `.rom` or `.bin` reaches the
+package AND that the generated `roms/README.txt` names all three files.
+
+**Which MiSTer boot ROM is which, settled by content.** The author's
+Intellivision folder carries `boot0.rom` through `boot3.rom` in MiSTer's
+naming, and `boot1.rom` and `boot2.rom` are BOTH 2048 bytes, so size cannot
+tell them apart and the wrong pick gives a machine that runs and draws
+garbage. `cmp` against a batocera BIOS tree that names its files properly:
+
+| MiSTer file | Size | Is | sha1 |
+|---|---|---|---|
+| `boot0.rom` | 8192 | `exec.bin` | `5a65b922b562cb1f57dab51b73151283f0e20c7a` |
+| `boot1.rom` | 2048 | `grom.bin` | `f9608bb4ad1cfe3640d02844c7ad8e0bcd974917` |
+| `boot2.rom` | 2048 | Intellivoice speech ROM -- **not needed** | `618563e5...` |
+| `boot3.rom` | 24576 | ECS expansion ROM -- **not needed** | `b7ccb38b...` |
+
+Confirmed by running: Atlantis draws `(C) IMAGIC 1982` in legible text, and
+that text comes out of GROM.
+
+**THE KEYPADS, which is the real work here.** Two of these four systems have
+a twelve-key telephone keypad on the controller and on both of them titles
+cannot be STARTED without it. Rendered and read, not assumed.
+
+- *ColecoVision*: every cartridge boots into the console BIOS's `TO SELECT
+  GAME OPTION, PRESS BUTTON ON KEYPAD` screen. Proved by running Donkey Kong
+  for 900 frames pressing only START and A -- still on the option screen --
+  and again pressing `JOYPAD_Y`, which is Gearcoleco's keypad 1: the game
+  starts. So the faceplate draws **K1** and **K2** discs for `.col`. What
+  stays unreachable: keypad 3-9 and 0 (Gearcoleco spreads them across
+  shoulders, sticks and an analog axis), and note that koboy's START and
+  SELECT are keypad `*` and `#` on this system whatever their moulded labels
+  say. See `docs/FOLLOWUPS.md` #49.
+- *Intellivision*: BurgerTime and Bump 'n' Jump stop at "Select 1 or 2
+  Players", Diner says "then press enter". FreeIntv puts keypad 1-9 ONLY on
+  the right analog stick, which koboy has no source for -- nine dead keys.
+  Except that the core has a second route its descriptors call "Show
+  Keypad": hold `JOYPAD_L` and a 4x3 keypad is drawn into the frame's corner,
+  the d-pad moves a cursor over it, and any face button presses the selected
+  key. MEASURED: holding L1 and tapping A on BurgerTime's prompt put a `1` on
+  the screen. So the faceplate draws a **KEY** disc (that modifier) and a
+  **TOP** disc (the hand controller's third action button), and **all twelve
+  keypad keys are reachable**. What stays unreachable: the disc's twelve
+  DIAGONAL positions -- koboy's touch pad gives eight of sixteen, and
+  FreeIntv only offers the rest on the left analog stick. See #50.
+- *Atari 2600*: four directions, one fire button, Reset and Select, all on
+  the faceplate already. But **the A disc is DEAD** -- stella2014 puts fire on
+  `JOYPAD_B`, and `JOYPAD_A` does something only for a Genesis pad or
+  paddles. The two difficulty switches and the colour/B&W switch are
+  unreachable console switches; no title in the 82 needs one to start.
+  Paddle titles play on the d-pad.
+- *Master System / Game Gear*: two buttons on `JOYPAD_B`/`JOYPAD_A` and
+  Pause/Start on `JOYPAD_START`. Nothing left over, no extra disc.
+
+FreeIntv's OTHER keypad -- `freeintv_multiscreen_overlay`, which widens the
+frame to 1074x600 and paints a photographic 12-key pad beside the game for a
+`RETRO_DEVICE_POINTER` to tap -- was built, run and rejected. koboy's LCD
+layout already forwards touches as a pointer, so it would have worked, but it
+costs **1.335 ms/frame against 0.106** without it (12x, on the host, before
+the Cortex-A9 multiplier) and reaches the same twelve keys the mini keypad
+above already reaches for nothing.
+
+Resolved presentation, from `config_resolve_profile`, with `video_submit`
+estimated from #23's 4.7 ms + 20.7 ns per destination pixel:
+
+| System | Panel | Scale | Rect | drawn | est. `submit` |
+|---|---|---|---|---|---|
+| Atari 2600 160x210 (NTSC) | 1072x1448 | 3 | 960x768 | 480x630 | 11.0 ms |
+| Atari 2600 160x210 (NTSC) | 1264x1680 | 3 | 960x768 | 480x630 | 11.0 ms |
+| Atari 2600 160x210 (NTSC) | 1440x1920 | 4 | 1280x1024 | 640x840 | 15.8 ms |
+| Atari 2600 160x250 (PAL) | 1264x1680 | 3 | 960x768 | 480x750 | 12.2 ms |
+| ColecoVision 256x192 | 1072x1448 | 2 | 1024x576 | 768x576 | 13.9 ms |
+| ColecoVision 256x192 | 1264x1680 | 2 | 1024x576 | 768x576 | 13.9 ms |
+| ColecoVision 256x192 | 1440x1920 | 2 | 1024x576 | 768x576 | 13.9 ms |
+| Intellivision 352x224 | 1264x1680 | 3 | 1056x672 | 1056x672 | 19.4 ms |
+| Intellivision 352x224 | 1440x1920 | 4 | 1408x896 | 1408x896 | 30.8 ms |
+| Master System 256x192 | 1264x1680 | 3 | 852x720 | 768x576 | 13.9 ms |
+| Master System 256x192 | 1440x1920 | 4 | 1136x960 | 1024x768 | 21.0 ms |
+| Game Gear 160x144 | 1264x1680 | 3 | 852x720 | **800x720** | 16.6 ms |
+| Game Gear 160x144 | 1440x1920 | 4 | 1136x960 | 960x864 | 21.9 ms |
+| (Game Boy, for scale) | 1264x1680 | 5 | 800x720 | 800x720 | 16.6 ms |
+
+**The Game Gear / Game Boy collision, handled deliberately.** A Game Gear
+frame is 160x144 -- byte for byte the Game Boy's geometry -- and
+`config_resolve_profile` really does key its scale default on that geometry.
+It is keyed on MAX, and Genesis Plus GX reports max 284x240, so a Game Gear
+is not caught by it. It does not need to be: auto-fitting lands its picture
+at exactly **800x720**, the Game Boy's scale-5 presentation, by arithmetic.
+Nothing else keys on that geometry, and in particular the greyscale mapping
+does not -- a Game Gear is a COLOUR system and gets the colour treatment.
+`tests/test_video_gray.c` pins both halves and the mutant that would have
+been the bug (a `gray_map` exemption for 160x144 in `video_create`) makes it
+fail on Sonic's measured sky.
+
+**A REAL PRESENTATION DEFECT, found by rendering frames and looking at them:
+every Atari 2600 title is drawn about 1.75x too tall.** The 2600's pixels are
+not square -- 160 across a 4:3 frame makes each one ~1.6:1 -- and stella2014
+says so the only way its API lets it, by declaring `base_width = 160 * 2`
+while delivering a 160-wide frame. koboy scales squarely, so Ms. Pac-Man's
+maze and River Raid's river come out as narrow vertical strips: 480x630 where
+the correct shape is about 840x630. Playable and legible, plainly wrong. It
+is also the ONLY system here with the problem -- ColecoVision, Intellivision,
+Master System and Game Gear are all square-pixel by arithmetic. Deliberately
+not fixed in this batch: anisotropic fitting is a change to `video.c`'s hot
+path and to the one presentation that has been verified on hardware. See
+`docs/FOLLOWUPS.md` #51.
+
+**How four greys actually look.** Rendered through koboy's real pipeline and
+examined:
+
+- *Master System and Game Gear are the best colour result this project has
+  had.* Wonder Boy III's password screen, Phantasy Star's dialogue, Sonic's
+  first zone and Shining Force Gaiden's portrait art all read cleanly under
+  the shipped `balanced` map -- these are 16-colour-per-frame machines with
+  designer-chosen palettes, and the reduction has room to work.
+- *ColecoVision and Intellivision* have small fixed palettes (16 and 16) and
+  come through as crisp poster art: Donkey Kong's girders, Atlantis's
+  skyline, Dig Dug's tunnels.
+- *Atari 2600* is greyscale-friendly almost by accident -- most titles use
+  few colours at widely separated luma -- so the four levels cost it little.
+  Its problem is shape, not colour.
+- The Intellivision's frame carries a THICK BLACK BORDER (352x224 with the
+  320x192 playfield inside it), which on reflective paper is the worst case
+  for both readability and the panel's waveforms -- the same reasoning that
+  picked the Pokemon Mini's inverted palette. FreeIntv has no option to trim
+  it. See `docs/FOLLOWUPS.md` #52.
+
+**Saves: three of these four systems have none, and the fourth found a bug.**
+`retro_get_memory_size(SAVE_RAM)` is 0 for every Atari 2600, ColecoVision and
+Intellivision title in the author's collections -- none of those consoles put
+a battery in a cartridge, and none of the cores writes a save file of its own
+either. Genesis Plus GX does have battery SRAM, on 16 of the 121 Sega titles,
+and it goes through `sram.c` -- **but it answers the size question with two
+different numbers**: `0x10000` before emulation starts, and once running,
+"the index of the highest byte that is not 0xFF, plus one", which measured
+across the collection is anything from 285 bytes to 32160, and 0 for a
+cartridge nobody has saved on. `core_sram` now pins the length at ROM-load
+time; without that, one MENU -> LOAD STATE would have rewritten a 65536-byte
+`.srm` at 8191 bytes and the next launch would have reported it corrupt.
+
+Verified end to end on the host with the real ARM-equivalent core and a real
+cartridge (Phantasy Star): koboy wrote a 65536-byte `PS.srm`, read it back
+md5-identical on the next launch, and when the file was truncated to 100
+bytes left it at 100 bytes and disabled writeback for the session rather than
+destroying it.
+
+**Not established:** everything device-side. The four ARM cores have not been
+`dlopen`ed on a Kobo, nothing has rendered on the panel, no playable-speed
+figure exists, the K1/K2 and KEY/TOP discs have never been touched by a real
+finger, the two BIOS files have never been read off a FAT32 partition, and no
+Master System `.srm` has survived a real session.
+
 ### Game & Watch: VERIFIED on the device, 2026-08-26
 
 Confirmed working by the device owner on the Kobo Libra 2: a Game & Watch
