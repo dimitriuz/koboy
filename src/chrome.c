@@ -4,22 +4,36 @@
 
 /* The faceplate is drawn with KOBOY_REFRESH_FULL -- GC16, sixteen levels. The
    four-level ceiling is a constraint on the GAME RECT only, and this file used
-   three values out of sixteen (now eight). Depth is free here: chrome is
+   three values out of sixteen (now nine). Depth is free here: chrome is
    drawn once, so elaborateness is an authoring question and not a
    performance one.
 
    The case tone is a WARM LIGHT GREY, not pure white -- the user's explicit
-   choice against the reference photo, task 15. Ordering is the contract, not
-   any one value: DARK must stay clearly darker than BG (bezel darker than
-   case) and MID must stay clearly lighter than BG (button faces lighter than
-   case) -- both by more than one ~17-level GC16 step, so the relationship
-   survives being quantised down to the panel's real waveform. Everything
-   else here is free to retune. */
+   choice against the reference photo, task 15. Round 1 of that task
+   inverted the CONTROL tones by mistake (near-white d-pad/buttons/pills on
+   a grey case read as holes punched in the case, not raised controls); this
+   is the corrected ordering, checked against the photo directly: the case
+   is the lightest thing on the lower half, every control sits darker than
+   it, and the d-pad is the darkest thing on the case -- darker even than
+   the screen bezel, which is why it gets its own tone (DPAD) instead of
+   reusing DARK. "Clearly" below is pinned at more than one ~17-level GC16
+   step, so relationships survive being quantised down to the panel's real
+   16-level driver, not just on this exact 8-bit render:
+     DPAD   < DARK (bezel)  -- so the d-pad and the bezel read as two
+                                different objects, not one
+     BUTTON < BG             -- A/B clearly darker than the case
+     PILL   < BG             -- Start/Select/MENU a little darker than the
+                                case (a smaller gap than BUTTON's, on
+                                purpose -- the photo's pills are much closer
+                                to the case tone than the magenta buttons)
+   Everything else here is free to retune. */
 #define BG        0xD0   /* case: warm light grey */
 #define CASE_HI   0xE8   /* raised edge, lighter than the case            */
 #define CASE_LO   0xA0   /* recess, darker than the case                  */
-#define MID       0xF6   /* button face: clearly LIGHTER than the case    */
-#define DARK      0x55   /* bezel / button shadow: clearly darker than BG */
+#define DPAD      0x20   /* d-pad: near-black -- the darkest thing on the case */
+#define BUTTON    0x70   /* A/B discs: dark, clearly darker than the case */
+#define PILL      0xB4   /* Start/Select/MENU: a little darker than the case */
+#define DARK      0x55   /* bezel / d-pad ridge & hub highlight            */
 #define INK       0x00
 #define ACCENT_HI 0x30   /* strapline accent rule, upper: navy on the real DMG   */
 #define ACCENT_LO 0x78   /* strapline accent rule, lower: maroon on the real DMG */
@@ -434,40 +448,60 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
         text_draw(fb, stride, W, H, word_x, word_y, "koboy", word_px, DARK);
     }
 
-    /* d-pad cross */
+    /* d-pad cross. Solid DPAD (near-black) arms -- the darkest thing on the
+       case, per the reference photo, and the single most recognisable shape
+       on a DMG's lower half. Round 1 filled these with a near-white tone,
+       which read as a hole punched in the case rather than a raised
+       control; DPAD is chosen to sit clearly below DARK (the bezel tone)
+       too, so the d-pad and the bezel do not blur into "the same dark
+       thing" even though they are the two darkest tones on the panel. */
     int dcx = perm(l->dpad_cx, W), dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
     int arm = dr / 3;
-    box(fb, stride, W, H, dcx, dcy, arm, 2 * dr, MID);
-    box(fb, stride, W, H, dcx, dcy, 2 * dr, arm, MID);
+    box(fb, stride, W, H, dcx, dcy, arm, 2 * dr, DPAD);
+    box(fb, stride, W, H, dcx, dcy, 2 * dr, arm, DPAD);
     frame(fb, stride, W, H, dcx - arm / 2, dcy - dr, arm, 2 * dr, 2, INK);
     frame(fb, stride, W, H, dcx - dr, dcy - arm / 2, 2 * dr, arm, 2, INK);
 
-    /* Centre boss and ridged arms, matching the photo's moulded cross
-       rather than a flat one. Purely cosmetic pixels drawn INSIDE the cross
-       just filled above -- dcx/dcy/dr/arm are untouched, so
-       chrome_controls_top's d-pad terms (computed from those same four
-       values, see this file's top) cannot drift from what is actually
-       drawn, and input.c's touch zone, built from the same layout permille,
-       stays exactly as wide as it always was. */
+    /* Centre boss and ridges, matching the photo's moulded cross rather
+       than a flat one. Purely cosmetic pixels drawn INSIDE the cross just
+       filled above -- dcx/dcy/dr/arm are untouched, so chrome_controls_top's
+       d-pad terms (computed from those same four values, see this file's
+       top) cannot drift from what is actually drawn, and input.c's touch
+       zone, built from the same layout permille, stays exactly as wide as
+       it always was.
+       Round 1's ridges were full-width ink lines spanning the WHOLE arm at
+       even intervals, which subdivided each arm into a row of visibly
+       separate boxes -- a segmented grid, not a ridged surface. Fixed two
+       ways: the ridge colour is now DARK (a lighter tone scored onto the
+       near-black DPAD fill, a surface highlight rather than a same-colour
+       divider line), and each ridge is SHORTER than the arm's own width
+       (ridge_w, not the full arm) and clustered near the outer THIRD of
+       each arm -- three per tip -- rather than evenly spaced hub-to-tip. */
     int hub_r = arm / 2;
     if (hub_r > 0) {
         disc(fb, stride, W, H, dcx, dcy, hub_r, DARK);
         ring(fb, stride, W, H, dcx, dcy, hub_r, INK);
     }
-    for (int k = 1; k <= 2; k++) {
-        int off = hub_r + k * (dr - hub_r) / 3;
-        if (off >= dr - 1) continue;
-        hline(fb, stride, W, H, dcx - arm / 2 + 1, dcx + arm / 2 - 1, dcy - off, INK);
-        hline(fb, stride, W, H, dcx - arm / 2 + 1, dcx + arm / 2 - 1, dcy + off, INK);
-        vline(fb, stride, W, H, dcx - off, dcy - arm / 2 + 1, dcy + arm / 2 - 1, INK);
-        vline(fb, stride, W, H, dcx + off, dcy - arm / 2 + 1, dcy + arm / 2 - 1, INK);
+    int ridge_w = arm * 2 / 3;
+    if (ridge_w < 1) ridge_w = 1;
+    int tip_span = dr / 3;
+    for (int k = 1; k <= 3; k++) {
+        int off = dr - (tip_span * k) / 4;
+        if (off <= hub_r + 2 || off >= dr - 1) continue;
+        hline(fb, stride, W, H, dcx - ridge_w / 2, dcx + ridge_w / 2, dcy - off, DARK);
+        hline(fb, stride, W, H, dcx - ridge_w / 2, dcx + ridge_w / 2, dcy + off, DARK);
+        vline(fb, stride, W, H, dcx - off, dcy - ridge_w / 2, dcy + ridge_w / 2, DARK);
+        vline(fb, stride, W, H, dcx + off, dcy - ridge_w / 2, dcy + ridge_w / 2, DARK);
     }
 
-    /* A and B */
+    /* A and B: dark, clearly darker than the case (BUTTON), matching the
+       photo's magenta discs read in greyscale -- round 1 shipped these
+       near-white, the same "hole punched in the case" mistake as the
+       d-pad. */
     int acx = perm(l->a_cx, W), acy = perm(l->a_cy, H), ar = perm(l->a_r, W);
     int bcx = perm(l->b_cx, W), bcy = perm(l->b_cy, H), br = perm(l->b_r, W);
-    disc(fb, stride, W, H, acx, acy, ar, MID);
-    disc(fb, stride, W, H, bcx, bcy, br, MID);
+    disc(fb, stride, W, H, acx, acy, ar, BUTTON);
+    disc(fb, stride, W, H, bcx, bcy, br, BUTTON);
 
     /* Labels: A, B, Start and Select centred BELOW their control, exactly
        where the real DMG puts them -- before this task the four were
@@ -494,8 +528,13 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     int sw = perm(l->start_w, W), sh = perm(l->start_h, H);
     int tcx = perm(l->select_cx, W), tcy = perm(l->select_cy, H);
     int tw = perm(l->select_w, W), th = perm(l->select_h, H);
-    box(fb, stride, W, H, scx, scy, sw, sh, MID);
-    box(fb, stride, W, H, tcx, tcy, tw, th, MID);
+    /* PILL: a little darker than the case, not "clearly" darker like DPAD
+       or BUTTON -- the photo's Start/Select pills sit much closer to the
+       case tone than the magenta buttons do, and round 1's near-white MID
+       had them backwards (lighter than the case) on top of being too far
+       off tone either way. */
+    box(fb, stride, W, H, scx, scy, sw, sh, PILL);
+    box(fb, stride, W, H, tcx, tcy, tw, th, PILL);
     text_draw_centred_at(fb, stride, W, H, scx, scy + sh / 2 + perm(6, H), "START", lbl_px, INK);
     text_draw_centred_at(fb, stride, W, H, tcx, tcy + th / 2 + perm(6, H), "SELECT", lbl_px, INK);
 
@@ -506,7 +545,7 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        trap the user on a device where a stuck app looks like a brick. */
     int mcx = perm(l->menu_cx, W), mcy = perm(l->menu_cy, H);
     int mw = perm(l->menu_w, W), mh = perm(l->menu_h, H);
-    box(fb, stride, W, H, mcx, mcy, mw, mh, MID);
+    box(fb, stride, W, H, mcx, mcy, mw, mh, PILL);   /* same tone as Start/Select: a koboy-only control, styled like its neighbours */
     frame(fb, stride, W, H, mcx - mw / 2, mcy - mh / 2, mw, mh, 2, INK);
     /* Label INSIDE the box -- exactly where a real DMG puts MENU-equivalent
        markings on its own controls -- rather than below it like the other
@@ -527,20 +566,22 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        below the lowest control means it can never reach up toward the game
        rect regardless of layout. Stepped a column at a time with hline --
        there is no line primitive in this file and six short diagonals do
-       not justify adding one. */
-    /* Width fixed at 22% of the panel, anchored to the right margin, rather
-       than spanning the whole half-panel free to the right of MENU: a
-       squarer cluster reads as a grille (six short diagonals close enough
-       together to look like one feature) where a wide sparse one reads as
-       stray dashes -- and it keeps each slash's own width slot comparable
-       to gh, which is what exercises the right-margin clamp below at all.
-       A slot much wider than gh (the box's old width) never reaches gx1
-       regardless of the clamp, which is exactly how the FOLLOWUPS #20
-       overdraw shipped unnoticed for as long as it did: the geometry that
-       exposes a boundary bug and the geometry that looks right turned out
-       to be the same fix. */
-    int gx1 = W - KOBOY_CHROME_MARGIN, gx0 = gx1 - perm(220, W);
-    int gy0 = mcy + mh / 2 + perm(10, H), gy1 = H - KOBOY_CHROME_MARGIN;
+       not justify adding one.
+
+       Anchored to MENU's own horizontal centre (gx0 = mcx) rather than a
+       fixed panel-width fraction, and given a full 18-permille vertical gap
+       below MENU's bottom edge (was 10) -- round 1's tighter gap and wider
+       box together read as running into MENU's own corner in review. mcx
+       keeps the grille visually "starting under the cluster, continuing
+       right" instead of floating in arbitrary panel space; the extra gap
+       is what actually fixes the crowding, since the two elements never
+       shared a row either way (gy0 is always below MENU's own bottom edge
+       by construction). gx1 is UNCHANGED at the true margin boundary
+       (W - KOBOY_CHROME_MARGIN) -- narrowing the box comes only from
+       raising gx0, not from padding gx1, so the right-margin regression
+       test below still exercises the real edge rather than a moved one. */
+    int gx1 = W - KOBOY_CHROME_MARGIN, gx0 = mcx;
+    int gy0 = mcy + mh / 2 + perm(18, H), gy1 = H - KOBOY_CHROME_MARGIN;
     if (gx1 - gx0 > 12 && gy1 - gy0 > 6) {
         int gw = gx1 - gx0, gh = gy1 - gy0;
         int n = 6;

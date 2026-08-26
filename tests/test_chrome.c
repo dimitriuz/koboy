@@ -731,19 +731,27 @@ TEST_MAIN({
         CHECK_EQ_INT(intruding_combos, 0);
     }
 
-    /* Case tone, task 15's user-chosen ordering: bezel CLEARLY darker than
-       the case, and button faces CLEARLY lighter than it -- "clearly"
-       pinned as more than one GC16 waveform step (~17 levels of 256) apart,
-       so the relationship survives being quantised down to the panel's real
-       16-level driver, not just on this exact 8-bit render. Sampled from
-       three coordinates guaranteed to land on exactly one of the three
-       tones regardless of layout: (2,2) is above and left of the bezel on
-       every supported panel (the bezel's own top-left corner is rounded
-       off entirely by task 15's corner cut, so plain background is what a
-       corner pixel reads even there); the A disc's own centre is always
-       button MID; and game_x - 3 at the rect's own vertical middle sits
-       inside the LEFT bezel band, which fill_rect paints solid DARK for
-       every side_t >= 3 -- true unconditionally, since side_t floors at 5. */
+    /* Case tone, task 15's user-chosen ordering -- CORRECTED in round 2
+       against the reference photo. Round 1 shipped the controls LIGHTER
+       than the case (near-white d-pad/A/B/pills on a grey case), which
+       read as holes punched in the case rather than raised controls; the
+       photo's actual ordering, darkest to lightest, is d-pad, bezel,
+       A/B, Start/Select/MENU, case. "Clearly" is pinned at more than one
+       GC16 waveform step (~17 levels of 256) apart, so relationships
+       survive being quantised down to the panel's real 16-level driver,
+       not just on this exact 8-bit render; the pill-vs-case gap is
+       deliberately NOT held to that bar -- the photo's pills sit much
+       closer to the case tone than the buttons do ("a little darker",
+       not "clearly darker").
+       Sampled from coordinates guaranteed to land on exactly one tone
+       regardless of layout: (2,2) is above and left of the bezel on every
+       supported panel; the A disc's own centre is always BUTTON; the
+       Start pill's own centre is always PILL; game_x - 3 at the rect's
+       own vertical middle sits inside the LEFT bezel band, solid DARK for
+       every side_t >= 3 (side_t floors at 5); and the d-pad's vertical
+       arm at dr/2 above centre is always DPAD fill -- above the hub disc
+       (radius arm/2 = dr/6) and below where the tip ridges start
+       (>= ~3*dr/4), for every dr > 0. */
     {
         koboy_config c; config_defaults(&c);
         koboy_profile p;
@@ -758,12 +766,23 @@ TEST_MAIN({
         int button_v = fb3[(size_t)a_cy * W + a_cx];
         int bezel_x = p.game_x - 3, bezel_y = p.game_y + p.game_h / 2;
         int bezel_v = fb3[(size_t)bezel_y * W + bezel_x];
+        int scx = c.layout.start_cx * W / 1000, scy = c.layout.start_cy * H / 1000;
+        int pill_v = fb3[(size_t)scy * W + scx];
+        int dcx = c.layout.dpad_cx * W / 1000, dcy = c.layout.dpad_cy * H / 1000;
+        int dr = c.layout.dpad_r * W / 1000;
+        int dpad_v = fb3[(size_t)(dcy - dr / 2) * W + dcx];
 
-        if (case_v - bezel_v <= 17 || button_v - case_v <= 17)
-            fprintf(stderr, "  case tone: bezel=%d case=%d button=%d\n",
-                    bezel_v, case_v, button_v);
-        CHECK(case_v - bezel_v > 17);     /* bezel clearly darker than the case  */
-        CHECK(button_v - case_v > 17);    /* button clearly lighter than the case */
+        if (case_v - bezel_v <= 17 || bezel_v - dpad_v <= 17 ||
+            case_v - button_v <= 17 || pill_v <= button_v || case_v <= pill_v ||
+            dpad_v >= 64)
+            fprintf(stderr, "  case tone: dpad=%d bezel=%d button=%d pill=%d case=%d\n",
+                    dpad_v, bezel_v, button_v, pill_v, case_v);
+        CHECK(case_v - bezel_v > 17);   /* bezel clearly darker than the case        */
+        CHECK(bezel_v - dpad_v > 17);   /* d-pad clearly darker than the bezel too   */
+        CHECK(dpad_v < 64);             /* d-pad reads as near-black                 */
+        CHECK(case_v - button_v > 17);  /* A/B clearly darker than the case          */
+        CHECK(case_v > pill_v);         /* Start/Select/MENU a LITTLE darker...      */
+        CHECK(pill_v > button_v);       /* ...but nowhere near as dark as A/B        */
     }
 
     /* Speaker grille right margin, FOLLOWUPS #20 / task 15 item 4: `hline`
@@ -799,7 +818,7 @@ TEST_MAIN({
             int dark_v = gfb[(size_t)(p.game_y + p.game_h / 2) * W + (p.game_x - 3)];
 
             int mcy = c.layout.menu_cy * H / 1000, mh = c.layout.menu_h * H / 1000;
-            int gy0 = mcy + mh / 2 + 10 * H / 1000;
+            int gy0 = mcy + mh / 2 + 18 * H / 1000;   /* matches chrome.c's gap, round 2 */
             int gy1 = H - KOBOY_CHROME_MARGIN;
 
             int violation = 0;
