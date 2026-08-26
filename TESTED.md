@@ -123,3 +123,30 @@ What did reproduce across sessions, and is what the design actually rests on:
 - **Firmware other than 4.38.x.** The launcher's Nickel restart follows the
   mechanism KOReader has used across many firmware versions, but it has been
   exercised on exactly one.
+
+## v2: still no device attached
+
+Everything added since the row above -- the ROM browser, the in-game MENU,
+save states, the redrawn faceplate -- was built and reviewed with no Kobo
+plugged in for the entire plan. None of it has run on the Libra 2 or anything
+else. Specifically, and stated plainly rather than implied by omission:
+
+- **The save path (battery-backed cartridge SRAM) has still never run on
+  hardware.** Both titles tested on the Libra 2 (Tetris, Darkwing Duck) report
+  `rambanks: 0`; a Zelda/Pokemon/Kirby's-Dream-Land-2-class SRAM verification
+  was planned for this cycle and did not happen -- no device was available.
+  This is unchanged from the paragraph above it, not a new finding.
+- **`refresh_fixed_tiles` ships at its default (40), not a measured value.**
+  The on-device tuning run that would pin it down (sweeping 20/40/80 and
+  reading the `stages`/`rects` lines back out of `koboy.log`) has not
+  happened. 40 is a starting guess; see the comment beside it in
+  `config/koboy.ini` and `config_defaults` in `src/config.c`.
+- **Save states, the MENU, and the ROM browser are exercised only by host
+  tests and `--ui-script`-driven runs**, none of them on a real panel or real
+  evdev nodes. `MODE_MENU`'s interactive branches in particular are verified
+  by construction (the code path is exercised, its on-panel behaviour is not)
+  -- see `docs/FOLLOWUPS.md`.
+
+The next device session should prioritise, in order: an SRAM-backed title (the
+one gap that predates v2), then `refresh_fixed_tiles`, then an actual play
+session through the browser and MENU.

@@ -118,6 +118,13 @@ dist: kobo $(CORE_SO) | build
 	    echo "dist: no build/koboy-probe-arm, skipping the probe"; \
 	fi
 	chmod +x build/pkg/.adds/koboy/koboy build/pkg/.adds/koboy/koboy.sh
+	# The browser needs somewhere to look. zip -qrD (below) omits directory
+	# entries entirely, so an empty roms/ would just not be in the archive and
+	# the browser's first run would report a missing directory -- the
+	# README.txt is what actually makes the directory exist in the zip.
+	mkdir -p build/pkg/.adds/koboy/roms
+	printf 'Put .gb and .gbc files in this directory.\nkoboy lists them at startup.\n' \
+	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from
 	# the file paths, and a bare ".adds/" entry in the listing is exactly the

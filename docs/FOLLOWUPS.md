@@ -81,3 +81,63 @@ Ordered by what would actually bite first.
 16. **`video_scale_gray` has undocumented preconditions** (`scale >= 1`,
     `dst_stride >= src_w * scale`). `src/video.c:31-50`. Its only caller
     satisfies them by construction.
+
+## v2 follow-ups
+
+Found during the v2-core plan (ROM browser, in-game MENU, save states,
+multi-rect dirty regions, the redrawn faceplate). Same rule as above: real,
+deliberately deferred, not a known live bug.
+
+17. **A `--ui-script` whose first verb is `tap` selects nothing.**
+    `src/ui.c:32` initialises a freshly built list's `prev_touch = true` so it
+    requires one release before it will accept a tap -- deliberate, to survive
+    a still-down finger chained across screens (see the comment there). A
+    script that opens with `tap X Y` therefore emits touch-down then release
+    with nothing in between, and both land on the wrong side of the edge: the
+    down is swallowed as "already held", the up produces no tap either. The
+    run exhausts and returns "no selection" exactly as if the user had quit,
+    so a script that starts this way passes while testing nothing. Script
+    authors need an `idle 1` (or a second `tap`) before the one meant to land.
+
+18. **`MODE_MENU`'s interactive branches are verified by construction, not by
+    an executed test.** `src/main.c:647` (the `input_take_menu_request`
+    branch in the emulator loop). `--ui-script` drives `run_list`/`run_menu`
+    in `MODE_BROWSE` (see `run_list`'s own comment on why), but the emulator
+    loop itself never accepts scripted input, so SAVE/LOAD/RESET/CHOOSE
+    ROM/QUIT are exercised by inspection and by hand, never by `make test`.
+    Extending `--ui-script` through the emulator loop is the obvious
+    follow-up, and #17 above should be fixed before anything relies on it.
+
+19. **The d-pad horizontal-arm term in `chrome_controls_top` is provably
+    dead.** `src/chrome.c:41-42`. `top = min2(top, dcy - arm/2 - 1)` can never
+    win against the line immediately before it (`dcy - dr - 1`): with
+    `arm = dr/3`, `dr > arm/2` for every `dr > 0` this layout ever produces,
+    so the vertical-arm term is always the smaller of the two. The equality
+    check in `tests/test_chrome.c` does not catch this, because the
+    function's return value is identical whether the line is there or not --
+    only a term-by-term audit finds it.
+
+20. **The speaker grille overdraws its right margin by 1px, on three of the
+    four tested panel sizes.** `src/chrome.c:305-315`. Each slash is drawn
+    with `hline(..., glx0+s, glx0+s+1, ...)` -- two columns per step -- and
+    the length clamp (`if (glx0+len > gx1) len = gx1-glx0`) only fires when
+    the *unclamped* last column would exceed `gx1`. When it lands exactly on
+    `gx1` instead, the clamp never triggers and the two-wide `hline`'s second
+    column paints at `gx1`, one column into the margin `gx1` exists to keep
+    clear.
+
+21. **`video_split_dirty`'s overflow fallbacks are untested.**
+    `src/video.c:245` (tile grid larger than `KOBOY_SPLIT_MAX_TILES`) and
+    `src/video.c:304` (more band/column candidates than
+    `KOBOY_SPLIT_MAX_CANDIDATES`) both degrade to the single merged rect and
+    are safe by construction, but nothing in `tests/test_video_multirect.c`
+    (or anywhere else) constructs a dirty pattern large or pathological
+    enough to actually reach either branch.
+
+22. **Emitted rects may partially overlap once the candidate list is capped.**
+    `src/video.c:313-323`. The merge-to-cap loop only removes a candidate that
+    ends up *fully contained* in another (documented in place as deliberate --
+    "does not attempt general deoverlap"); two capped rects can still
+    partially overlap, and every downstream consumer (`blit_gray8`, `refresh`)
+    redoes that overlap's area twice. Coverage is unaffected -- a union only
+    grows -- so this is a cost, not a correctness bug.

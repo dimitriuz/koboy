@@ -575,7 +575,13 @@ int main(int argc, char **argv)
     core_set_frame_cb(core, on_frame, NULL);
     core_set_input_fn(core, on_input, in);
 
-    koboy_sram_binding sb = {0};
+    /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
+       every compiler that matters here, but Linaro GCC 4.9 (the ARM cross
+       compiler; the host's newer GCC does not) applies -Wmissing-braces to
+       the nested path[] array and -Wmissing-field-initializers to the rest,
+       so a bare {0} is warning-free on host and warning-*full* on-device.
+       Spell out every field so both toolchains agree it is zeroed. */
+    koboy_sram_binding sb = {{0}, NULL, 0, false};
     if (!load_rom_into(core, &cfg, &sb, err, sizeof err)) {
         fatal("%s", err);
         core_close(core);

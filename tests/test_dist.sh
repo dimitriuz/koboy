@@ -32,9 +32,33 @@ if [ -z "$1" ]; then
     for f in .adds/koboy/koboy .adds/koboy/koboy-probe .adds/koboy/koboy.sh \
              .adds/koboy/koboy.ini .adds/koboy/gambatte_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
-             .adds/koboy/README.md .adds/koboy/TESTED.md; do
+             .adds/koboy/README.md .adds/koboy/TESTED.md \
+             .adds/koboy/roms/README.txt; do
         unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
     done
+
+    # #10: the allowlist matched by substring, so a library named reallibc.so.6
+    # would have passed. Not attacker-facing -- it is a build-time script -- but
+    # anchors are free, and an allowlist that accepts a superstring is not an
+    # allowlist. The stub answers both invocations verify-core.sh actually makes
+    # (readelf -h for the architecture check, readelf -d for the NEEDED list) so
+    # the run reaches the dependency check itself instead of failing earlier on
+    # a fake ELF header.
+    fake="$(mktemp -d)"
+    cat > "$fake/readelf" <<'EOS'
+#!/bin/sh
+case "$*" in
+    *-h*) echo "  Machine:                           ARM" ;;
+    *-d*) echo " 0x00000001 (NEEDED)             Shared library: [reallibc.so.6]" ;;
+esac
+EOS
+    chmod +x "$fake/readelf"
+    if PATH="$fake:$PATH" sh scripts/verify-core.sh /bin/true >/dev/null 2>&1; then
+        echo "FAIL: verify-core.sh accepted reallibc.so.6"
+        rm -rf "$fake"; exit 1
+    fi
+    rm -rf "$fake"
+    echo "ok: verify-core.sh allowlist is anchored"
 fi
 
 # ------------------------------------------------------- launcher assertions

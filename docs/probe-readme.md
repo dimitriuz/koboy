@@ -6,6 +6,14 @@ Sage, Elipsa, Libra Colour -- anything other than the Libra 2 in TESTED.md)
 can characterise their device and contribute a row, without installing the
 emulator itself first.
 
+## Building just the probe
+
+    export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
+    make probe-dist        # -> dist/koboy-probe-0.1.0.zip
+
+This builds the probe and nothing else. `make dist` also cross-builds gambatte,
+which takes minutes and which you do not need in order to characterise a device.
+
 ## Install
 
 Unzip at the root of the drive the Kobo shows up as over USB. That creates

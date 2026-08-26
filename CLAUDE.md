@@ -1,16 +1,19 @@
 # koboy
 
-A Game Boy emulator for modern Kobo e-readers. C99, no C++. It `dlopen`s
+A Game Boy emulator for modern Kobo e-readers. No C++. It `dlopen`s
 gambatte-libretro, renders the DMG's four greys through FBInk to the e-ink
 panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
 **v1 is merged and verified on real hardware** (a Kobo Libra 2, playing Tetris
 and an action platformer, exiting to a working Nickel without a reboot).
+**v2-core (the ROM browser, in-game MENU, save states) cross-builds cleanly
+with a verified dependency closure, but has not run on a device** — no Kobo
+was attached for any of that plan. See "Known unfinished".
 
 ## Build and test
 
 ```sh
-make test        # host suite: 15 binaries, 550 checks. Runs on x86_64.
+make test        # host suite: 22 binaries, 820 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -27,9 +30,19 @@ default. See `docs/cross-compiling.md`.
 
 ## Hard constraints — check these before proposing anything
 
-- **C99 only, no C++.** No dependency beyond libc, libm, libdl. The shipped ARM
-  binary's closure must stay exactly `libm.so.6` + `libc.so.6` +
-  `ld-linux-armhf.so.3`; `scripts/verify-core.sh` enforces it.
+- **No C++. No dependency beyond libc, libm, libdl.** (Not "C99 only": the
+  Makefile has built with `-std=c11` since before v2, and nothing enforces a
+  narrower standard. The constraint that actually matters — and the one
+  `scripts/verify-core.sh` enforces — is the dependency ceiling, not a
+  specific C revision, so that is what this says now.) Two ARM binaries ship,
+  with two different closures: the gambatte core
+  (`dist/gambatte_libretro.so`) links only `libm.so.6` + `libc.so.6` (+
+  `ld-linux-armhf.so.3`, pulled in by `-static-libstdc++`'s TLS-based
+  exception globals — see `docs/cross-compiling.md`); `koboy-arm` itself
+  additionally needs `libdl.so.2`, because it `dlopen`s that core.
+  `scripts/verify-core.sh` checks both against the same allowlist
+  (`libc`/`libm`/`libdl`/`libpthread`/`libgcc_s`/`ld-linux-armhf`, matched by
+  anchored whole-name comparison since Task 14 closed follow-up #10).
 - **glibc 2.19.** The device has no newer symbol. This is why the toolchain is
   pinned to Linaro 4.9-2014.09.
 - **Never `#include <linux/input.h>` in portable code.** The project carries its
@@ -55,20 +68,41 @@ src/config.c          ini load/save, profile resolution, path resolution
 src/core.c            dlopen + retro_* symbol binding
 src/probe.c           koboy-probe: --coexist (safe, Nickel up) / --takeover
 scripts/koboy.sh      the launcher. Its environment gate is load-bearing.
+
+-- v2 additions: the ROM browser, in-game MENU and save states -----------
+src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
+                      browser and the in-game MENU (MODE_BROWSE / MODE_MENU)
+src/romlist.c         scans rom_dir for .gb/.gbc, feeds ui.c's list widget
+src/uiscript.c        replays a synthetic input script (tap/key/idle) into
+                      the UI modes -- --ui-script, for bounded unattended runs
+src/state.c           save-state paths and slot labels, KOBOY_STATE_SLOTS (3)
+                      slots per ROM, 1-based
+src/safefile.c        temp-file/fsync/rename write + all-or-nothing read,
+                      extracted from sram.c so save states share its
+                      discipline; used by both now
+src/stats.c           per-stage (core/submit/blit/refresh) timing, the
+                      koboy.log `stages` line
+src/text.c            the 5x7 bitmap font, lifted out of main.c because v2
+                      has three screens that render arbitrary strings
 ```
 
 Path resolution is against `/proc/self/exe`'s directory — **`dlopen` never
 searches the cwd**, which cost a debugging round when the core sat right beside
 the binary and still failed to load.
 
-## Read these before starting v2
+## Reference documents
+
+v2-core (the ROM browser, in-game MENU, save states, multi-rect dirty regions,
+the redrawn faceplate) is done as of this task; the Bluetooth companion plan
+(`docs/superpowers/plans/2026-08-25-koboy-v2-bluetooth.md`) is not started.
 
 | Document | What it holds |
 |---|---|
-| `docs/superpowers/specs/2026-08-24-koboy-design.md` | The design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
-| `docs/FOLLOWUPS.md` | 16 deferred findings, ordered by what bites first. Start here for v2 scope. |
+| `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
+| `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
+| `docs/FOLLOWUPS.md` | 22 deferred findings (16 from v1, 6 from v2-core), ordered by what bites first. Start here for the next session's scope. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
-| `TESTED.md` | The device matrix. Exactly one device is verified. |
+| `TESTED.md` | The device matrix. Exactly one device is verified, and none of v2-core has run on it yet. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
 | `docs/probe-readme.md` | Profiling a device nobody has tried. |
 
@@ -117,12 +151,27 @@ hiding.
 ## Known unfinished
 
 - **The save path has never run on hardware.** Both tested titles report
-  `rambanks: 0` (no battery SRAM), and `sram_load` changed materially in v1's
-  final fix round. Needs a battery-save game.
-- **One verified device.** Everything else is unmeasured, not known broken.
-- `dpad_mode = cross` is the shipped default and the behaviour that distinguishes
-  it from RELATIVE has no test — every touch test lands on the pad centre, where
-  the two are indistinguishable. Top item in `docs/FOLLOWUPS.md`.
+  `rambanks: 0` (no battery SRAM). Still true after v2-core: a battery-save
+  verification was planned for this cycle and did not happen because no
+  device was attached for the whole plan. Needs a battery-save game (a
+  Zelda, Pokemon, or Kirby's Dream Land 2). Save *states* (`state.c`,
+  `safefile.c` — a different mechanism from cartridge SRAM) are likewise
+  untested on hardware; see the next point.
+- **One verified device, and none of v2-core has run on it.** The Libra 2 row
+  in `TESTED.md` predates the ROM browser, the in-game MENU, save states and
+  the redrawn faceplate. `make kobo` cross-builds cleanly and
+  `scripts/verify-core.sh` confirms the dependency closure, but "builds and
+  links" is not "runs on a panel". Everything else is unmeasured, not known
+  broken.
+- `refresh_fixed_tiles` ships at a starting guess (40), not a measured value —
+  see `config/koboy.ini` and `TESTED.md`.
+- ~~`dpad_mode = cross` has no test distinguishing it from RELATIVE~~ — fixed:
+  `tests/test_input_touch.c` (search `#1`) now asserts the actual distinction
+  (a tap anywhere in the pad steers under CROSS; the same tap reports no
+  direction under RELATIVE until the origin is set), not just that both modes
+  compile. What is still open, and still the top item in `docs/FOLLOWUPS.md`'s
+  v2 section: `--ui-script`, `MODE_MENU`'s coverage gap, and four smaller
+  chrome/video findings from this plan.
 
 ## Conventions
 
