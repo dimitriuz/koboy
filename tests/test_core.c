@@ -314,6 +314,60 @@ TEST_MAIN({
     CHECK(core_sram(c, &sl2) != NULL);
     CHECK_EQ_INT(sl2, 8);
 
+    /* THE LENGTH IS LOAD-ONCE EVEN THOUGH THE POINTER IS NOT, and this is the
+       assertion that says so. Genesis Plus GX -- the Master System / Game
+       Gear core -- answers retro_get_memory_size(SAVE_RAM) with the buffer's
+       real size before emulation starts and with a SMALLER "how much is worth
+       writing" number once it is running. main.c calls core_sram() again
+       mid-session (after a save-state load, where the pointer really can
+       move), and if that call also picked up the shrunken length, the next
+       flush would rewrite a full-size .srm at the short length and the launch
+       after it could not read the file whole -- a destroyed save that
+       announces itself as "Save file unreadable".
+
+       stub_sram_shrink_when_running reproduces exactly that: 8 bytes at load,
+       3 once retro_run has been called. What core_sram reports must not move.
+
+       MUTANT-VERIFIED: with core.c's `*len = p ? c->sram_len : 0` changed
+       back to a live `c->get_memory_size(RETRO_MEMORY_SAVE_RAM)`, the
+       CHECK_EQ_INT below fails with 3 != 8. */
+    {
+        int *shrink = (int *)dlsym(so, "stub_sram_shrink_when_running");
+        CHECK(shrink != NULL);
+        *shrink = 1;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+
+        size_t at_load = 0;
+        CHECK(core_sram(c, &at_load) != NULL);
+        CHECK_EQ_INT(at_load, 8);
+
+        /* Run a few frames, which is what flips the stub's answer, exactly as
+           starting emulation flips the real core's. */
+        for (int i = 0; i < 3; i++) core_run_frame(c);
+
+        size_t while_running = 0;
+        CHECK(core_sram(c, &while_running) != NULL);
+        CHECK_EQ_INT(while_running, at_load);
+
+        /* And the stub really is lying, so the check above is not passing
+           because nothing changed. Asked through the core's own symbol, the
+           way koboy used to ask. */
+        size_t (*raw_size)(unsigned) =
+            (size_t (*)(unsigned))dlsym(so, "retro_get_memory_size");
+        CHECK(raw_size != NULL);
+        CHECK_EQ_INT(raw_size(0 /* RETRO_MEMORY_SAVE_RAM */), 3);
+
+        /* A fresh load re-asks, so the next cartridge is not stuck with this
+           one's number. */
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        *shrink = 0;
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        size_t after = 0;
+        CHECK(core_sram(c, &after) != NULL);
+        CHECK_EQ_INT(after, 8);
+    }
+
     /* Not every core is the Game Boy. Poke the stub's geometry (exported for
        exactly this, tests/stub_core.c) to something in the Game & Watch
        range the multi-system design doc measured, reload through the same

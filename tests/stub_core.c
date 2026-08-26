@@ -101,6 +101,20 @@ static int stub_osc = -1, stub_maxgrow = -1, stub_tick = 0;
 #define STUB_STATE_BYTES 128
 static unsigned char stub_state[STUB_STATE_BYTES];
 
+/* Reproduces the measured Genesis Plus GX behaviour, which is the reason
+   core_sram pins the save-RAM LENGTH at load time (see src/core.c): that core
+   answers retro_get_memory_size(SAVE_RAM) with the buffer's real size before
+   emulation starts and with "how much of it is worth writing" once it is
+   running -- a SMALLER number, and a different one every session.
+
+   Poked by test_core.c, and left 0 by default so every other test in this
+   binary keeps seeing the flat 8 bytes it always has. Counts retro_run calls
+   itself rather than reading a flag, because the whole point is that the
+   answer changes between "loaded" and "running". */
+int stub_sram_shrink_when_running = 0;
+static int stub_ran_since_load = 0;
+#define STUB_SRAM_SHRUNK 3
+
 unsigned retro_api_version(void) { return 1; }
 void retro_set_environment(retro_environment_t cb)
 {
@@ -188,6 +202,7 @@ bool retro_load_game(const struct retro_game_info *g)
     if (!g) return false;
     memset(sram, 0, sizeof sram);
     stub_late_fired = 0;   /* each load gets its own chance to announce late */
+    stub_ran_since_load = 0;
     return true;
 }
 void retro_unload_game(void) { stub_observed_unload++; }
@@ -211,6 +226,7 @@ bool retro_unserialize(const void *data, size_t size)
 }
 void retro_run(void)
 {
+    stub_ran_since_load++;
     if (poll_cb) poll_cb();
     /* A RECOGNISABLE SAVE-RAM SIGNATURE, written every frame. The size stays
        8 bytes (test_core.c pins that), but the CONTENT stops being all-zero,
@@ -308,4 +324,10 @@ void retro_run(void)
                 (size_t)stub_base_w * sizeof(uint16_t));
 }
 void  *retro_get_memory_data(unsigned id) { return id == RETRO_MEMORY_SAVE_RAM ? sram : NULL; }
-size_t retro_get_memory_size(unsigned id) { return id == RETRO_MEMORY_SAVE_RAM ? sizeof sram : 0; }
+size_t retro_get_memory_size(unsigned id)
+{
+    if (id != RETRO_MEMORY_SAVE_RAM) return 0;
+    if (stub_sram_shrink_when_running && stub_ran_since_load > 0)
+        return STUB_SRAM_SHRUNK;
+    return sizeof sram;
+}

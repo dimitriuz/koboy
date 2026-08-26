@@ -53,6 +53,10 @@ struct koboy_core {
     /* See core_geometry_changed. Left false by the initial core_load_rom
        query on purpose -- only env_cb's two geometry commands set it. */
     bool    geom_dirty;
+    /* The save-RAM region's LENGTH, captured once by core_load_rom and never
+       re-asked. See core_sram for why the length is load-once while the
+       pointer is not. 0 until a ROM has loaded, and back to 0 on unload. */
+    size_t  sram_len;
 };
 
 /* libretro's callbacks are plain C function pointers with no user data, so the
@@ -411,6 +415,9 @@ bool core_load_rom(koboy_core *c, const char *rom_path, char *err, size_t errlen
     c->get_system_av_info(&av);
     apply_full_geometry(c, &av.geometry);
     c->geom_dirty = false;
+
+    /* The save-RAM LENGTH, captured here and here only -- see core_sram. */
+    c->sram_len = c->get_memory_size(RETRO_MEMORY_SAVE_RAM);
     return true;
 }
 
@@ -419,6 +426,9 @@ bool core_unload_rom(koboy_core *c)
     if (!c || !c->game_loaded) return false;
     c->unload_game();
     c->game_loaded = false;
+    /* Cleared with the game, not left stale: retro_unload_game takes the
+       buffer this length described, and the next cartridge's is its own. */
+    c->sram_len = 0;
     return true;
 }
 
@@ -481,9 +491,37 @@ void core_run_frame(koboy_core *c)
 
 uint8_t *core_sram(koboy_core *c, size_t *len)
 {
+    /* THE POINTER IS ASKED FOR EVERY TIME; THE LENGTH IS NOT, and the
+       asymmetry is deliberate. The pointer belongs to the currently loaded
+       cartridge and can legitimately move (main.c re-fetches it after a save
+       state load for exactly that reason). The length is the size of the
+       REGION, which a cartridge fixes when it is inserted -- so it is taken
+       once by core_load_rom, at the one moment the libretro contract
+       guarantees it is meaningful: right after retro_load_game, which is when
+       a frontend is expected to size and read the .srm.
+
+       This is not tidiness. Genesis Plus GX answers retro_get_memory_size
+       (RETRO_MEMORY_SAVE_RAM) with TWO DIFFERENT THINGS depending on when it
+       is asked: 0x10000 -- the buffer's real size -- before emulation starts,
+       and once it is running, "the index of the highest byte that is not
+       0xFF, plus one", which its own comment says is meant to tell a frontend
+       how much is worth writing. Measured across the author's Master System
+       and Game Gear collection, that running answer is anything from 285 to
+       32160 bytes, and 0 for a cartridge nobody has saved on yet.
+
+       Re-asking mid-session therefore SHRINKS the length, and a shrunk length
+       is a truncated .srm on the next flush: a 65536-byte save file rewritten
+       at 8191 bytes, which the next launch cannot read whole, which disables
+       saving for that session and tells the user their save is corrupt. That
+       is the destructive-truncation failure this project has already been
+       bitten by once (docs/FOLLOWUPS.md #3), reached by a different road.
+       A length that never moves cannot do it.
+
+       Growing is not a hazard here either: the length pinned at load is the
+       region's own size, so writing exactly that many bytes stays inside the
+       buffer for the lifetime of the cartridge. */
     uint8_t *p = c->get_memory_data(RETRO_MEMORY_SAVE_RAM);
-    size_t   l = c->get_memory_size(RETRO_MEMORY_SAVE_RAM);
-    if (len) *len = p ? l : 0;
+    if (len) *len = p ? c->sram_len : 0;
     return p;
 }
 
