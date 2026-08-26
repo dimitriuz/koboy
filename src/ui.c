@@ -1,6 +1,7 @@
 #include "ui.h"
 #include "text.h"
 #include <limits.h>
+#include <stdio.h>
 #include <string.h>
 
 #define UI_BG        0xFF
@@ -214,6 +215,26 @@ void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
     memcpy(out + head_chars, ELLIPSIS, (size_t)ell_chars);
     memcpy(out + head_chars + ell_chars, s + len - (size_t)tail_chars, (size_t)tail_chars);
     out[head_chars + ell_chars + tail_chars] = 0;
+}
+
+void ui_path_title(char *out, size_t outsz, const char *head, const char *sub)
+{
+    if (!out || !outsz) return;
+    if (!head) head = "";
+    if (!sub || !sub[0]) { snprintf(out, outsz, "%s", head); return; }
+
+    static const char SEP[] = " / ";
+    int room = UI_TITLE_CHARS - (int)strlen(head) - (int)(sizeof SEP - 1);
+    int len  = (int)strlen(sub);
+    if (room >= len) { snprintf(out, outsz, "%s%s%s", head, SEP, sub); return; }
+
+    /* Not even room for the marker plus a character of `sub`: the head alone
+       is still true and still fits, which beats a title that is nothing but
+       punctuation. Unreachable at any shipped geometry (UI_TITLE_CHARS is 40
+       and the head is "ALL GAMES"), and here because a caller with a longer
+       head must not get a garbage title. */
+    if (room <= 3) { snprintf(out, outsz, "%s", head); return; }
+    snprintf(out, outsz, "%s%s...%s", head, SEP, sub + len - (room - 3));
 }
 
 void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,

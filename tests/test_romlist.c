@@ -15,11 +15,10 @@ static void touch_file(const char *dir, const char *name)
     if (f) { fputc('x', f); fclose(f); }
 }
 
-/* True if `name` (a rl->count-relative path, e.g. "gbc/Shantae (USA).gbc")
-   is present among rl's REAL entries. Used to assert "a ROM present on disk
-   appears in the list" directly against the actual scan result rather than
-   against a hardcoded index, since sort order across 300+ files is not
-   something a test should hardcode. */
+/* True if `name` is a row of the CURRENT listing. Used to assert "a ROM
+   present on disk appears in the list" directly against the actual scan
+   result rather than against a hardcoded index, since sort order across 300+
+   files is not something a test should hardcode. */
 static bool has_name(const koboy_romlist *rl, const char *name)
 {
     for (int i = 0; i < rl->count; i++)
@@ -76,7 +75,7 @@ TEST_MAIN({
        ROMs" and "your rom_dir is wrong" are different diagnoses, and on a
        device with no terminal that distinction is the whole diagnostic. */
     /* Zero-initialised, per romlist_scan's precondition: it frees whatever
-       names/item_ptr already point to before it scans, and on an
+       ent/item_ptr already point to before it scans, and on an
        uninitialised struct those are indeterminate stack contents. */
     koboy_romlist rl = {0};
     CHECK_EQ_INT(romlist_scan(&rl, "/nonexistent/koboy/test/dir"), -1);
@@ -101,6 +100,15 @@ TEST_MAIN({
     int n = romlist_scan(&rl, dir);
     CHECK_EQ_INT(n, 4);
     CHECK(strcmp(romlist_name(&rl, 3), "zz BALL.mgw") == 0);
+
+    /* At the ROOT there is no ".." row: it is the top, and a row that walked
+       out of rom_dir would be a browser that can wander the device's
+       filesystem. Asserted by kind, not by name, so a ".." that arrived with
+       some other label would still fail. */
+    CHECK(romlist_subpath(&rl)[0] == 0);
+    for (int i = 0; i < rl.count; i++)
+        CHECK_EQ_INT(romlist_kind(&rl, i), ROMLIST_ROM);
+    CHECK_EQ_INT(rl.roms, 4);
 
     /* Sorted case-insensitively, so the list reads the way a person expects
        rather than the way readdir happened to return it. */
@@ -140,7 +148,15 @@ TEST_MAIN({
        distinguishable. A test that only checked count == 3, or count ==
        303, would not have caught the original bug: the count was never
        wrong in a way "== 303" would show (256 were still counted as valid
-       entries; which 256 was the bug). */
+       entries; which 256 was the bug).
+
+       It now doubles as the navigation test, because the same fixture is
+       exactly what navigation has to get right: the subdirectory is one row
+       at the TOP of the root listing rather than a prefix on every file
+       inside it, and the file inside it must still resolve to the SAME
+       absolute path the flattened list produced -- which is what keeps an
+       existing .srm, save state or RECENT entry pointing at the game it was
+       written for. */
     {
         char root[] = "/tmp/koboy_romlist_big_XXXXXX";
         CHECK(mkdtemp(root) != NULL);
@@ -170,7 +186,18 @@ TEST_MAIN({
         int bn = romlist_scan(&big, root);
         CHECK(bn >= 0);
         CHECK_EQ_INT(big.hidden, 0);                  /* nowhere near the cap */
-        CHECK_EQ_INT(big.count, GENERIC + 2 + 2);      /* the .txt is excluded */
+        /* 301 loose ROMs at the root, plus ONE row for gbc/ -- the two files
+           inside it are no longer rows of this listing. The .txt is excluded
+           at both levels. */
+        CHECK_EQ_INT(big.count, GENERIC + 2 + 1);
+        CHECK_EQ_INT(big.roms, GENERIC + 2);
+
+        /* DIRECTORIES SORT FIRST. "gbc/" starts with 'g', so an ordering that
+           merely sorted names would bury it between "GAME 299.gb" and
+           "Legend of Zelda..."; it is at row 0 because kind outranks name. */
+        CHECK_EQ_INT(romlist_kind(&big, 0), ROMLIST_DIR);
+        CHECK(strcmp(romlist_name(&big, 0), "gbc/") == 0);
+        CHECK_EQ_INT(romlist_kind(&big, 1), ROMLIST_ROM);
 
         /* The specific failure that was reported: present on disk, present
            in the list. */
@@ -178,10 +205,9 @@ TEST_MAIN({
         CHECK(has_name(&big, "Legend of Zelda, The - Link's Awakening "
                              "(USA, Europe) (Rev 2).gb"));
 
-        /* The subdirectory copy is a DIFFERENT entry with a DIFFERENT
-           display name -- not the same row, not missing, not colliding. */
-        CHECK(has_name(&big, "gbc/Shantae (USA).gbc"));
-        CHECK(has_name(&big, "gbc/Pokemon Crystal Version (USA, Europe).gbc"));
+        /* The flattened form is GONE from the root listing -- that prefix on
+           every row is the whole reason this changed. */
+        CHECK(!has_name(&big, "gbc/Shantae (USA).gbc"));
 
         /* Loadable, not just listed: romlist_path on the root-level Shantae
            entry must reconstruct a path that actually opens -- this is what
@@ -195,6 +221,81 @@ TEST_MAIN({
             if (f) fclose(f);
             break;
         }
+
+        /* A directory row names no file. Handing its "path" to the core
+           would be a load failure with nothing on the panel to explain it. */
+        {
+            char path[512];
+            path[0] = 'Z';
+            romlist_path(&big, 0, path, sizeof path);
+            CHECK_EQ_INT(path[0], 0);
+        }
+
+        /* ---------------------------------------------------- descending */
+        int sn = romlist_enter(&big, 0);
+        CHECK(sn >= 0);
+        CHECK(strcmp(romlist_subpath(&big), "gbc") == 0);
+        /* ONLY that directory's contents: the 302 root ROMs are not here,
+           and the .txt inside it is still filtered. Plus the ".." row. */
+        CHECK_EQ_INT(big.count, 3);
+        CHECK_EQ_INT(big.roms, 2);
+        CHECK(has_name(&big, "Shantae (USA).gbc"));   /* the gbc/ copy IS here... */
+        CHECK(!has_name(&big, "GAME 000.gb"));        /* ...but the root's ROMs are not */
+        CHECK(!has_name(&big, "notes.txt"));
+
+        /* ".." exists in a subdirectory, at row 0, and is the only ROMLIST_UP
+           row there is. */
+        CHECK_EQ_INT(romlist_kind(&big, 0), ROMLIST_UP);
+        CHECK(strcmp(romlist_name(&big, 0), "..") == 0);
+        CHECK_EQ_INT(romlist_kind(&big, 1), ROMLIST_ROM);
+        CHECK_EQ_INT(romlist_kind(&big, 2), ROMLIST_ROM);
+
+        /* THE COMPATIBILITY ASSERTION, and the reason the rest of this task
+           is constrained the way it is. A ROM inside a subdirectory must
+           resolve to the byte-identical path the FLATTENED list produced --
+           "<root>/gbc/Shantae (USA).gbc" -- because that string is what
+           sram.c and state.c derive a .srm and a save state from, and what
+           recent.dat stores. If this ever changes, every existing save on the
+           device is silently orphaned: the game still loads, with no
+           progress, and nothing says why. `want` is spelled out here the way
+           the OLD code built it (dir + "/" + the relative name it stored),
+           not the way the new code does, so the two constructions are
+           actually compared rather than one being restated. */
+        for (int i = 0; i < big.count; i++) {
+            if (strcmp(romlist_name(&big, i), "Shantae (USA).gbc") != 0) continue;
+            char path[512], want[512];
+            romlist_path(&big, i, path, sizeof path);
+            snprintf(want, sizeof want, "%s/%s", root, "gbc/Shantae (USA).gbc");
+            CHECK(strcmp(path, want) == 0);
+            FILE *f = fopen(path, "rb");
+            CHECK(f != NULL);                     /* and it really opens */
+            if (f) fclose(f);
+            break;
+        }
+
+        /* ------------------------------------------------------ going up */
+        int un = romlist_up(&big);
+        CHECK(un >= 0);
+        CHECK(romlist_subpath(&big)[0] == 0);
+        CHECK_EQ_INT(big.count, GENERIC + 2 + 1);      /* the root listing, again */
+        CHECK(has_name(&big, "GAME 000.gb"));
+
+        /* Up from the ROOT is a no-op, not an escape into the parent
+           directory: rom_dir is the top of the world the browser can see. */
+        int rn = romlist_up(&big);
+        CHECK_EQ_INT(rn, un);
+        CHECK(romlist_subpath(&big)[0] == 0);
+        CHECK(has_name(&big, "GAME 000.gb"));
+
+        /* Entering something that is not a directory changes nothing --
+           the caller loads a ROM row, it does not descend into one. */
+        int roms_row = -1;
+        for (int i = 0; i < big.count; i++)
+            if (romlist_kind(&big, i) == ROMLIST_ROM) { roms_row = i; break; }
+        CHECK(roms_row >= 0);
+        CHECK_EQ_INT(romlist_enter(&big, roms_row), rn);
+        CHECK(romlist_subpath(&big)[0] == 0);
+        CHECK_EQ_INT(romlist_enter(&big, 99999), rn);   /* nor does a bogus index */
 
         romlist_free(&big);
         char cmd[1024];
@@ -289,11 +390,16 @@ TEST_MAIN({
     }
 
     /* ------------------------------------------------------------------
-       A symlinked directory must not be followed -- that is exactly how a
-       "sorted collection" of subfolders could loop back on itself. A
-       self-referential symlink here would hang (or exhaust the stack) if
-       the guard in scan_walk were ever removed; reaching CHECK at all,
-       promptly, is the assertion. */
+       A symlinked directory must not be LISTED -- that is exactly how a
+       "sorted collection" of subfolders could loop back on itself, and with
+       folder rows the loop is now one the user walks by tapping rather than
+       one the scan walks by recursing. lstat's whole job here is that a
+       symlink is neither S_ISDIR nor S_ISREG, so it never becomes a row at
+       all: no row, no tap, no cycle.
+
+       The assertion is on the ROW, not on the scan finishing: a
+       one-directory listing would terminate promptly even if it did follow
+       the link, so "it did not hang" no longer discriminates. */
     {
         char dir[] = "/tmp/koboy_romlist_loop_XXXXXX";
         CHECK(mkdtemp(dir) != NULL);
@@ -307,10 +413,135 @@ TEST_MAIN({
         memset(&lp, 0, sizeof lp);
         int lpn = romlist_scan(&lp, dir);
         CHECK(lpn >= 0);
-        CHECK_EQ_INT(lp.count, 1);             /* real.gb only; "self" not followed */
+        CHECK_EQ_INT(lp.count, 1);             /* real.gb only; "self" is not a row */
         CHECK_EQ_INT(lp.hidden, 0);
+        CHECK(!has_name(&lp, "self/"));
+        CHECK(!has_name(&lp, "self"));
+        CHECK_EQ_INT(romlist_kind(&lp, 0), ROMLIST_ROM);
 
         romlist_free(&lp);
+        char cmd[1024];
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+        if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
+    }
+
+    /* ------------------------------------------------------------------
+       Directories sort ahead of files, so a truncated listing drops FILES,
+       and it drops the alphabetically last ones -- the cap is still applied
+       after the sort, which is the original bug's fix. The cap block above
+       proves that for a flat directory; this proves the folder rows did not
+       quietly become exempt from the ordering (or, worse, first in line to
+       be dropped). */
+    {
+        char dir[] = "/tmp/koboy_romlist_capdir_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        touch_file(dir, "AA.gb");
+        touch_file(dir, "BB.gb");
+        touch_file(dir, "CC.gb");
+        /* Named to sort LAST among the four if kind were ignored -- so a
+           listing that merely sorted by name would drop it, and the
+           assertions below would fail. */
+        char zz[80];
+        snprintf(zz, sizeof zz, "%s/zz sub", dir);
+        CHECK(mkdir(zz, 0755) == 0);
+
+        CHECK(setenv("KOBOY_ROMLIST_CAP_TEST", "2", 1) == 0);
+        koboy_romlist cd;
+        memset(&cd, 0, sizeof cd);
+        int cdn = romlist_scan(&cd, dir);
+        CHECK(unsetenv("KOBOY_ROMLIST_CAP_TEST") == 0);
+
+        CHECK_EQ_INT(cd.count, 2);
+        CHECK_EQ_INT(cdn, 3);                  /* 2 rows + the overflow row */
+        CHECK_EQ_INT(cd.hidden, 2);            /* CC.gb and BB.gb, in that order */
+        CHECK(strcmp(romlist_name(&cd, 0), "zz sub/") == 0);
+        CHECK_EQ_INT(romlist_kind(&cd, 0), ROMLIST_DIR);
+        CHECK(strcmp(romlist_name(&cd, 1), "AA.gb") == 0);
+        CHECK(!has_name(&cd, "CC.gb"));
+
+        romlist_free(&cd);
+        char cmd[1024];
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+        if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
+    }
+
+    /* ------------------------------------------------------------------
+       Dot-directories are not rows. New with folder rows: while the scan was
+       recursive a .Trashes or .Spotlight-V100 (an SD card that has been in a
+       Mac grows several) contributed nothing visible because it held no
+       ROMs. A directory is now a row of its own, and dirs sort first, so
+       without this filter the FIRST thing a user sees is their card's
+       metadata. Files are deliberately not filtered this way -- that would
+       change which ROMs are listed. */
+    {
+        char dir[] = "/tmp/koboy_romlist_dot_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        touch_file(dir, "AA.gb");
+
+        char dot[80], vis[80];
+        snprintf(dot, sizeof dot, "%s/.Trashes", dir);
+        snprintf(vis, sizeof vis, "%s/Game and Watch", dir);
+        CHECK(mkdir(dot, 0755) == 0);
+        CHECK(mkdir(vis, 0755) == 0);
+
+        koboy_romlist dt;
+        memset(&dt, 0, sizeof dt);
+        int dtn = romlist_scan(&dt, dir);
+        CHECK_EQ_INT(dtn, 2);                        /* the folder and the ROM */
+        CHECK(has_name(&dt, "Game and Watch/"));     /* the control: real folders DO show */
+        CHECK(!has_name(&dt, ".Trashes/"));
+        CHECK(!has_name(&dt, ".Trashes"));
+
+        romlist_free(&dt);
+        char cmd[1024];
+        snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
+        if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
+    }
+
+    /* ------------------------------------------------------------------
+       ROMLIST_MAX_DEPTH still bounds how deep the browser can go -- it used
+       to bound the recursive walk, and now bounds navigation, which is the
+       same ceiling reached one tap at a time. Builds one directory per level
+       past the limit and taps down through them: the descent must stop, and
+       stop where the user still sees a real listing rather than an error. */
+    {
+        char dir[] = "/tmp/koboy_romlist_deep_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        /* Appended in place rather than snprintf'd through a second buffer:
+           gcc's -Wformat-truncation cannot see that these paths are short,
+           and this project ships at zero warnings. */
+        char cur[256];
+        int len = snprintf(cur, sizeof cur, "%s", dir);
+        for (int d = 0; d < ROMLIST_MAX_DEPTH + 2; d++) {
+            CHECK(len + 2 < (int)sizeof cur);
+            cur[len++] = '/';
+            cur[len++] = 'd';
+            cur[len]   = 0;
+            CHECK(mkdir(cur, 0755) == 0);
+            touch_file(cur, "DEEP.gb");
+        }
+
+        koboy_romlist dp;
+        memset(&dp, 0, sizeof dp);
+        CHECK(romlist_scan(&dp, dir) >= 0);
+        int reached = 0;
+        for (int step = 0; step < ROMLIST_MAX_DEPTH + 4; step++) {
+            int row = -1;
+            for (int i = 0; i < dp.count; i++)
+                if (romlist_kind(&dp, i) == ROMLIST_DIR) { row = i; break; }
+            if (row < 0) break;
+            char before[512];
+            snprintf(before, sizeof before, "%s", romlist_subpath(&dp));
+            CHECK(romlist_enter(&dp, row) >= 0);
+            if (!strcmp(before, romlist_subpath(&dp))) break;   /* refused: at the limit */
+            reached++;
+        }
+        CHECK_EQ_INT(reached, ROMLIST_MAX_DEPTH);
+        /* And it is still a usable listing at the bottom, not an error
+           state: the ROM that lives there is right where it should be. */
+        CHECK(has_name(&dp, "DEEP.gb"));
+
+        romlist_free(&dp);
         char cmd[1024];
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
         if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");

@@ -59,6 +59,14 @@ script="$(mktemp)"
 # that silently strands a hardcoded pixel coordinate outside every row, so if
 # this ever goes stale again the failure here is "did not select the only
 # rom", not something subtler.
+#
+# $romdir is deliberately FLAT. Folder rows sort above files (src/romlist.c),
+# so a subdirectory here would push the ROM off row 0 and this tap would
+# descend into a folder instead -- and, since descending is a perfectly
+# ordinary thing for the browser to do, the run would go on to exit 4 rather
+# than say anything about a stale coordinate. The grep below is what actually
+# discriminates: it names the exact path, so selecting anything else fails.
+# Folder navigation gets its own runs further down.
 printf 'tap 200 168\ntap 200 104\n' > "$script"
 
 # Explicit rc capture, not the bare `out=$(...)` the run above uses: under
@@ -86,6 +94,76 @@ echo "$out" | grep -q '^presented=' \
     || { echo "FAIL: run did not reach the emulator loop"; rm -rf "$romdir" "$script"; exit 1; }
 rm -rf "$romdir" "$script"
 echo "ok: browser selects from a tap-first script"
+
+# ------------------------------------------------- folder navigation
+# The browser lists ONE directory and descends into subdirectory rows, which
+# is invisible to every run above (they all use a flat $romdir). Two runs,
+# because "descending works" and "coming back up works" fail independently --
+# and the second is a genuine discriminator rather than a repeat: it taps the
+# SAME row index in the subdirectory as the first, and only lands on a
+# different file if ".." really went up a level.
+#
+# Row geometry is the same 1264x1680 derivation as every other browser tap in
+# this file (row_h=64, row r's centre is 8 + 64 + r*64 + 32), aimed at rows
+# whose contents are pinned by the sort order src/romlist.c guarantees:
+#   root:   row 0 "Game and Watch/"   row 1 "AAA TEST.gb"   (dirs first)
+#   sub:    row 0 ".."                row 1 "BALL.mgw"      (".." first)
+romdir="$(mktemp -d)"
+: > "$romdir/AAA TEST.gb"
+mkdir "$romdir/Game and Watch"
+: > "$romdir/Game and Watch/BALL.mgw"
+script="$(mktemp)"
+#   tap 200 168 -- MAIN MENU row 1, ALL GAMES
+#   tap 200 104 -- browser root row 0, the "Game and Watch/" folder
+#   tap 200 168 -- subdirectory row 1, BALL.mgw (row 0 is "..")
+printf 'tap 200 168\ntap 200 104\ntap 200 168\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$romdir" --ui-script "$script" \
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out"
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: folder-descent run exited $rc (124 means it hit the 30s timeout)"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+# THE COMPATIBILITY ASSERTION, end to end: a ROM inside a subdirectory must
+# resolve to the same path the flattened list produced -- rom_dir + "/" +
+# "Game and Watch/BALL.mgw" -- because that string is what the .srm, the save
+# states and recent.dat are all keyed on. A user with a save on the device
+# loses it silently if this ever changes: the game loads, with no progress.
+echo "$out" | grep -q "chose $romdir/Game and Watch/BALL.mgw" \
+    || { echo "FAIL: descending into a folder did not select the rom inside it"; \
+         rm -rf "$romdir" "$script"; exit 1; }
+rm -rf "$romdir" "$script"
+echo "ok: the browser descends into a folder and loads from it"
+
+romdir="$(mktemp -d)"
+: > "$romdir/AAA TEST.gb"
+mkdir "$romdir/Game and Watch"
+: > "$romdir/Game and Watch/BALL.mgw"
+script="$(mktemp)"
+#   tap 200 168 -- MAIN MENU row 1, ALL GAMES
+#   tap 200 104 -- root row 0, into "Game and Watch/"
+#   tap 200 104 -- subdirectory row 0, "..", back to the root
+#   tap 200 168 -- root row 1, "AAA TEST.gb"
+# The last tap is the discriminator: at this coordinate the SUBDIRECTORY
+# holds BALL.mgw, so a ".." that did nothing (or that quietly re-listed the
+# same folder) selects a different file and the grep fails.
+printf 'tap 200 168\ntap 200 104\ntap 200 104\ntap 200 168\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$romdir" --ui-script "$script" \
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out"
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: dot-dot run exited $rc (124 means it hit the 30s timeout)"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+echo "$out" | grep -q "chose $romdir/AAA TEST.gb" \
+    || { echo "FAIL: '..' did not come back up to the root"; \
+         rm -rf "$romdir" "$script"; exit 1; }
+rm -rf "$romdir" "$script"
+echo "ok: '..' goes back up one level"
 
 # A bounded unattended run that chose NO rom must fail loudly. Exiting 0 there
 # is how a scripted browser run reports success for having tested nothing --
@@ -122,7 +200,9 @@ romdir="$(mktemp -d)"
 : > "$romdir/AAA.gb"; : > "$romdir/BBB.gb"; : > "$romdir/CCC.gb"
 : > "$romdir/DDD.gb"; : > "$romdir/EEE.gb"
 # With the cap at 2, only AAA.gb and BBB.gb survive, and the browser's third
-# row (row index 2) is the synthetic overflow row -- see the y math below,
+# row (row index 2) is the synthetic overflow row. $romdir is flat on purpose,
+# for the same reason as the tap-first run far above: a folder row would sort
+# above both ROMs and shift every index here by one. See the y math below,
 # which mirrors ui_list_init's own row_h derivation for a 1264x1680 panel
 # with KOBOY_CHROME_MARGIN=8 on every side (h=1664, slots=26, row_h=64).
 # First tap navigates MAIN MENU -> ALL GAMES (row 1), same as the tap-first

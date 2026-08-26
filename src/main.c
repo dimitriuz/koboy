@@ -407,6 +407,111 @@ static int run_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel
     return pick;    /* placeholder, when present, is index 0 and never reached here */
 }
 
+/* ------------------------------------------------------------- the browser
+   One directory at a time, not the whole tree flattened. The flatten was
+   fine for a hundred ROMs in one folder and unreadable for a real collection:
+   59 Game & Watch titles under roms/Game and Watch/ produced 59 rows whose
+   first 15 characters were identical, and ui_fit_label's middle ellipsis then
+   spent the row's width on that shared prefix and ate the actual title.
+
+   The header says where you are, so a folder you descended into is not a
+   mystery -- ui_path_title builds it (and owns the truncation rule), because
+   how much a title row can carry is the list widget's fact, not the
+   browser's. "ALL GAMES" rather than the old "CHOOSE A GAME" so the header
+   names the MAIN MENU row that got you here, and the breadcrumb below it
+   reads as a path. */
+#define BROWSER_TITLE_HEAD "ALL GAMES"
+
+/* Drives the ROM browser until the user picks a ROM, backs out of the root, or
+   the run ends. Returns a BROWSE_*; on BROWSE_PICKED it writes the ROM's full
+   path (out_path) and the row text the RECENT list should display (out_name).
+
+   Both entry points -- startup ALL GAMES and the in-game MENU's CHOOSE ROM --
+   call this. They used to carry a hand-copied browser each, which was already
+   two copies of the scan/geometry/alpha-strip setup before navigation added a
+   loop to each of them. */
+enum { BROWSE_PICKED = 0, BROWSE_NONE, BROWSE_ERR_DIR, BROWSE_ERR_EMPTY };
+
+static int run_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                       int stride, int pw, int ph, const char *rom_dir,
+                       char *out_path, size_t out_path_n,
+                       char *out_name, size_t out_name_n,
+                       const koboy_input_state *script, int *script_i,
+                       int script_n)
+{
+    /* memset, not `= {0}`: the Linaro 4.9 cross compiler warns
+       -Wmissing-braces on `= {0}` for a struct whose first member is itself
+       an array, and this project ships at zero warnings. */
+    koboy_romlist rl;
+    memset(&rl, 0, sizeof rl);
+
+    int n = romlist_scan(&rl, rom_dir);
+    if (n < 0) { romlist_free(&rl); return BROWSE_ERR_DIR; }
+    /* rl.count, not n: n also counts the synthetic overflow row when
+       rl.hidden > 0, and a rom_dir holding nothing but one oversized-name ROM
+       (hidden > 0, count == 0) must still report "no roms" rather than open a
+       browser whose only row selects nothing. count rather than rl.roms
+       because a root with no loose ROMs but a folder full of them is a
+       perfectly good collection -- it just needs one tap first. */
+    if (rl.count == 0) { romlist_free(&rl); return BROWSE_ERR_EMPTY; }
+
+    int result = BROWSE_NONE;
+    for (;;) {
+        char title[UI_TITLE_CHARS + 8];
+        ui_path_title(title, sizeof title, BROWSER_TITLE_HEAD,
+                      romlist_subpath(&rl));
+
+        /* Rebuilt after every navigation, never reused: romlist's arrays are
+           reallocated wholesale by each rescan (see romlist.h), so a
+           koboy_ui_list that outlived one would be holding freed pointers. */
+        koboy_ui_list list;
+        ui_list_init(&list, title, romlist_items(&rl), n,
+                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                     pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+        /* Letter index strip: only the ROM browser gets one, never MENU,
+           MAIN MENU, RECENT or the slot picker, which are all short
+           fixed-ish lists a strip would just clutter. */
+        ui_list_enable_alpha_jump(&list, true);
+
+        int pick = run_list(pf, in, &list, panel, stride, pw, ph,
+                            script, script_i, script_n,
+                            rl.hidden > 0 ? rl.count : -1);
+        if (pick < 0) {
+            /* Stopped (signal or should_quit) or the script ran out. This
+               leaves the BROWSER, from whatever directory it happened to be
+               in -- it does not walk back up one level per iteration, which
+               would make a Ctrl-C in a nested folder take several passes to
+               notice. Backing out of the ROOT is the same thing and therefore
+               still behaves exactly as it did before navigation existed; the
+               ".." row is what goes up one level. */
+            result = BROWSE_NONE;
+            break;
+        }
+
+        int kind = romlist_kind(&rl, pick);
+        if (kind == ROMLIST_ROM) {
+            romlist_path(&rl, pick, out_path, out_path_n);
+            snprintf(out_name, out_name_n, "%s", romlist_name(&rl, pick));
+            result = BROWSE_PICKED;
+            break;
+        }
+        if (kind == ROMLIST_DIR)      n = romlist_enter(&rl, pick);
+        else if (kind == ROMLIST_UP)  n = romlist_up(&rl);
+        else                          continue;   /* the overflow row: not selectable */
+
+        if (n < 0) {
+            /* The directory we navigated to could not be listed at all, and
+               romlist has already tried to fall back to where we were. There
+               is nothing left to show. */
+            result = BROWSE_ERR_DIR;
+            break;
+        }
+    }
+
+    romlist_free(&rl);
+    return result;
+}
+
 int main(int argc, char **argv)
 {
     koboy_config cfg;
@@ -663,14 +768,6 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Zero-initialised: romlist_scan frees whatever it already points to
-       before scanning, which on stack garbage is undefined behaviour.
-       memset, not `= {0}`: the Linaro 4.9 cross compiler warns
-       -Wmissing-braces on `= {0}` for a struct whose first member is itself
-       an array, and this project ships at zero warnings. */
-    koboy_romlist roms;
-    memset(&roms, 0, sizeof roms);
-
     /* Where the RECENT list lives: beside save_dir (recent.dat next to the
        .srm/.stN files), not beside koboy.ini. Two reasons, either one
        sufficient on its own: save_dir is GUARANTEED writable by the time
@@ -732,56 +829,37 @@ int main(int argc, char **argv)
                it (the `else` branch below) -- this does not need its own
                copy of that handling. */
         } else if (choice == MAIN_ALL_GAMES) {
-            int n = romlist_scan(&roms, cfg.rom_dir);
-            if (n < 0) {
-                /* Distinct from "no roms": a wrong rom_dir and an empty one
-                   are different mistakes, and this is the only diagnostic a
-                   user with no terminal gets. */
-                fatal("cannot read rom directory\n%s", cfg.rom_dir);
-                input_destroy(ui_in);
-                free(panel); pf->shutdown(pf->ctx); return 2;
-            }
-            /* roms.count, the REAL rom count, not n: n also counts the
-               synthetic overflow row when roms.hidden > 0, and a rom_dir
-               holding nothing but one oversized-name ROM (hidden > 0,
-               count == 0) must still report "no roms" rather than open a
-               browser whose only row selects nothing. */
-            if (roms.count == 0) {
-                fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
-                romlist_free(&roms); input_destroy(ui_in);
-                free(panel); pf->shutdown(pf->ctx); return 2;
-            }
-
-            koboy_ui_list list;
-            ui_list_init(&list, "CHOOSE A GAME", romlist_items(&roms), n,
-                         KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                         pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-            /* Letter index strip: only the ROM browser gets one, never MENU,
-               MAIN MENU, RECENT or the slot picker, which are all short
-               fixed-ish lists a strip would just clutter. */
-            ui_list_enable_alpha_jump(&list, true);
-
-            int pick = run_list(pf, ui_in, &list, panel, panel_stride, pw, ph,
-                                ui_scr, ui_scr_i, ui_script_n,
-                                roms.hidden > 0 ? roms.count : -1);
+            char chosen_name[ROMLIST_NAME];
+            int br = run_browser(pf, ui_in, panel, panel_stride, pw, ph,
+                                 cfg.rom_dir, cfg.rom_path, sizeof cfg.rom_path,
+                                 chosen_name, sizeof chosen_name,
+                                 ui_scr, ui_scr_i, ui_script_n);
             input_destroy(ui_in);
 
-            if (pick < 0) {
+            if (br == BROWSE_ERR_DIR || br == BROWSE_ERR_EMPTY) {
+                /* Two distinct messages, deliberately: a wrong rom_dir and an
+                   empty one are different mistakes, and this is the only
+                   diagnostic a user with no terminal gets. */
+                if (br == BROWSE_ERR_DIR)
+                    fatal("cannot read rom directory\n%s", cfg.rom_dir);
+                else
+                    fatal("no .gb, .gbc or .mgw files in\n%s", cfg.rom_dir);
+                free(panel); pf->shutdown(pf->ctx); return 2;
+            }
+            if (br != BROWSE_PICKED) {
                 /* A SCRIPTED run that ends without a rom chosen is a
                    failure, not a clean exit -- see run_list's own comment on
                    why this needs its own exit code. Backing out of ALL GAMES
                    interactively (only reachable via a signal/should_quit;
-                   there is no in-widget cancel) still exits 0. */
+                   the ".." row goes UP a level, it does not leave the
+                   browser) still exits 0. */
                 if (ui_script_n > 0) {
                     fatal("ui script selected nothing");
-                    romlist_free(&roms);
                     free(panel); pf->shutdown(pf->ctx); return 4;
                 }
                 say("koboy: no rom chosen, exiting\n");
-                romlist_free(&roms);
                 free(panel); pf->shutdown(pf->ctx); return 0;
             }
-            romlist_path(&roms, pick, cfg.rom_path, sizeof cfg.rom_path);
             say("koboy: chose %s\n", cfg.rom_path);
             {
                 /* Recorded here too, not only from RECENT: "played" means
@@ -789,10 +867,9 @@ int main(int argc, char **argv)
                    entry points that can load a rom at startup. */
                 koboy_recent rc;
                 recent_load(&rc, recents_file);
-                recent_touch(&rc, cfg.rom_path, romlist_name(&roms, pick));
+                recent_touch(&rc, cfg.rom_path, chosen_name);
                 recent_save(&rc, recents_file);
             }
-            romlist_free(&roms);
             mode = MODE_PLAY;
         } else {
             /* MAIN_QUIT, or run_main_menu itself was stopped/exhausted
@@ -1093,53 +1170,37 @@ int main(int argc, char **argv)
                         }
                         /* else: BACK -- loop shows MAIN MENU again. */
                     } else if (choice == MAIN_ALL_GAMES) {
-                        /* memset, not `= {0}` -- see the identical comment on
-                           `roms` above; same warning, same reason. This
-                           branch can run many times in one session (the user
-                           can bounce between MAIN MENU and ALL GAMES freely),
-                           and `rl` is a fresh local every pass -- without
-                           romlist_free below, each pass leaks the previous
-                           one's heap arrays for as long as koboy keeps
-                           running. */
-                        koboy_romlist rl;
-                        memset(&rl, 0, sizeof rl);
-                        int n = romlist_scan(&rl, cfg.rom_dir);
-                        if (n < 0) {
-                            /* Distinct from n == 0, matching the startup
-                               browser's two messages: romlist.h documents why
-                               they must stay distinguishable -- "your rom_dir
-                               is wrong" and "you have no ROMs" are different
-                               diagnoses to a user with no terminal, and this
-                               is the only diagnostic they get. */
+                        /* Never scripted here -- MODE_MENU has no --ui-script
+                           hook (see run_list's comment) -- so NULL/0 for
+                           every script argument, same as run_menu and
+                           run_slot_picker. */
+                        char chosen_name[ROMLIST_NAME];
+                        int br = run_browser(pf, in, panel, panel_stride, pw, ph,
+                                             cfg.rom_dir, cfg.rom_path,
+                                             sizeof cfg.rom_path,
+                                             chosen_name, sizeof chosen_name,
+                                             NULL, NULL, 0);
+                        if (br == BROWSE_ERR_DIR) {
+                            /* Distinct from the empty case, matching the
+                               startup browser's two messages: romlist.h
+                               documents why they must stay distinguishable --
+                               "your rom_dir is wrong" and "you have no ROMs"
+                               are different diagnoses to a user with no
+                               terminal, and this is the only diagnostic they
+                               get. */
                             fatal("cannot read rom directory\n%s", cfg.rom_dir);
-                        } else if (rl.count == 0) {
-                            /* rl.count, not n: an oversized-name-only rom_dir
-                               has n == 1 from the overflow row alone, but
-                               zero real ROMs. */
-                            fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
-                        } else {
-                            koboy_ui_list list;
-                            ui_list_init(&list, "CHOOSE A GAME", romlist_items(&rl), n,
-                                         KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                                         pw - 2 * KOBOY_CHROME_MARGIN,
-                                         ph - 2 * KOBOY_CHROME_MARGIN);
-                            ui_list_enable_alpha_jump(&list, true);
-                            int pick = run_list(pf, in, &list, panel, panel_stride,
-                                                pw, ph, NULL, NULL, 0,
-                                                rl.hidden > 0 ? rl.count : -1);
-                            if (pick >= 0) {
-                                romlist_path(&rl, pick, cfg.rom_path, sizeof cfg.rom_path);
-                                koboy_recent rc;
-                                recent_load(&rc, recents_file);
-                                recent_touch(&rc, cfg.rom_path, romlist_name(&rl, pick));
-                                recent_save(&rc, recents_file);
-                                picked = true;
-                            }
-                            /* pick < 0: nothing chosen from ALL GAMES either
-                               -- loop back to MAIN MENU, same as BACK from
-                               RECENT above. */
+                        } else if (br == BROWSE_ERR_EMPTY) {
+                            fatal("no .gb, .gbc or .mgw files in\n%s", cfg.rom_dir);
+                        } else if (br == BROWSE_PICKED) {
+                            koboy_recent rc;
+                            recent_load(&rc, recents_file);
+                            recent_touch(&rc, cfg.rom_path, chosen_name);
+                            recent_save(&rc, recents_file);
+                            picked = true;
                         }
-                        romlist_free(&rl);
+                        /* BROWSE_NONE: nothing chosen from ALL GAMES either
+                           -- loop back to MAIN MENU, same as BACK from
+                           RECENT above. */
                     } else {
                         /* MAIN_QUIT, or the while loop's own g_stop/
                            should_quit -- either way there is nothing left to

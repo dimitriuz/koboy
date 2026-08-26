@@ -69,4 +69,22 @@ ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
    a rendered image -- the same reasoning as text_pixel_visible in text.h. */
 void      ui_fit_label(const char *s, int avail_px, int px,
                        char *out, size_t outsz);
+
+/* Characters a title row can carry. A count, not a pixel width, because the
+   title is the one string ui_list_render does NOT put through ui_fit_label:
+   it draws at UI_TEXT_PX + 1 (a 24px advance) starting one half-row in, which
+   fits ~51 characters on the shipped 1264-wide panel and ~42 on the 1072-wide
+   Clara. 40 stays inside both, and a title that overran would not ellipsise
+   -- it would just run off the edge, or under the letter strip. */
+#define UI_TITLE_CHARS 40
+
+/* Builds a breadcrumb title -- `head` alone when `sub` is empty, otherwise
+   "head / sub" -- clamped to UI_TITLE_CHARS. An over-long `sub` keeps its
+   TAIL ("ALL GAMES / ...and Watch"), because the deepest folder is the one
+   you are actually in: "roms/Collectio..." tells a lost user nothing. Lives
+   here rather than in the ROM browser that uses it so the truncation branch
+   can be asserted by character count instead of inferred from a render --
+   the same reasoning as ui_fit_label above. */
+void      ui_path_title(char *out, size_t outsz, const char *head,
+                        const char *sub);
 #endif

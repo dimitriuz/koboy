@@ -578,6 +578,61 @@ TEST_MAIN({
         CHECK_EQ_INT((int)strlen(tiny), (int)sizeof tiny - 1);
     }
 
+    /* ------------------------------------------------------------------
+       ui_path_title: the ROM browser's breadcrumb header. Asserted by
+       character count rather than only through a render, for the same
+       reason as ui_fit_label above -- the title row is the ONE string
+       ui_list_render does not fit to the widget, so a title that overran
+       would not ellipsise, it would run off the panel or under the letter
+       strip, and a golden image only catches that if someone looks. */
+    {
+        char t[UI_TITLE_CHARS + 8];
+
+        /* At the root there is no breadcrumb at all, not a trailing
+           separator with nothing after it. */
+        ui_path_title(t, sizeof t, "ALL GAMES", "");
+        CHECK(strcmp(t, "ALL GAMES") == 0);
+        ui_path_title(t, sizeof t, "ALL GAMES", NULL);
+        CHECK(strcmp(t, "ALL GAMES") == 0);
+
+        /* The case this exists for: the user's own folder. */
+        ui_path_title(t, sizeof t, "ALL GAMES", "Game and Watch");
+        CHECK(strcmp(t, "ALL GAMES / Game and Watch") == 0);
+        CHECK((int)strlen(t) <= UI_TITLE_CHARS);
+
+        /* Nested paths keep their separators. */
+        ui_path_title(t, sizeof t, "ALL GAMES", "gbc/rpg");
+        CHECK(strcmp(t, "ALL GAMES / gbc/rpg") == 0);
+
+        /* An over-long path is clamped, marked as elided, and keeps its
+           TAIL -- the deepest folder is the one the user is standing in.
+           Both halves matter: a head-keeping truncation would fit just as
+           well and tell them nothing. */
+        ui_path_title(t, sizeof t, "ALL GAMES",
+                      "Some Absurdly Long Folder Name/Game and Watch");
+        CHECK((int)strlen(t) <= UI_TITLE_CHARS);
+        CHECK(strstr(t, "...") != NULL);
+        CHECK(strstr(t, "Game and Watch") != NULL);
+        CHECK(strstr(t, "Some Absurdly") == NULL);
+
+        /* Every length across the boundary stays inside the budget -- the
+           off-by-one at exactly UI_TITLE_CHARS is the one a single example
+           would miss. */
+        for (int n = 1; n < 80; n++) {
+            char sub[96];
+            for (int i = 0; i < n; i++) sub[i] = 'X';
+            sub[n] = 0;
+            ui_path_title(t, sizeof t, "ALL GAMES", sub);
+            CHECK((int)strlen(t) <= UI_TITLE_CHARS);
+        }
+
+        /* A head that leaves no room for a breadcrumb degrades to the head
+           alone rather than to punctuation. */
+        ui_path_title(t, sizeof t,
+                      "A HEAD LONG ENOUGH TO FILL THE WHOLE TITLE ROW", "sub");
+        CHECK(strcmp(t, "A HEAD LONG ENOUGH TO FILL THE WHOLE TITLE ROW") == 0);
+    }
+
     /* Rendering is clipped and draws something. */
     enum { W = 1264, H = 1680 };
     static uint8_t fb[W * H];
