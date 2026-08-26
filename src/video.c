@@ -362,8 +362,47 @@ struct koboy_video {
     bool     dither;
     int      stride;
     uint8_t *cur, *prev, *gray;
+    /* The frame size the last fit was computed for. A core whose base
+       geometry changes mid-session (Game & Watch alternates between the whole
+       unit and the LCD alone, several times a second) re-fits only when the
+       size actually moves -- and the margin around the content has to be
+       cleared on that transition, or the previous, larger frame stays visible
+       around the edges of the new one. */
+    int      fit_src_w, fit_src_h;
     uint8_t  lut[65536];
 };
+
+/* Largest integer scale at which a src_w x src_h frame fits the reserved rect,
+   and the offsets that centre it there.
+
+   The reserved rect is sized from the core's MAX geometry (koboy.h), so a
+   frame at exactly max lands at p.scale with no offset -- which is every Game
+   Boy frame ever, 160x144 into 800x720 at scale 5, offsets zero, bit for bit
+   what this did before it could fit anything else. A frame SMALLER than max
+   is the case that was wrong: it used to be scaled by p.scale and parked in
+   the top-left corner, so a 305x191 Game & Watch in-game view drew at 1:1 in
+   the corner of a 654x396 rect with the rest left black. Fitting it instead
+   puts it at 2x, centred, filling the rect it was given.
+
+   Never returns less than 1: src can't exceed the rect (game_w = max_w*scale
+   and video_pipeline_run rejects src > max before calling this), so the
+   divisions cannot floor to 0 -- the clamp is a live guard against a caller
+   that skips that check, not dead code. */
+void video_fit(const koboy_profile *p, int src_w, int src_h,
+               int *scale_out, int *ox_out, int *oy_out)
+{
+    int fs = 1;
+    if (src_w > 0 && src_h > 0) {
+        int fx = p->game_w / src_w, fy = p->game_h / src_h;
+        fs = fx < fy ? fx : fy;
+        if (fs < 1) fs = 1;
+    }
+    int ox = (p->game_w - src_w * fs) / 2;
+    int oy = (p->game_h - src_h * fs) / 2;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
+    *scale_out = fs; *ox_out = ox; *oy_out = oy;
+}
 
 koboy_video *video_create(const koboy_profile *p, bool force_dither)
 {
@@ -442,14 +481,24 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
         }
     }
 
-    /* Scaled into the top-left corner of v->cur at the frame's ACTUAL size,
-       not v->p.max_w/max_h -- a core legitimately rendering smaller than its
-       maximum (every Game & Watch title against the "Multi Screen" core's
-       max, per the design doc) fills less than the whole reserved rect, and
-       nothing here needs to know that; video_scale_gray only ever touches
-       the src_w*scale x src_h*scale it is told to. */
-    video_scale_gray(v->cur, v->stride, v->gray, src_w, src_h,
-                     v->p.max_w, v->p.scale);
+    /* Fitted and centred in the reserved rect, not parked in its top-left.
+       See video_fit: at max geometry this is p.scale at offset (0,0) -- the
+       Game Boy path, unchanged -- and below max it scales up to fill.
+
+       The margin is cleared only when the frame SIZE changes, not every
+       frame. It has to be cleared then, or the outgoing (larger) frame stays
+       visible as a border around the incoming one; and it must not be cleared
+       otherwise, because this rect is diffed against prev to find the dirty
+       region and a memset of the full rect every frame would be pure cost on
+       the stage that is already this pipeline's bottleneck. */
+    int fs, ox, oy;
+    video_fit(&v->p, src_w, src_h, &fs, &ox, &oy);
+    if (src_w != v->fit_src_w || src_h != v->fit_src_h) {
+        memset(v->cur, 0, (size_t)v->stride * (size_t)v->p.game_h);
+        v->fit_src_w = src_w; v->fit_src_h = src_h;
+    }
+    video_scale_gray(v->cur + (size_t)oy * v->stride + ox, v->stride, v->gray,
+                     src_w, src_h, v->p.max_w, fs);
 
     /* Quantise/dither still run over the FULL reserved rect (v->p.game_w x
        game_h = max_w*scale x max_h*scale), exactly as before generalisation.

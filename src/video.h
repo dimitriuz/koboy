@@ -59,6 +59,13 @@ int video_split_dirty(const uint8_t *prev, const uint8_t *cur,
                       int w, int h, int stride, int fixed_tiles,
                       koboy_rect *out, int max_out);
 
+/* Largest integer scale at which src_w x src_h fits p's reserved game rect,
+   plus the offsets that centre it. At the core's max geometry this is
+   p->scale at (0,0); below max it scales up to fill rather than leaving the
+   frame at 1:1 in a corner. Exposed for tests. */
+void video_fit(const koboy_profile *p, int src_w, int src_h,
+               int *scale_out, int *ox_out, int *oy_out);
+
 typedef struct koboy_video koboy_video;
 
 koboy_video   *video_create(const koboy_profile *p, bool force_dither);

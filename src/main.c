@@ -1205,9 +1205,31 @@ int main(int argc, char **argv)
            else about existing Game Boy behaviour. */
         if (core_geometry_changed(core)) {
             int rbw, rbh, rmw, rmh;
+            /* Only a change to MAX re-fits. The reserved rect, the chrome
+               drawn around it and video's buffers are all sized from max
+               (koboy.h), so a change to base alone leaves every one of them
+               correct and there is nothing to redo: video_fit places each
+               frame inside the existing rect per submit.
+
+               Testing base here as well -- which this did -- made every base
+               change tear down video, rebuild it and repaint the whole
+               faceplate. That is not a theoretical cost: a Game & Watch title
+               alternates between the whole unit and the LCD alone several
+               times a second, so the device log showed the pair
+               654x396 <-> 305x191 repeating, each toggle paying a full
+               video_destroy/video_create plus a chrome redraw plus the
+               forced full-rect refresh a fresh video_create implies. The
+               Game Boy never reaches either branch (base == max == 160x144,
+               and gambatte never sends these commands at all). */
             if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
                 (rbw != prof.base_w || rbh != prof.base_h ||
                  rmw != prof.max_w  || rmh != prof.max_h)) {
+                if (rmw == prof.max_w && rmh == prof.max_h) {
+                    /* Base-only: record what the core is rendering now, for
+                       the log and for anything that asks, and keep going. */
+                    prof.base_w = rbw; prof.base_h = rbh;
+                    goto geometry_done;
+                }
                 koboy_profile real_prof;
                 if (!config_resolve_profile(&real_prof, &cfg, pw, ph, rbw, rbh, rmw, rmh)) {
                     fatal("panel %dx%d is too small for this core's %dx%d game rect",
@@ -1242,6 +1264,11 @@ int main(int argc, char **argv)
                 }
             }
         }
+    /* The `;` is required, not stylistic: a label must be followed by a
+       STATEMENT, and the next line is a declaration. Newer host GCC accepts
+       the label-before-declaration form as an extension; the device's Linaro
+       4.9 rejects it outright, so dropping this breaks the ARM build only. */
+    geometry_done: ;
 
         bool present = pacer_tick(&pace);
         if (!present) goto sram_check;

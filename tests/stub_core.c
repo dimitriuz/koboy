@@ -43,6 +43,19 @@ int stub_max_w  = 160, stub_max_h  = 144;
    is done -- see the restore comment in test_core.c. */
 int stub_late_geometry = 0;
 static int stub_late_fired = 0;
+
+/* Base-only geometry churn, driven by the environment rather than by a global
+   because the test that needs it (tests/smoke_host.sh) runs koboy as a
+   SEPARATE PROCESS and cannot poke this binary's globals.
+
+   KOBOY_STUB_OSCILLATE=1 alternates base between max and half of max every 10
+   frames, leaving max alone -- the measured Game & Watch behaviour, where a
+   title flips between showing the whole unit and the LCD alone several times
+   a second. KOBOY_STUB_MAXGROW=1 instead announces a LARGER max once, at
+   frame 30. The pair exists so a test can assert both directions: base churn
+   must NOT provoke a re-fit, a max change MUST. Asserting only the first
+   would pass against a frontend that ignored geometry entirely. */
+static int stub_osc = -1, stub_maxgrow = -1, stub_tick = 0;
 #define STUB_PLACEHOLDER_W 128
 #define STUB_PLACEHOLDER_H 128
 
@@ -135,6 +148,39 @@ void retro_run(void)
        stub_late_geometry were 0, so a test comparing the "late" path against
        the "immediate" path is comparing the same target reached two
        different ways. */
+    if (stub_osc < 0) {
+        const char *e = getenv("KOBOY_STUB_OSCILLATE");
+        stub_osc = (e && *e && *e != '0') ? 1 : 0;
+        e = getenv("KOBOY_STUB_MAXGROW");
+        stub_maxgrow = (e && *e && *e != '0') ? 1 : 0;
+    }
+    stub_tick++;
+    if (stub_osc && stub_tick % 10 == 0) {
+        /* Half of max, floored at 1, alternating with max itself. max is
+           deliberately NOT touched. */
+        int half_w = stub_max_w / 2, half_h = stub_max_h / 2;
+        if (half_w < 1) half_w = 1;
+        if (half_h < 1) half_h = 1;
+        int want_w = (stub_base_w == stub_max_w) ? half_w : stub_max_w;
+        int want_h = (stub_base_h == stub_max_h) ? half_h : stub_max_h;
+        stub_base_w = want_w; stub_base_h = want_h;
+        struct retro_game_geometry g;
+        memset(&g, 0, sizeof g);
+        g.base_width = (unsigned)stub_base_w; g.base_height = (unsigned)stub_base_h;
+        g.max_width  = (unsigned)stub_max_w;  g.max_height  = (unsigned)stub_max_h;
+        if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &g);
+    }
+    if (stub_maxgrow && stub_tick == 30) {
+        /* Grow max (and base with it), once. Kept inside STUB_FB_MAX. */
+        stub_max_w = stub_base_w = 200;
+        stub_max_h = stub_base_h = 150;
+        struct retro_game_geometry g;
+        memset(&g, 0, sizeof g);
+        g.base_width = (unsigned)stub_base_w; g.base_height = (unsigned)stub_base_h;
+        g.max_width  = (unsigned)stub_max_w;  g.max_height  = (unsigned)stub_max_h;
+        if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &g);
+    }
+
     if (stub_late_geometry && !stub_late_fired) {
         stub_late_fired = 1;
         if (stub_late_geometry == 1) {

@@ -286,4 +286,33 @@ echo "$out" | grep -qx "koboy: core $d/gw_libretro.so" \
     || { echo "FAIL: a stale 'core = gambatte_libretro.so' pinned the core"; rm -rf "$d"; exit 1; }
 echo "ok: a legacy ini core= does not pin the core"
 
+# GEOMETRY CHURN: base-only changes must not re-fit; a max change must.
+#
+# A Game & Watch title alternates between the whole unit and the LCD alone
+# several times a second. The reserved rect, the chrome around it and video's
+# buffers are all sized from MAX, so a base change leaves them all correct and
+# re-fitting is pure waste -- a video_destroy/video_create, a full faceplate
+# repaint and a forced full-rect refresh, several times a second, on e-ink.
+# koboy therefore logs "geometry settled" only when max moves.
+#
+# Both directions are asserted. Checking only that base churn stays quiet
+# would pass just as well against a frontend that ignored geometry entirely,
+# which is the failure mode this pair exists to rule out.
+rc=0
+out=$(KOBOY_STUB_OSCILLATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --frames 120 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: oscillating-base run exited $rc"; exit 1; }
+n=$(echo "$out" | grep -c "geometry settled" || true)
+[ "$n" -eq 0 ] || { echo "FAIL: base-only churn re-fit $n time(s); max never moved"; exit 1; }
+echo "$out" | grep -q "presented=" || { echo "FAIL: oscillating run never presented"; exit 1; }
+echo "ok: base-only geometry churn does not re-fit"
+
+rc=0
+out=$(KOBOY_STUB_MAXGROW=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --frames 120 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: max-grow run exited $rc"; exit 1; }
+echo "$out" | grep -q "geometry settled" \
+    || { echo "FAIL: a max change did NOT re-fit"; exit 1; }
+echo "ok: a max change does re-fit"
+
 rm -rf "$d"
