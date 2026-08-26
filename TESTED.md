@@ -373,6 +373,175 @@ figure exists, the K1/K2 and KEY/TOP discs have never been touched by a real
 finger, the two BIOS files have never been read off a FAT32 partition, and no
 Master System `.srm` has survived a real session.
 
+### Arcade (FinalBurn Neo): NOT RUN ON THE DEVICE, 2026-08-27
+
+The eleventh system, and **it has not been on a Kobo**. The test device was
+off the LAN for the whole session and this host has no `qemu-arm`, so every
+number below is x86_64. The ARM core cross-builds, strips to 41 MB and passes
+`scripts/verify-core.sh`; that is the whole of the device-side evidence.
+Everything else was measured with `scripts/probe_core.c`, a throwaway probe
+that drives the core directly, and a harness running koboy's own
+`config.c`/`video.c` against the author's 227-romset collection.
+
+| | Arcade (FinalBurn Neo v1.0.0.03, rev ae41c16e of 2025-07-24) |
+|---|---|
+| Romsets that load | 227 / 227 -- but see the next row, "loads" is not "works" |
+| Romsets that are a playable board | **213 / 227.** The other 14 are device and BIOS dumps a complete set carries (`neogeo`, `midssio`, `namcoc69/70/75`, `nmk004`, `ym2608`, `cchip`, `pgm`, `skns`, `isgsm`, `bubsys`, `decocass`) plus `wbmlb2`, whose parent is absent |
+| Geometry | per board: base 224x224 to 640x480. **max is always SQUARE**, side = max(w,h), so both orientations fit one buffer |
+| `SET_GEOMETRY` at runtime | never, on any of the 227 |
+| `SET_ROTATION` | **yes -- 43 boards ask for one quarter turn, 24 for three, 160 for none** |
+| Pixel format | RGB565 |
+| Asks for a system directory | yes -- `<system_dir>/fbneo/` for `hiscore.dat` |
+| Asks for a save directory | yes -- `<save_dir>/fbneo/` for `<board>.hi`, and it `mkdir`s that itself on every load |
+| `valid_extensions` | `zip\|7z\|cue\|ccd`; koboy claims `.zip` only |
+| `RETRO_MEMORY_SAVE_RAM` | **0, on all 227.** An arcade PCB has no battery |
+| `retro_serialize_size` | non-zero on all 213 playable boards: 6 KB (Pooyan) to **145 MB** (DoDonPachi DaiFukkatsu) |
+| BIOS required | **no**, for the pre-1990 boards. Later hardware wants a BIOS ZIP beside the games in `roms/`, not in the koboy directory |
+| ARM closure | `libpthread`, `libm`, `libc`, `ld-linux-armhf` |
+| ARM size, stripped | **41 MB** -- ten times the rest of koboy, which is why it ships separately |
+| `timing.fps` | 60 on 150 boards, 59.x on 38, 58.x on 12, 55.x on 14, 54.x on 5, 50 on 2, **30 on 2** (Tapper, Popeye) |
+
+**THE MONITOR WAS ON ITS SIDE, and koboy had to learn to turn the picture.**
+FinalBurn Neo renders Galaga into a 288x224 LANDSCAPE buffer and asks the
+frontend, through `RETRO_ENVIRONMENT_SET_ROTATION`, for three quarter turns.
+Checked before assuming the core could do it itself: its `fbneo-vertical-mode`
+option, whose name promises exactly that, does NOT rotate the framebuffer --
+measured across all five settings, the delivered frame stays 288x224 and only
+the aspect ratio and the SET_ROTATION value move. So the turn is koboy's, and
+it is now in `video.c` for every core (see `core_rotation`,
+`video_set_rotation`).
+
+Measured cost, same frame and same destination area, three runs: rot 3 at
+0.449-0.516 ms against rot 0 at 0.444-0.446. Within noise on this host. The
+turning branches read strided and write sequentially, and a pre-1990 board's
+source column is ~14 KB against a Cortex-A9's 32 KB L1, so it should hold
+there too -- unverified.
+
+**What the panel gets, on a Libra 2 (1264x1680), DMG faceplate.** The rect is
+sized from the SQUARE max, so a portrait board leaves a paper margin left and
+right; the fitted picture is the second column:
+
+| Board | core frame | presented | reserved rect | fitted picture |
+|---|---|---|---|---|
+| Galaga, Dig Dug, Xevious, Ms. Pac-Man | 288x224 | 224x288 | 864x864 at (200,84) | **672x864** |
+| Donkey Kong, Frogger, Galaxian, Bomb Jack | 256x224 | 224x256 | 768x768 at (248,84) | 672x768 |
+| Green Beret, Jail Break | 240x224 | 224x240 | 720x720 at (272,84) | 672x720 |
+| Defender, Joust (landscape) | 292x240 | 292x240 | 876x876 at (194,84) | 876x720 |
+| Tapper, Popeye (landscape) | 512x480/448 | same | 512x512 at (376,84) | 512x480 |
+
+672x864 is 580,608 pixels against the Game Boy's 800x720 = 576,000, so a
+vertical arcade board gets very slightly MORE picture than the Game Boy and
+in the panel's own aspect. It is not the 1264x1626 a fractional 5.6x fit
+would give: the DMG faceplate reserves everything below `chrome_controls_top`
+(1018 on this panel) for the touch controls, and the scale search is integer.
+A fractional full-panel fit is what `KOBOY_LAYOUT_LCD` does and it exists
+because a Game & Watch draws its own buttons; an arcade board does not.
+
+**Per-frame cost, and it is EXTRAPOLATED.** The left column is koboy's own
+`core` stage on this host (the same instrument the device rows above use, so
+it includes koboy's input poll); the right is that times 7, the ratio measured
+on the two cores koboy HAS run on hardware -- gambatte 0.316 ms here against
+2.3 ms there (7.3x), fceumm 0.72 against 4.3-4.6 (6.0-6.4x).
+
+| Board | host `core` | device, estimated |
+|---|---|---|
+| Joust | 0.40 ms | ~2.8 ms |
+| Jail Break | 0.45 | ~3.1 |
+| Defender | 0.45 | ~3.2 |
+| Ms. Pac-Man | 0.53 | ~3.7 |
+| Donkey Kong | 0.55 | ~3.8 |
+| **Galaga** | **0.68** | **~4.7** |
+| Green Beret | 0.70 | ~4.9 |
+| **Dig Dug** | **0.98** | **~6.9** |
+| Xevious | 1.03 | ~7.2 |
+| Q*bert | 1.04 | ~7.3 |
+| Gyruss | 1.23 | ~8.6 |
+| Pitfall II | 1.28 | ~8.9 |
+| Tapper | 1.82 | ~12.7 |
+
+Emulation is cheap here as it has been on every other system -- but Tapper's
+estimate is close enough to a 16.7 ms frame that the sign of the error
+matters, and `video_submit` is still the real bottleneck (14-20 ms on the
+device for a rect this size).
+
+**Rendered and looked at**, which is how the last three device-visible defects
+in this project were found. Galaga, Ms. Pac-Man, Donkey Kong, Dig Dug and
+Frogger were run to real gameplay -- coin on SELECT, then START -- pushed
+through koboy's actual pipeline and written out as PGM. All five are upright,
+legible and playable-looking. Two things that only a frame could say:
+
+- *An arcade board boots slowly and ignores you while it does.* Galaga spends
+  roughly 800 frames (13 s) drawing its character-ROM test pattern and then a
+  crosshatch grid before it will look at the coin slot. A coin inserted during
+  that is simply lost, which looks exactly like a dead SELECT button.
+- *This is the darkest content koboy has rendered.* Mean luma after
+  quantising: Galaga 0.013 (97.8% pure black), Donkey Kong 0.093, Frogger
+  0.130, Ms. Pac-Man 0.163, Dig Dug 0.387. The Pokemon Mini got an inverted
+  palette in `src/core.c` for being 83% black at 0.174; arcade is darker and
+  cannot take that fix, because light-on-dark is the art. See
+  `docs/FOLLOWUPS.md` #59.
+
+**The smearing caveat, measured rather than predicted.** Fraction of the game
+rect changing per presented frame during gameplay, from koboy's own dirty-rect
+diff: Joust 0.2%, Dig Dug 1.5%, Donkey Kong 1.9%, Ms. Pac-Man 2.6% -- and
+Frogger 52.5%, Xevious 59.5%, **Galaga 67.1%**, Galaxian 85.5%. The scrolling
+shooters were expected to smear. Galaga and Galaxian were not: they are
+single-screen games with a full-screen scrolling STARFIELD, so the premise
+that "single-screen boards cannot smear" is wrong for the two most famous
+ones. See `docs/FOLLOWUPS.md` #58.
+
+**Controls, counted rather than read off a control panel.** This is the first
+system where "what does the hardware have" has 227 answers, so every romset's
+`retro_input_descriptors` were read. FBNeo's mapping is flat: JOYPAD_B is
+always the board's Button 1, A is Button 2, Y is Button 3, X is Button 4, and
+Coin 1 / Start 1 are SELECT / START.
+
+| retropad | boards binding it (of 227) |
+|---|---|
+| SELECT (Coin) | 214 |
+| LEFT / RIGHT | 212 |
+| START | 209 |
+| B (Button 1) | 208 |
+| UP / DOWN | 198 |
+| A (Button 2) | 185 |
+| **Y (Button 3)** | **134** |
+| **X (Button 4)** | **71** |
+| R / L | 48 / 45 |
+| R2 / L2 | 46 / 45 |
+| L3 / R3 | 26 / 14 |
+
+Y and X get the two extra discs, labelled `3` and `4`. Unreachable: the
+shoulder and stick-click buttons, i.e. the six-button layouts, all of which
+are outside this batch's scope except **Defender's "Reverse"** (JOYPAD_R).
+
+**Saving, and it is not `.srm`.** `retro_get_memory_size(SAVE_RAM)` is 0 on
+all 227. What exists instead is FinalBurn Neo's `hiscore.dat` mechanism, which
+koboy now turns on by answering `fbneo-hiscores` (the core's stated default is
+"enabled", but the option is left OFF when a frontend REFUSES the query, which
+is what koboy does with every key it has no opinion about). Verified as a
+round trip on Ms. Pac-Man, whose default high score is blank rather than a ROM
+constant: a 220-point game writes `fbneo/mspacman.hi` (11 bytes) on unload,
+and the next launch's attract screen reads `HIGH SCORE 220` where a fresh
+directory shows nothing. Both frames rendered and compared. The owner supplies
+`hiscore.dat` in `.adds/koboy/fbneo/`; without it the feature is inert.
+
+**"It loaded" is not "it works" here either.** `retro_load_game` returns TRUE
+for a missing or version-mismatched romset and the core draws a 640x480
+mostly-white error page naming the problem. Discriminator, found by scanning
+all 227: an error page is base 640x480 AND `retro_serialize_size() == 0`. That
+is what produces the 213/227 figure above. `astdelux` reports 640x480
+legitimately (it is a vector game) and has a real serialize size, which is why
+both halves of the test are needed. Unlike SMS Plus GX, FBNeo is null-safe
+about a refused `GET_LOG_INTERFACE` (`log_dummy`).
+
+**The romset was verified against the dat before any of this.** All 227 zips
+were CRC-checked member by member against
+`FinalBurn Neo (ClrMame Pro XML, Arcade only).dat` v1.0.0.03. Every pre-1990
+board matches exactly, including the device zips a set needs beside a game
+(`tapper` wants `midssio.zip`, present). The only shortfalls are alternate
+Neo Geo BIOS revisions, of which FBNeo needs one, and `wbmlb2`'s missing
+parent.
+
 ### Game & Watch: VERIFIED on the device, 2026-08-26
 
 Confirmed working by the device owner on the Kobo Libra 2: a Game & Watch

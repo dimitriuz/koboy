@@ -688,3 +688,132 @@ not to claim `.bin` -- it is to say so in `roms/README.txt`, or to add a
 rename hint, because the two BIOS files this project now asks users to
 install are literally `.bin`.
 
+
+## Arcade / FinalBurn Neo (added 2026-08-27)
+
+### 55. NOTHING IN THIS BATCH HAS RUN ON A KOBO
+
+The device was off the LAN for the whole session (`ping 192.168.1.27`, no
+reply) and there is no `qemu-arm` on this host, so every number in
+`TESTED.md`'s arcade table is an x86_64 measurement. The ARM core
+cross-builds, strips to 41 MB and passes `scripts/verify-core.sh`; that is
+the entire device-side evidence. Rotation in particular has never been seen
+on the panel, and rotation is the difference between Galaga and Galaga
+sideways.
+
+### 56. The per-frame cost on the device is EXTRAPOLATED, not measured
+
+`TESTED.md` quotes device figures derived from a host-to-device ratio
+measured on two cores koboy has already run on hardware: gambatte's `core`
+stage is 0.316 ms on this host against 2.3 ms on the Libra 2 (7.3x), and
+fceumm's is 0.72 ms against 4.3-4.6 ms (6.0-6.4x). Arcade numbers are the
+host figure times 7. That is a defensible extrapolation and it is not a
+measurement; the boards near the top of the range (Tapper at an estimated
+12.7 ms) are close enough to a 16.7 ms frame that the sign of the error
+matters. Re-measure on the device before believing any of them.
+
+### 57. `fps` is per BOARD, and koboy still paces everything at 60
+
+`retro_get_system_av_info().timing.fps` varies across the 227 romsets: 150
+report 60, 38 report 59.x, 12 report 58.x, 14 report 55.x, five 54.x, two 50
+and **two report 30** (Tapper and Popeye). koboy's `src/pacing.c` paces every
+core at the fixed `KOBOY_FRAME_US` the Game Boy measured, so 77 of 227 boards
+run at the wrong speed -- Tapper at double. This is #38 with a much larger
+population and the first system where a single core produces both extremes,
+so a per-core fix is not enough; the value has to come from the av_info.
+
+### 58. Galaga's starfield is a full-screen animation, and the "single-screen
+boards do not smear" premise is wrong for it
+
+Measured with koboy's own dirty-rect pipeline, mean fraction of the game rect
+changing per presented frame during real gameplay:
+
+| Board | dirty per frame | why |
+|---|---|---|
+| Dig Dug | 1.5% | static earth, a few sprites |
+| Donkey Kong | 1.9% | static girders |
+| Ms. Pac-Man | 2.6% | static maze |
+| Joust | 0.2% | static platforms |
+| Frogger | 52.5% | every lane of logs and cars moves |
+| Galaga | 67.1% | **the starfield scrolls continuously** |
+| Galaxian | 85.5% | same, and denser |
+| Xevious | 59.5% | scrolling shooter, as expected |
+
+Galaga and Galaxian are single-screen games with a full-screen scrolling
+BACKGROUND, so they will smear like a scrolling platformer even though
+nothing about the playfield scrolls. Whether that is tolerable is a
+panel question nobody has asked the panel yet.
+
+### 59. Arcade is the darkest content koboy has ever rendered
+
+Mean luma of a rendered gameplay frame, after the four-level quantiser:
+Galaga 0.013, Donkey Kong 0.093, Frogger 0.130, Ms. Pac-Man 0.163, Dig Dug
+0.387. Galaga is **97.8% level 0**. The Pokemon Mini was called out in
+`src/core.c` for being 83% black at mean luma 0.174 and got an inverted
+palette for it; arcade is darker still and cannot take the same fix, because
+light-on-dark IS the art -- inverting Ms. Pac-Man's maze would be wrong, not
+better. Dig Dug shows the shape of the good case (a bright earth field), so
+this is per-board rather than per-system. No action proposed; it is written
+down because "arcade suits this panel" needs the qualifier.
+
+### 60. FBNeo returns SUCCESS for a romset it cannot load, and draws an error
+screen instead
+
+`retro_load_game` returns true for a missing or mismatched set, and the core
+renders a 640x480 mostly-white page reading "This game is known but one of
+your romsets is missing files for THIS VERSION of FBNeo". This is the
+Gearcoleco `NO BIOS` situation exactly -- "it loaded" and "it works" are
+different questions -- and koboy will show that page rather than a
+`core rejected rom` line. It is arguably the better outcome (the page names
+the problem) but it means koboy's own error path never fires for arcade, and
+nothing in the test suite can tell a working board from a broken one.
+
+The reliable discriminator, found by scanning all 227: an error page reports
+base 640x480 with `retro_serialize_size() == 0`. Exactly 14 zips match, and
+they are precisely the device/BIOS dumps a complete set carries (`neogeo`,
+`midssio`, `namcoc69/70/75`, `nmk004`, `ym2608`, `cchip`, `pgm`, `skns`,
+`isgsm`, `bubsys`, `decocass`) plus `wbmlb2`, whose parent `wbml.zip` the
+owner does not have. One board, `astdelux`, legitimately reports 640x480 --
+it is a vector game -- and has a real serialize size, which is why the
+serialize half of the test is load-bearing.
+
+### 61. Save states exist for arcade but some are 145 MB
+
+`retro_serialize_size()` is non-zero on all 213 playable boards, so
+`MODE_MENU`'s save states are the working way to keep an arcade game. The
+range is 6 KB (Pooyan) to **151,911,260 bytes** (the DoDonPachi DaiFukkatsu
+family). `src/state.c` allocates that in one block and writes it through
+`safefile.c`; on a 512 MB device with three slots per ROM that is not going
+to work, and nothing currently checks. The pre-1990 boards this batch is
+scoped to are all under 120 KB, so this bites only if someone plays the
+later hardware that happens to run.
+
+### 62. Six-button boards lose their shoulder buttons, and Defender loses Reverse
+
+Counted across all 227 romsets: 45 boards bind JOYPAD_L, 48 bind R, 45/46
+bind L2/R2, 26/14 bind L3/R3. The DMG faceplate has room for the two discs
+this batch added (Y and X, buttons 3 and 4) and no more -- see
+`KOBOY_MAX_EXTRA_BTNS`, #45. Every affected board is outside the pre-1990
+scope except **Defender**, whose "Reverse" is on JOYPAD_R and is therefore
+unreachable; Hyperspace and Thrust are reachable through the new discs.
+
+### 63. The `.zip` row will claim a zipped ROM for any other system
+
+`config_core_for_rom` routes every `.zip` to FinalBurn Neo, which is correct
+because nothing else koboy ships can open a zip at all -- but a user who
+drops a zipped `.nes` into `roms/` now gets a browser row that fails to load
+where before the file was invisible. The failure is diagnosable (the log
+names the core, and FBNeo's own error page appears -- see #60) and the fix is
+not a dat parser in a 40 KB front-end. If it is ever reported, the cheap
+answer is a line in `roms/README.txt` saying koboy does not read zipped ROMs
+for any system but arcade.
+
+### 64. 7-Zip support is compiled out of the DEVICE core only
+
+`scripts/build-fbneo-core.sh` passes `INCLUDE_7Z_SUPPORT=0` for the Kobo
+target because `dep/libs/lib7z/CpuArch.c` does not compile against glibc
+2.19's headers (`HWCAP_NEON undeclared`). The HOST target keeps it on, so the
+two builds differ in a capability. No koboy code path reaches the difference
+-- `.7z` is claimed by neither `config_core_for_rom` nor `romlist_is_rom`,
+and `tests/test_romlist.c` asserts that -- but if `.7z` is ever wanted, the
+device build is where the work is.

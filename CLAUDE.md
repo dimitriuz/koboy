@@ -4,11 +4,19 @@ A retro emulator front-end for modern Kobo e-readers, built Game-Boy-first.
 No C++ of its own. It `dlopen`s a libretro core chosen from the ROM's
 extension — gambatte (.gb/.gbc), gw-libretro (.mgw), fceumm (.nes),
 PokeMini (.min), beetle-wswan (.ws/.wsc), RACE (.ngp/.ngc), stella2014
-(.a26), Gearcoleco (.col), FreeIntv (.int), Genesis Plus GX (.sms/.gg) —
-renders four greys through FBInk to the e-ink panel, and reads the page-turn
-buttons and touchscreen straight from evdev.
+(.a26), Gearcoleco (.col), FreeIntv (.int), Genesis Plus GX (.sms/.gg),
+FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
+panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
-**Two of the ten systems need a BIOS, and it is the owner's to supply.**
+**Arcade ships as its own archive.** `dist/fbneo_libretro.so` is 41 MB, ten
+times the whole rest of the project, so `make dist` deliberately does NOT
+carry it and `make fbneo-dist` builds `dist/koboy-fbneo-0.1.0.zip` separately.
+`tests/test_dist.sh` asserts the main package stays clean of it. Arcade is
+also the ONLY system whose core and content are version-locked: the romset
+must match FBNeo v1.0.0.03 (revision ae41c16e, 2025-07-24), which
+`scripts/build-fbneo-core.sh` pins by SHA and explains at length.
+
+**Two of the eleven systems need a BIOS, and it is the owner's to supply.**
 ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
 `grom.bin`. Both go in `.adds/koboy/` (what koboy answers
 `GET_SYSTEM_DIRECTORY` with). Nothing ships them and `tests/test_dist.sh`
@@ -28,7 +36,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 25 binaries, 3525 checks. Runs on x86_64.
+make test        # host suite: 25 binaries, ~3600 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -37,6 +45,7 @@ bash scripts/verify-core.sh  # shipped dependency closure
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
 make kobo        # cross-compile koboy-arm + koboy-probe-arm  (PATH needed!)
 make dist        # -> dist/koboy-0.1.0.zip, everything under .adds/koboy/
+make fbneo-dist  # -> dist/koboy-fbneo-0.1.0.zip, the arcade core ALONE (41 MB)
 make probe-dist  # just the probe, without the emulator or the core
 ```
 
@@ -84,6 +93,15 @@ src/config.c          ini load/save, profile resolution, path resolution
 src/core.c            dlopen + retro_* symbol binding
 src/probe.c           koboy-probe: --coexist (safe, Nickel up) / --takeover
 scripts/koboy.sh      the launcher. Its environment gate is load-bearing.
+                      ROTATION lives in three places and nowhere else:
+                      core.c records SET_ROTATION and TRANSPOSES
+                      core_get_geometry's answer for an odd one (so every
+                      consumer sees the picture as PRESENTED); video.c turns
+                      the pixels inside the convert pass it was already
+                      making; main.c wires the two and re-syncs on every
+                      geometry change. Answering true is a PROMISE --
+                      beetle-wswan stops rotating in software the moment you
+                      do.
 
 -- v2 additions: the ROM browser, in-game MENU and save states -----------
 src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
@@ -167,8 +185,20 @@ scripts/build-gpgx-core.sh    libretro/Genesis-Plus-GX (Master System AND
                       DISQUALIFIED -- it segfaults in retro_load_game calling
                       a null log pointer kept from a refused
                       GET_LOG_INTERFACE, which koboy also refuses.
-Six of the ten are pure C: closure is libm+libc or less. The two WonderSwan/
-Neo Geo cores need libc ALONE.
+scripts/build-fbneo-core.sh   libretro/FBNeo (arcade). NOT
+                      finalburnneo/FBNeo -- a NEW variant of the 404 trap,
+                      because BOTH names exist and both are real FBNeo
+                      repositories; only the libretro fork has
+                      src/burner/libretro at all. THE REVISION IS PINNED BY
+                      SHA to the day the owner's dat was published, because
+                      the version number 1.0.0.03 has covered five years of
+                      master and a romset that does not match the build fails
+                      exactly like a broken core. 7-Zip support is compiled
+                      OUT for the device: lib7z does not build against glibc
+                      2.19's headers.
+Six of the eleven are pure C: closure is libm+libc or less. The two
+WonderSwan/Neo Geo cores need libc ALONE. FBNeo is the only one that pulls in
+libpthread.
 scripts/probe_core.c  standalone: dlopens ANY core with no koboy code in the
                       way and reports geometry BEFORE and AFTER the first
                       retro_run(). This is how the 128x128 placeholder was
@@ -182,17 +212,27 @@ fills one ("C"); a WonderSwan fills two ("L1", "R1"); a ColecoVision fills
 two ("K1", "K2" -- keypad 1 and 2, without which no cartridge can be
 started); an Intellivision fills two ("KEY", "TOP"), where KEY is not a
 button at all but FreeIntv's hold-to-show-the-mini-keypad modifier, and is
-what makes all twelve of that console's keypad keys reachable. Three
+what makes all twelve of that console's keypad keys reachable; an arcade
+board fills two ("3", "4" -- buttons 3 and 4, because on this system the
+faceplate's own B and A really ARE buttons 1 and 2). Three
 consumers guard on r (chrome_controls_top, the DMG renderer, input.c's hit
 test) and each has a distinct failure if the guard goes -- see the commit and
 test_chrome.c. The bit is always the CORE's choice, read off its input
 descriptors, never picked here.
 
-TWO of the ten systems have a 12-KEY KEYPAD the faceplate cannot draw, and on
-both of them titles refuse to start without it. Check any new system's real
+TWO of the eleven systems have a 12-KEY KEYPAD the faceplate cannot draw, and
+on both of them titles refuse to start without it. Check any new system's real
 control set against what the faceplate offers BEFORE assuming DMG is enough;
 this has now cost a round on Game & Watch, Pokemon Mini, WonderSwan, and both
 of these.
+
+ARCADE is the first system where "what does the hardware have" has no single
+answer -- it is 227 different boards -- so the two discs were chosen by
+COUNTING every romset's input descriptors rather than by reading a control
+panel. FBNeo's map is flat (B=Button 1, A=Button 2, Y=Button 3, X=Button 4,
+SELECT=Coin, START=Start) and the counts decided it: Y 134 boards, X 71,
+against 45-48 for each shoulder button there is no room for. Do the same for
+the next multi-board system.
 ```
 
 Path resolution is against `/proc/self/exe`'s directory — **`dlopen` never
@@ -209,7 +249,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 54 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 is the live one: six of the ten systems have never run on hardware at all**; #46 is its twin for the greyscale default, and #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall). |
+| `docs/FOLLOWUPS.md` | 64 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: seven of the eleven systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
