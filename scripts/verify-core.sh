@@ -28,9 +28,21 @@ fi
 # by an actual on-device dlopen(RTLD_NOW) of the real cross-built core
 # (DLOPEN_OK, retro_api_version=1, DLCLOSE_OK) -- stronger evidence than any
 # static check, which is why it's allowed here rather than treated as a fail.
-allowed='libc\.so|libm\.so|libdl\.so|libpthread\.so|libgcc_s\.so|ld-linux-armhf\.so'
-bad=$($READELF -d "$SO" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p' | grep -Ev "$allowed" || true)
-[ -z "$bad" ] || { echo "FAIL: unexpected dependencies:"; echo "$bad"; exit 1; }
+# #10: this used to be `grep -Ev` against an unanchored alternation, which
+# matches by SUBSTRING -- a library literally named e.g. reallibc.so.6 would
+# satisfy `libc\.so` as a substring of itself and silently pass, because
+# grep -E never required the match to consume the whole field. `case` matches
+# the entire candidate string against each glob, so nothing can ride in on the
+# head or tail of a permitted name. The permitted set itself is unchanged.
+bad=""
+for lib in $($READELF -d "$SO" | sed -n 's/.*NEEDED.*\[\(.*\)\]/\1/p'); do
+    case "$lib" in
+        libc.so.*|libm.so.*|libdl.so.*|libpthread.so.*|libgcc_s.so.*|ld-linux-armhf.so.*) ;;
+        *) bad="$bad$lib
+" ;;
+    esac
+done
+[ -z "$bad" ] || { echo "FAIL: unexpected dependencies:"; printf '%s' "$bad"; exit 1; }
 
 echo "PASS core dependency closure is device-safe"
 $READELF -d "$SO" | sed -n 's/.*NEEDED.*\[\(.*\)\]/  needs \1/p'

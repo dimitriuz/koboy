@@ -11,6 +11,12 @@ typedef struct {
     int      full_refresh_permille; /* dirty area (permille of game rect) above
                                        which a frame is refreshed with FULL
                                        instead of FAST; <= 0 disables */
+    int      refresh_fixed_tiles; /* fixed per-refresh cost, in 8x8 tiles, used
+                                     by video_split_dirty's cost model. A
+                                     config key rather than a constant because
+                                     every absolute timing this project has
+                                     measured moved by up to a factor of 2.2
+                                     between sessions -- see config/koboy.ini. */
     bool     force_dither;
     bool     grab_input;
     int      dpad_mode;
@@ -18,6 +24,7 @@ typedef struct {
     int      dpad_hysteresis;    /* px */
     uint16_t key_a, key_b;       /* 0 = not yet calibrated */
     char     rom_path[512];
+    char     rom_dir[512];       /* where the browser looks; install-relative */
     char     core_path[512];
     char     save_dir[512];
     koboy_layout layout;

@@ -16,13 +16,26 @@ build/stub_core.so: tests/stub_core.c | build
 
 build/test_core: build/stub_core.so
 
-test: build $(TESTBIN)
+# Kobo-side syntax check, host-only and cheap: main.c has no FBInk dependency
+# of its own -- everything it needs from the device backend comes through
+# platform_kobo.h -- so its entire Kobo side (every platform_kobo_* prototype
+# and every call site under #ifdef KOBOY_PLATFORM_KOBO) is checkable on a
+# machine with neither fbink.h nor the Linaro cross toolchain, which is every
+# dev host so far. This is the guard follow-up #14 was filed about: a
+# prototype mismatch between main.c and platform_kobo.c links cleanly and
+# misbehaves only on the device, and nothing before this ran on a host that
+# could catch it.
+kobo-syntax:
+	@$(CC) -std=c99 -Wall -Wextra $(INC) -DKOBOY_PLATFORM_KOBO -fsyntax-only src/main.c \
+	    || { echo "FAIL: src/main.c does not compile under -DKOBOY_PLATFORM_KOBO -- check platform_kobo.h against platform_kobo.c"; exit 1; }
+
+test: build kobo-syntax $(TESTBIN)
 	@rc=0; for t in $(TESTBIN); do echo "== $$t"; ./$$t || rc=1; done; exit $$rc
 
 clean:
 	rm -rf build
 
-.PHONY: build test clean host
+.PHONY: build test clean host kobo-syntax
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
 SDL_LIBS   := $(shell pkg-config --libs sdl2)
@@ -105,6 +118,13 @@ dist: kobo $(CORE_SO) | build
 	    echo "dist: no build/koboy-probe-arm, skipping the probe"; \
 	fi
 	chmod +x build/pkg/.adds/koboy/koboy build/pkg/.adds/koboy/koboy.sh
+	# The browser needs somewhere to look. zip -qrD (below) omits directory
+	# entries entirely, so an empty roms/ would just not be in the archive and
+	# the browser's first run would report a missing directory -- the
+	# README.txt is what actually makes the directory exist in the zip.
+	mkdir -p build/pkg/.adds/koboy/roms
+	printf 'Put .gb and .gbc files in this directory.\nkoboy lists them at startup.\n' \
+	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from
 	# the file paths, and a bare ".adds/" entry in the listing is exactly the

@@ -32,4 +32,14 @@ int chrome_controls_top(const koboy_layout *l, int panel_w, int panel_h);
    rect; `*right_start` is the first column right of it, so the right band is
    panel_w - *right_start wide. */
 void chrome_bands(const koboy_profile *p, int panel_w, int *left, int *right_start);
+
+/* Draws the battery lamp for `percent` (0..100), or an unfilled lamp when
+   percent < 0. Separate from chrome_render because it is the one element with
+   a value that changes: it is redrawn whenever the whole panel is already
+   being repainted -- startup, menu exit, a chrome restore -- so the faceplate
+   keeps its zero-per-frame-cost property and needs no timer. A dedicated timer
+   was rejected: on a panel where every refresh is visible, adding a periodic
+   one to show a number that changes over hours is a bad trade. */
+void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
+                           const koboy_layout *l, int percent);
 #endif

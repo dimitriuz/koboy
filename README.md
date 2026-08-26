@@ -19,8 +19,10 @@ Game Boy.
   please add a row if you run it on anything else.
 - NickelMenu or KFMon, to launch it. koboy will not run without one; see
   "Launching" below for why that is a hard requirement.
-- **Your own ROMs.** None are included, and none ever will be. Point `rom=` in
-  `koboy.ini` at a `.gb` file you are entitled to have.
+- **Your own ROMs.** None are included, and none ever will be. Either point
+  `rom=` in `koboy.ini` at a specific `.gb`/`.gbc` file, or drop several into
+  `.adds/koboy/roms/` (the `rom_dir` default) and pick one from koboy's own
+  on-panel browser at launch -- see "Playing" below.
 
 ## Install
 
@@ -64,6 +66,10 @@ cannot damage the device identity; it just declines to start.
 
 ## Playing
 
+- If `rom=` in `koboy.ini` is unset, koboy opens a ROM browser instead: a list
+  of every `.gb`/`.gbc` file under `rom_dir` (default `roms`, i.e.
+  `.adds/koboy/roms/`), paged with the page-turn buttons and picked with a tap.
+  Set `rom=` to a specific path to skip the browser entirely.
 - The two page-turn buttons are A and B, mapped out of the box to the codes the
   Libra 2 emits (193 and 194). If yours differ, clear `key_a`/`key_b` in
   `koboy.ini` and the next launch asks you to press each one and records what it
@@ -73,17 +79,30 @@ cannot damage the device identity; it just declines to start.
   default `cross` mode splits the drawn cross into four fixed zones, which is
   what the drawing implies; `dpad_mode = relative` instead steers from wherever
   you first touched, thumb-pad style, and needs a drag rather than a tap.
-- The power button quits, and so does `SIGTERM`. Battery saves are written
-  atomically every ten seconds and again on exit.
+- A drawn **MENU** box opens the in-game menu: save to or load from one of
+  three per-ROM save-state slots, reset the core, switch to a different ROM
+  (back to the browser, above), or quit. The save-state format is gambatte's
+  own serialised core state, written and read through `safefile.c`'s
+  all-or-nothing helpers so a crash or a full disk mid-write cannot leave a
+  slot half-written; loading a slot never touches the core until the whole
+  blob has been read.
+- The power button quits, and so does `SIGTERM`. Battery saves (the
+  cartridge's own SRAM, not save states) are written atomically every ten
+  seconds and again on exit.
 - Exiting puts the panel back the way Nickel left it and starts Nickel again.
   You should end up back on the home screen without rebooting.
 
 Everything else is in `koboy.ini`, which documents each key inline: render
-scale, which waveform to use for fast refreshes, d-pad geometry, and the two
-ghosting mitigations that ship *disabled* --- the driver's own waveform choice
-made them redundant, and measuring showed they were the only thing making the
-panel flash. The file explains that in place, so nobody turns them back on
-thinking they were forgotten.
+scale, which waveform to use for fast refreshes, d-pad geometry, `rom_dir` for
+the browser above, and the two ghosting mitigations that ship *disabled* ---
+the driver's own waveform choice made them redundant, and measuring showed
+they were the only thing making the panel flash. The file explains that in
+place, so nobody turns them back on thinking they were forgotten.
+
+One key, `refresh_fixed_tiles`, ships at a starting guess (40) rather than a
+measurement: it trades off merging nearby dirty rectangles against refreshing
+them separately, and the on-device tuning run that would pin down its real
+value has not happened yet. See [TESTED.md](TESTED.md).
 
 If something goes wrong, `.adds/koboy/koboy.log` has the whole story --- the
 launcher logs every step of stopping and restarting Nickel, and koboy's own

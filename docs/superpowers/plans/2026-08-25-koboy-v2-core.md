@@ -59,6 +59,7 @@ against, and the run that closes follow-up #3.
 - Consumes: nothing.
 - Produces:
   - `enum { KOBOY_STAGE_CORE, KOBOY_STAGE_SUBMIT, KOBOY_STAGE_BLIT, KOBOY_STAGE_REFRESH, KOBOY_STAGE_COUNT }`
+  - `bool stats_stage_valid(int stage)`
   - `void stats_reset(koboy_stats *s)`
   - `void stats_add(koboy_stats *s, int stage, uint64_t us)`
   - `uint64_t stats_mean_us(const koboy_stats *s, int stage)`
@@ -92,12 +93,12 @@ TEST_MAIN({
     CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_CORE), 30);
     CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_REFRESH), 1000);
 
-    /* Out-of-range stage indices are ignored, not written through. A bad
-       index here would corrupt the adjacent stage's totals, which is the
-       kind of bug that shows up as a nonsense number in a bug report. */
-    stats_add(&s, -1, 999999);
-    stats_add(&s, KOBOY_STAGE_COUNT, 999999);
-    CHECK_EQ_INT(stats_mean_us(&s, KOBOY_STAGE_CORE), 30);
+    /* The bounds guard, asserted directly rather than by invoking undefined
+       behaviour. See stats_stage_valid's comment in stats.h. */
+    CHECK_EQ_INT(stats_stage_valid(-1), 0);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_COUNT), 0);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_CORE), 1);
+    CHECK_EQ_INT(stats_stage_valid(KOBOY_STAGE_COUNT - 1), 1);
 
     char buf[256];
     stats_format(&s, buf, sizeof buf);
@@ -123,6 +124,7 @@ Create `src/stats.h`:
 ```c
 #ifndef KOBOY_STATS_H
 #define KOBOY_STATS_H
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -143,6 +145,13 @@ typedef struct {
     uint64_t      max_us[KOBOY_STAGE_COUNT];
     unsigned long count[KOBOY_STAGE_COUNT];
 } koboy_stats;
+
+/* Exposed only so the bounds guard can be asserted DIRECTLY. Testing it by
+   calling stats_add with an out-of-range index cannot work: those writes land
+   outside the struct or alias a different field, so the test would detect a
+   broken guard only by happening to crash. Same reasoning, and the same fix,
+   as chrome_bands in src/chrome.c. */
+bool     stats_stage_valid(int stage);
 
 void     stats_reset(koboy_stats *s);
 void     stats_add(koboy_stats *s, int stage, uint64_t us);
@@ -166,14 +175,20 @@ Create `src/stats.c`:
 /* Live bounds check, not dead code: main.c passes a stage index derived from
    control flow, and an out-of-range write here would silently corrupt the
    neighbouring stage's totals -- producing a plausible-looking wrong number in
-   a bug report, which is worse than a crash. */
-static int valid(int stage) { return stage >= 0 && stage < KOBOY_STAGE_COUNT; }
+   a bug report, which is worse than a crash. Exposed (see stats.h) rather than
+   static, so the test suite can assert it directly instead of trying to
+   observe it through stats_add: an out-of-range write from a broken guard here
+   lands outside the struct or aliases a different field, so probing it via
+   stats_add would detect a broken guard only by happening to crash on a given
+   compiler/layout -- the same UB-dependent-test mistake chrome_bands in
+   src/chrome.c exists to avoid. */
+bool stats_stage_valid(int stage) { return stage >= 0 && stage < KOBOY_STAGE_COUNT; }
 
 void stats_reset(koboy_stats *s) { memset(s, 0, sizeof *s); }
 
 void stats_add(koboy_stats *s, int stage, uint64_t us)
 {
-    if (!valid(stage)) return;
+    if (!stats_stage_valid(stage)) return;
     s->total_us[stage] += us;
     s->count[stage]++;
     if (us > s->max_us[stage]) s->max_us[stage] = us;
@@ -181,13 +196,13 @@ void stats_add(koboy_stats *s, int stage, uint64_t us)
 
 uint64_t stats_mean_us(const koboy_stats *s, int stage)
 {
-    if (!valid(stage) || s->count[stage] == 0) return 0;
+    if (!stats_stage_valid(stage) || s->count[stage] == 0) return 0;
     return s->total_us[stage] / s->count[stage];
 }
 
 uint64_t stats_max_us(const koboy_stats *s, int stage)
 {
-    return valid(stage) ? s->max_us[stage] : 0;
+    return stats_stage_valid(stage) ? s->max_us[stage] : 0;
 }
 
 void stats_format(const koboy_stats *s, char *out, size_t n)
@@ -213,14 +228,24 @@ void stats_format(const koboy_stats *s, char *out, size_t n)
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `make build/test_stats && ./build/test_stats`
-Expected: PASS — `tests/test_stats.c: 12 checks, 0 failures`
+Expected: PASS — `tests/test_stats.c: 13 checks, 0 failures`
 
 - [ ] **Step 6: Verify the bounds guard is real (mutant)**
 
-Change `valid()` to `return 1;`, rebuild, run. Expected: the two
-`stats_add(&s, -1, ...)` / `KOBOY_STAGE_COUNT` checks make
-`stats_mean_us(&s, KOBOY_STAGE_CORE)` wrong, and the test FAILS. Revert the
-mutant. Record the output in the commit body.
+Change `stats_stage_valid` to `bool stats_stage_valid(int stage) { (void)stage;
+return true; }`, rebuild, run. Expected: a graceful, deterministic failure --
+`FAIL tests/test_stats.c:NN: stats_stage_valid(-1) == 1, expected 0` and the
+same for `KOBOY_STAGE_COUNT` -- with `make build/test_stats && ./build/test_stats`
+reporting a nonzero failure count. This is the whole point of exposing the
+predicate: the earlier version of this test tried to observe the guard by
+calling `stats_add` with an out-of-range index, which writes outside the
+struct or aliases a different field and can therefore only be detected by
+however that undefined behaviour happens to manifest on a given
+compiler/layout (on x86-64/gcc -O2 it segfaulted before any assertion ran,
+rather than failing the assertion it was meant to guard) -- the same class of
+defect `chrome_bands` in `src/chrome.c` exists to avoid. Asserting
+`stats_stage_valid` directly makes the mutant's failure deterministic on every
+libc. Revert the mutant. Record the output in the commit body.
 
 - [ ] **Step 7: Wire the counters into the emulator loop**
 
@@ -349,6 +374,16 @@ labels. Today's table is A–Z and space, which renders a filename as
   - `int text_measure(const char *s, int px)`
   - `void text_draw(uint8_t *fb, int stride, int W, int H, int x, int y, const char *s, int px, uint8_t ink)`
   - `void text_draw_centred(uint8_t *fb, int stride, int W, int H, int y, const char *s, int px, uint8_t ink)`
+  - `bool text_pixel_visible(int x, int y, int W, int H)` — added in fix round 1:
+    exposes the clip decision so it can be asserted directly. Testing the
+    clip by drawing off the edge cannot work: a negative row index cast to
+    `size_t` wraps to near `SIZE_MAX`, so the write is undefined behaviour and
+    the process crashes before any guard band can observe anything. Same
+    reasoning, and the same fix, as `chrome_bands` in `src/chrome.c` and
+    `stats_stage_valid` in `src/stats.h`. Proves the predicate is correct, not
+    that `text_draw` still calls it -- fix round 2's positive-overflow
+    end-to-end block in `tests/test_text.c` (see Step 6) covers that gap by
+    observing a real call site instead of a crash.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -402,21 +437,49 @@ TEST_MAIN({
     text_draw(fb, W, W, H, 0, 0, "\x01\x7F", 1, 0x00);
     CHECK_EQ_INT(ink_count(fb, sizeof fb), 0);
 
-    /* CLIPPING IS LIVE. Drawing past every edge must touch nothing outside the
-       buffer. A guard band on both sides catches an unclamped write; this is
-       checked by assertion on the band rather than by hoping a stray write
-       lands somewhere observable. */
-    static uint8_t guarded[16 + W * H + 16];
-    memset(guarded, 0x5A, sizeof guarded);
-    uint8_t *inner = guarded + 16;
-    memset(inner, 0xFF, (size_t)W * H);
-    text_draw(inner, W, W, H, -50, -50, "CLIP", 3, 0x00);
-    text_draw(inner, W, W, H, W - 2, H - 2, "CLIP", 3, 0x00);
-    text_draw(inner, W, W, H, 0, H + 5, "CLIP", 3, 0x00);
-    int guard_ok = 1;
-    for (int i = 0; i < 16; i++) if (guarded[i] != 0x5A) guard_ok = 0;
-    for (int i = 0; i < 16; i++) if (guarded[16 + W * H + i] != 0x5A) guard_ok = 0;
-    CHECK_EQ_INT(guard_ok, 1);
+    /* The clip, asserted directly: proves the predicate itself is correct.
+       The block below proves text_draw actually calls it -- see its comment
+       for why that second check needs positive-only overflow to stay
+       crash-safe under the same mutant that breaks this one. */
+    CHECK_EQ_INT(text_pixel_visible(0, 0, W, H), 1);
+    CHECK_EQ_INT(text_pixel_visible(W - 1, H - 1, W, H), 1);
+    CHECK_EQ_INT(text_pixel_visible(-1, 0, W, H), 0);
+    CHECK_EQ_INT(text_pixel_visible(0, -1, W, H), 0);
+    CHECK_EQ_INT(text_pixel_visible(W, 0, W, H), 0);
+    CHECK_EQ_INT(text_pixel_visible(0, H, W, H), 0);
+
+    /* End-to-end proof that text_draw actually CONSULTS the clip, not merely
+       that the predicate is right. Overflow is to the RIGHT and BOTTOM only,
+       and that restriction is the whole point: a negative coordinate cast to
+       size_t wraps to near SIZE_MAX, so an unclamped write would be undefined
+       behaviour and the process would simply crash -- which is what the
+       previous version of this block did, and why it could not be trusted.
+       Positive overflow into padding that is inside the same allocation is
+       fully defined, so a missing clamp is observed rather than survived.
+
+       This is the check the direct text_pixel_visible assertions cannot make:
+       they prove the predicate, this proves the call site. */
+    {
+        enum { GW = 64, GH = 32, PAD = 32 };
+        enum { GSTRIDE = GW + PAD, GROWS = GH + PAD };
+        static uint8_t g[GSTRIDE * GROWS];
+        memset(g, 0xFF, sizeof g);
+
+        /* Positioned so the glyphs run past both the right and bottom edges of
+           the declared GW x GH region. */
+        text_draw(g, GSTRIDE, GW, GH, GW - 2, GH - 2, "WW", 3, 0x00);
+
+        int outside_touched = 0, inside_painted = 0;
+        for (int y = 0; y < GROWS; y++)
+            for (int x = 0; x < GSTRIDE; x++) {
+                uint8_t v = g[(size_t)y * GSTRIDE + x];
+                if (x >= GW || y >= GH) { if (v != 0xFF) outside_touched++; }
+                else if (v != 0xFF)     inside_painted++;
+            }
+        CHECK_EQ_INT(outside_touched, 0);
+        /* And it really did draw, so "nothing outside" is not vacuous. */
+        CHECK(inside_painted > 0);
+    }
 
     /* Centring puts equal-ish margins either side. */
     memset(fb, 0xFF, sizeof fb);
@@ -443,6 +506,7 @@ Create `src/text.h`:
 ```c
 #ifndef KOBOY_TEXT_H
 #define KOBOY_TEXT_H
+#include <stdbool.h>
 #include <stdint.h>
 
 /* A 5x7 bitmap font, one byte per column, bit 0 = top row.
@@ -465,6 +529,21 @@ void text_draw(uint8_t *fb, int stride, int W, int H, int x, int y,
 
 void text_draw_centred(uint8_t *fb, int stride, int W, int H, int y,
                        const char *s, int px, uint8_t ink);
+
+/* True when (x, y) lies inside a W x H buffer. text_draw consults this for
+   every pixel it is about to write, and it is exposed ONLY so the clip can be
+   asserted directly.
+
+   Testing the clip by drawing off the edge cannot work: a negative row index
+   cast to size_t wraps to near SIZE_MAX, so the write is undefined behaviour
+   and the process simply crashes before any guard band can observe anything.
+   Same reasoning, and the same fix, as chrome_bands in src/chrome.c and
+   stats_stage_valid in src/stats.h.
+
+   Known limitation, shared with both of those: this proves the predicate is
+   correct, not that text_draw still calls it. That is the accepted trade --
+   the alternative is a test that only works by crashing. */
+bool text_pixel_visible(int x, int y, int W, int H);
 #endif
 ```
 
@@ -553,6 +632,11 @@ int text_measure(const char *s, int px)
     return (int)strlen(s) * TEXT_ADVANCE * px;
 }
 
+bool text_pixel_visible(int x, int y, int W, int H)
+{
+    return x >= 0 && x < W && y >= 0 && y < H;
+}
+
 void text_draw(uint8_t *fb, int stride, int W, int H, int x, int y,
                const char *s, int px, uint8_t ink)
 {
@@ -564,14 +648,16 @@ void text_draw(uint8_t *fb, int stride, int W, int H, int x, int y,
                 if (!(g[col] & (1u << row))) continue;
                 for (int dy = 0; dy < px; dy++) {
                     int fy = y + row * px + dy;
-                    /* Live clamps. text_draw is called with coordinates
-                       derived from panel geometry and from string lengths the
-                       caller does not bound, so both edges are reachable --
-                       the ROM browser renders filenames of any length. */
-                    if (fy < 0 || fy >= H) continue;
                     for (int dx = 0; dx < px; dx++) {
                         int fx = x + col * px + dx;
-                        if (fx >= 0 && fx < W)
+                        /* Live clamp, routed through the exposed predicate so
+                           the clip itself can be asserted directly -- see
+                           text_pixel_visible's comment in text.h. Coordinates
+                           here are derived from panel geometry and from
+                           string lengths the caller does not bound, so both
+                           edges are reachable: the ROM browser renders
+                           filenames of any length. */
+                        if (text_pixel_visible(fx, fy, W, H))
                             fb[(size_t)fy * stride + fx] = ink;
                     }
                 }
@@ -590,12 +676,65 @@ void text_draw_centred(uint8_t *fb, int stride, int W, int H, int y,
 - [ ] **Step 5: Run test to verify it passes**
 
 Run: `make build/test_text && ./build/test_text`
-Expected: PASS — `tests/test_text.c: 13 checks, 0 failures`
+Expected: PASS — `tests/test_text.c: 18 checks, 0 failures`.
 
-- [ ] **Step 6: Verify the clipping guard is real (mutant)**
+(The plan's predicted check counts are unreliable across this document --
+Task 1 said 12, actual was 10; this step originally said 13, actual was 11;
+fix round 1 added six `text_pixel_visible` assertions for 17; fix round 2
+replaced the one-assertion negative-coordinate guard band with a two-
+assertion positive-overflow one (`outside_touched`, `inside_painted`),
+giving 18. Report the real count from the build; never add or remove an
+assertion to hit a predicted number.)
 
-Delete the `if (fy < 0 || fy >= H) continue;` line, rebuild, run.
-Expected: the guard-band check FAILS. Revert. Record the output.
+- [ ] **Step 6: Verify the clip guard is real (mutant)**
+
+The clip is asserted two ways, and both matter: `text_pixel_visible`
+(fix round 1) proves the predicate itself is correct; the end-to-end block
+below it (fix round 2) proves `text_draw` actually consults that predicate
+at its call sites, which the direct assertions alone cannot show. That
+second block deliberately overflows only to the RIGHT and BOTTOM, into
+padding that is part of the same allocation (`GSTRIDE = GW + PAD`,
+`GROWS = GH + PAD`): a positive out-of-range index stays inside the
+allocation, so an unclamped write is *observed*, not merely crashed into.
+The original version of this block used a negative-coordinate guard band
+instead and could not be trusted -- a negative row index cast to `size_t`
+wraps to near `SIZE_MAX`, so the resulting write is undefined behaviour and
+the process simply segfaults before any assertion runs (confirmed twice:
+once for the original inline clip in fix round 1's Step 6, and again for
+`text_pixel_visible` itself when the guard-band block still used negative
+coordinates -- see task-2-report.md's fix-round-1 and fix-round-2 sections).
+
+Mutant: make `text_pixel_visible` return `true` unconditionally --
+
+```c
+bool text_pixel_visible(int x, int y, int W, int H)
+{
+    (void)x; (void)y; (void)W; (void)H;
+    return true;
+}
+```
+
+Rebuild and run `./build/test_text`. Expected, and now achieved: graceful,
+deterministic failures and a **clean exit — no crash** --
+
+```
+FAIL tests/test_text.c:54: text_pixel_visible(-1, 0, W, H) == 1, expected 0
+FAIL tests/test_text.c:55: text_pixel_visible(0, -1, W, H) == 1, expected 0
+FAIL tests/test_text.c:56: text_pixel_visible(W, 0, W, H) == 1, expected 0
+FAIL tests/test_text.c:57: text_pixel_visible(0, H, W, H) == 1, expected 0
+FAIL tests/test_text.c:87: outside_touched == 320, expected 0
+tests/test_text.c: 18 checks, 5 failures
+exit=1
+```
+
+Five failures: the four direct-predicate assertions, plus the end-to-end
+`outside_touched` check (320 padding pixels got painted once the clip no
+longer clamped anything) -- and `inside_painted` still passes, so the
+failure is not vacuous; `text_draw` really did draw. The binary reaches its
+final summary line and exits 1. No segfault.
+
+Revert `text_pixel_visible` to the real implementation. Confirm
+`./build/test_text` returns to `tests/test_text.c: 18 checks, 0 failures`.
 
 - [ ] **Step 7: Delete the duplicate font from `main.c`**
 

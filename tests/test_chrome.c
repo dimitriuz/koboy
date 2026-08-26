@@ -341,13 +341,21 @@ TEST_MAIN({
 
             memset(fb, 0x7F, (size_t)W * H);
             chrome_render(fb, W, &q, &cc.layout);
+            /* The battery lamp is chrome too, and it is drawn from the same
+               places chrome_render is -- but this sweep did not call it, which
+               is exactly how a BATTERY label that escaped the game-rect guard
+               shipped. Both a full lamp (the largest fill) and an unknown
+               battery (no fill at all, label only) go into the same buffer, so
+               the intrusion count below covers every shape it can take. */
+            chrome_render_battery(fb, W, &q, &cc.layout, 100);
+            chrome_render_battery(fb, W, &q, &cc.layout, -1);
 
             int bad = 0;
             for (int y = q.game_y; y < q.game_y + q.game_h; y++)
                 for (int x = q.game_x; x < q.game_x + q.game_w; x++)
                     if (fb[(size_t)y * W + x] != 0x7F) bad++;
             if (bad) {
-                fprintf(stderr, "  chrome inside game rect: %dx%d scale=%d -> "
+                fprintf(stderr, "  chrome/battery inside game rect: %dx%d scale=%d -> "
                         "resolved %d, %d px\n", W, H, scales[si], q.scale, bad);
                 chrome_intruded += bad;
             }
@@ -391,4 +399,465 @@ TEST_MAIN({
     CHECK_EQ_INT(combos, 52);
     CHECK_EQ_INT(chrome_intruded, 0);
     CHECK_EQ_INT(zone_hits, 0);
+
+    /* GENERAL guard, carried forward from Task 8, REDESIGNED after a review
+       found the first version too weak. That version compared each control's
+       rendered pixels against chrome_controls_top()'s RETURN VALUE, which is
+       a min() over seven terms (two for the d-pad's arms, one each for A, B,
+       Start, Select, Menu). Deleting a non-binding term leaves the min()
+       unchanged, so nothing the pixel probe looked at moved -- the review
+       deleted each of the seven terms in turn and only one (`a`, the term
+       that happened to be the binding minimum on the one profile tested) was
+       caught. The other six were provably unguarded. A second, independent
+       bug in that version: the `menu` column probe (750..950 permille) and
+       the `a` probe (745..915 permille) overlap, so the menu check was
+       silently reading A's pixels rather than the MENU box's.
+
+       The fix: compute the SAME seven-term minimum independently here, from
+       koboy_layout and the panel size, and assert EQUALITY with
+       chrome_controls_top()'s actual return value -- not an inequality
+       against a pixel sample. This deliberately duplicates chrome.c's min2
+       chain. That duplication IS the guard: a future edit to the chain
+       either updates this expected value to match (which is a deliberate,
+       visible part of the same diff) or it does not, and then EVERY one of
+       the seven terms makes this fail, not just whichever one happens to be
+       binding on whichever panel is tested -- because any single term
+       increasing means chrome_controls_top()'s actual minimum can only stay
+       the same or drop, while this independently-computed value tracks
+       whatever the test author believes each control's real top edge is.
+       There is no pixel sampling left to overlap, either.
+
+       Run at all four supported panel sizes, not only the Libra 2 this file
+       otherwise defaults to: Clara (1072x1448) is the one where the margin
+       between the bezel and chrome_controls_top is tightest (nine pixels
+       before this task's fix-round redesign of the bezel/decoration sizing),
+       which is exactly where a future strapline or bezel change would erode
+       it first without this catching it. */
+    {
+        static const int panels[][2] = {
+            { 1072, 1448 },   /* Clara family, 6"     -- tightest margin  */
+            { 1264, 1680 },   /* Libra family, 7"                        */
+            { 1404, 1872 },   /* Elipsa family, 10.3"                    */
+            { 1440, 1920 },   /* Sage, 8"                                */
+        };
+        koboy_config c; config_defaults(&c);
+        const koboy_layout *l = &c.layout;
+
+        for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
+            int W = panels[pi][0], H = panels[pi][1];
+
+            int dcy = l->dpad_cy * H / 1000, dr = l->dpad_r * W / 1000;
+            int arm = dr / 3;
+            int expected = dcy - dr - 1;
+            if (dcy - arm / 2 - 1 < expected) expected = dcy - arm / 2 - 1;
+            int a_top = l->a_cy * H / 1000 - l->a_r * W / 1000;
+            if (a_top < expected) expected = a_top;
+            int b_top = l->b_cy * H / 1000 - l->b_r * W / 1000;
+            if (b_top < expected) expected = b_top;
+            int start_top = l->start_cy * H / 1000 - (l->start_h * H / 1000) / 2;
+            if (start_top < expected) expected = start_top;
+            int select_top = l->select_cy * H / 1000 - (l->select_h * H / 1000) / 2;
+            if (select_top < expected) expected = select_top;
+            int menu_top = l->menu_cy * H / 1000 - (l->menu_h * H / 1000) / 2;
+            if (menu_top < expected) expected = menu_top;
+            if (expected < 0) expected = 0;
+
+            int got = chrome_controls_top(l, W, H);
+            if (got != expected)
+                fprintf(stderr, "  %dx%d: chrome_controls_top=%d, expected %d\n",
+                        W, H, got, expected);
+            CHECK_EQ_INT(got, expected);
+        }
+    }
+
+    /* The default-layout, 4-panel check above is necessary but not
+       sufficient: on the SHIPPED layout, `a` beats every other term on all
+       four supported panels by a comfortable margin (measured -- see the
+       task report's table), which means deleting any of the other six terms
+       leaves chrome_controls_top()'s return value completely unchanged and
+       an equality check against it, however it is computed, cannot observe
+       the deletion. That is not a flaw in comparing with equality instead of
+       inequality; it is a property of min(): whichever comparison operator
+       is used, a term that is never the actual minimum is invisible to any
+       test that only inspects the aggregate result on a layout where it
+       never wins.
+
+       So each term is isolated in its own synthetic layout instead: every
+       OTHER control is parked far down the panel with a negligible radius
+       (cy = 990 permille, r/half-extent = 5 permille), and the one control
+       under test is brought up to an unmistakably dominant position (cy =
+       300 permille, a generous size). With every rival out of contention,
+       chrome_controls_top()'s return value can only equal what that term's
+       own formula produces (if the term is present) or something larger --
+       whatever the next surviving term computes -- if it has been deleted.
+       That is what makes each of these individually decisive. */
+    {
+        const int W = 1264, H = 1680;
+
+        struct { const char *name; int dpad, a, b, start, select, menu; } cases[] = {
+            { "dpad",   1, 0, 0, 0, 0, 0 },
+            { "a",      0, 1, 0, 0, 0, 0 },
+            { "b",      0, 0, 1, 0, 0, 0 },
+            { "start",  0, 0, 0, 1, 0, 0 },
+            { "select", 0, 0, 0, 0, 1, 0 },
+            { "menu",   0, 0, 0, 0, 0, 1 },
+        };
+        for (size_t ci = 0; ci < sizeof cases / sizeof cases[0]; ci++) {
+            koboy_layout l;
+            memset(&l, 0, sizeof l);
+            /* Parked: negligible footprint, far down the panel. */
+            l.dpad_cx = l.a_cx = l.b_cx = l.start_cx = l.select_cx = l.menu_cx = 500;
+            l.dpad_cy = l.a_cy = l.b_cy = l.start_cy = l.select_cy = l.menu_cy = 990;
+            l.dpad_r = l.a_r = l.b_r = 5;
+            l.start_w = l.select_w = l.menu_w = 10;
+            l.start_h = l.select_h = l.menu_h = 10;
+
+            /* Bring exactly one control up to a clearly dominant position. */
+            if (cases[ci].dpad)   { l.dpad_cy   = 300; l.dpad_r   = 80; }
+            if (cases[ci].a)      { l.a_cy      = 300; l.a_r      = 80; }
+            if (cases[ci].b)      { l.b_cy      = 300; l.b_r      = 80; }
+            if (cases[ci].start)  { l.start_cy  = 300; l.start_h  = 160; }
+            if (cases[ci].select) { l.select_cy = 300; l.select_h = 160; }
+            if (cases[ci].menu)   { l.menu_cy   = 300; l.menu_h   = 160; }
+
+            int expected;
+            if (cases[ci].dpad) {
+                int dcy = l.dpad_cy * H / 1000, dr = l.dpad_r * W / 1000;
+                int arm = dr / 3;
+                int v = dcy - dr - 1, h = dcy - arm / 2 - 1;
+                expected = v < h ? v : h;
+            } else if (cases[ci].a) {
+                expected = l.a_cy * H / 1000 - l.a_r * W / 1000;
+            } else if (cases[ci].b) {
+                expected = l.b_cy * H / 1000 - l.b_r * W / 1000;
+            } else if (cases[ci].start) {
+                expected = l.start_cy * H / 1000 - (l.start_h * H / 1000) / 2;
+            } else if (cases[ci].select) {
+                expected = l.select_cy * H / 1000 - (l.select_h * H / 1000) / 2;
+            } else {
+                expected = l.menu_cy * H / 1000 - (l.menu_h * H / 1000) / 2;
+            }
+
+            int got = chrome_controls_top(&l, W, H);
+            if (got != expected)
+                fprintf(stderr, "  isolated %s: chrome_controls_top=%d, expected %d\n",
+                        cases[ci].name, got, expected);
+            CHECK_EQ_INT(got, expected);
+        }
+
+        /* The d-pad's HORIZONTAL arm term cannot be isolated the same way,
+           and this is a proven mathematical property of the current code,
+           not a gap in this test: arm = dr / 3 inside chrome_controls_top,
+           and dcy - dr - 1 <= dcy - arm / 2 - 1 for every dr >= 0 (equal
+           only at the degenerate dr = 0, otherwise strictly less), because
+           the vertical bar of a plus-shaped d-pad is always taller than the
+           horizontal bar is thick. So the horizontal-arm term can never be
+           chrome_controls_top's binding minimum under any layout, and
+           deleting it changes the function's return value for NO input --
+           verified exhaustively for dr in [0, 2000). No test that only
+           observes chrome_controls_top's aggregate output -- this one
+           included -- can distinguish "the term is present" from "the term
+           is absent" for that reason alone; the two are behaviourally
+           identical. It stays in the chain because it is what the actual
+           frame() call for the horizontal arm draws (see the function's own
+           doc comment), matching drawing to formula the same way the other
+           six terms do, and because a future change to how `arm` relates to
+           `dr` could make it stop being dominated -- at which point this
+           very comment is what should be revisited. */
+    }
+
+    /* The faceplate must be LABELLED. Before this task A, B, Start and Select
+       were four indistinguishable grey shapes. Labels are the difference
+       between a faceplate and a set of blobs, and text.c exists so they are
+       possible at all. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        const int W = 1264, H = 1680;
+        static uint8_t fb2[1264 * 1680];
+        config_resolve_profile(&p, &c, W, H);
+        memset(fb2, 0x7F, (size_t)W * H);
+        chrome_render(fb2, W, &p, &c.layout);
+
+        /* The chrome is drawn with KOBOY_REFRESH_FULL, i.e. GC16 and sixteen
+           levels. The four-level ceiling constrains the GAME RECT only, and
+           before this task the faceplate used three values out of sixteen. A
+           tonal ramp costs nothing at runtime. */
+        int distinct = 0;
+        int seen[256] = {0};
+        for (size_t i = 0; i < (size_t)W * H; i++)
+            if (!seen[fb2[i]]) { seen[fb2[i]] = 1; distinct++; }
+        CHECK(distinct >= 5);
+
+        /* Still never inside the game rect -- the contract that predates this
+           redraw and survives it. */
+        int intruded = 0;
+        for (int y = p.game_y; y < p.game_y + p.game_h; y++)
+            for (int x = p.game_x; x < p.game_x + p.game_w; x++)
+                if (fb2[y * W + x] != 0x7F) intruded++;
+        CHECK_EQ_INT(intruded, 0);
+
+        CHECK(pgm_compare_golden("chrome_1264x1680", fb2, W, H, W) == 1);
+    }
+
+    /* The battery lamp renders from a percentage, and an unknown battery (-1)
+       is a valid input rather than a crash: the SDL backend has no battery and
+       an unseen Kobo may not expose one either. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        const int W = 1264, H = 1680;
+        static uint8_t a[1264 * 1680], b[1264 * 1680];
+        config_resolve_profile(&p, &c, W, H);
+
+        memset(a, 0xFF, (size_t)W * H);
+        chrome_render(a, W, &p, &c.layout);
+        chrome_render_battery(a, W, &p, &c.layout, 100);
+
+        memset(b, 0xFF, (size_t)W * H);
+        chrome_render(b, W, &p, &c.layout);
+        chrome_render_battery(b, W, &p, &c.layout, 5);
+
+        /* Different levels must look different, or the indicator is a lie. */
+        CHECK(memcmp(a, b, (size_t)W * H) != 0);
+
+        /* Unknown must not write inside the game rect either. */
+        memset(a, 0x7F, (size_t)W * H);
+        chrome_render(a, W, &p, &c.layout);
+        chrome_render_battery(a, W, &p, &c.layout, -1);
+        int intruded = 0;
+        for (int y = p.game_y; y < p.game_y + p.game_h; y++)
+            for (int x = p.game_x; x < p.game_x + p.game_w; x++)
+                if (a[y * W + x] != 0x7F) intruded++;
+        CHECK_EQ_INT(intruded, 0);
+
+        /* THE FILL IS A CHORD OF THE LAMP, not a band across its bounding
+           box. Reported from the device as "the battery fill is a rectangle":
+           the fill ran hline from cx - r to cx + r, so the level was painted
+           the full width of the disc's bounding box and spilled outside the
+           circle; the ring() drawn afterwards just outlined a circle over the
+           overspill.
+
+           Neither existing assertion could catch that. "100% and 5% render
+           differently" is true of a rectangle too, and so is "unknown does not
+           intrude". So: diff each level against the 0% render -- which cancels
+           the disc, the ring and the label, leaving only the fill -- and
+           require every differing pixel to lie within radius r of the lamp
+           centre. */
+        {
+            int cx = p.game_x / 2;
+            int cy = p.game_y + p.game_h / 2;
+            int r  = W / 60; if (r < 4) r = 4;
+
+            memset(a, 0xFF, (size_t)W * H);
+            chrome_render_battery(a, W, &p, &c.layout, 0);
+
+            static const int levels[] = { 5, 25, 50, 75, 100 };
+            int outside = 0, inside = 0;
+            for (size_t li = 0; li < sizeof levels / sizeof levels[0]; li++) {
+                memset(b, 0xFF, (size_t)W * H);
+                chrome_render_battery(b, W, &p, &c.layout, levels[li]);
+                for (int y = 0; y < H; y++)
+                    for (int x = 0; x < W; x++) {
+                        if (a[(size_t)y * W + x] == b[(size_t)y * W + x]) continue;
+                        long dx = x - cx, dy = y - cy;
+                        if (dx * dx + dy * dy > (long)r * r) outside++;
+                        else inside++;
+                    }
+            }
+            if (outside)
+                fprintf(stderr, "  battery fill outside the lamp: %d px\n", outside);
+            CHECK_EQ_INT(outside, 0);
+            /* Positive control: the diff is not empty, so "no pixel outside"
+               is not passing because nothing was drawn at all. */
+            CHECK(inside > 0);
+        }
+    }
+
+    /* The battery lamp's game-rect guard, swept against the REAL resolver over
+       a wide range of panel widths rather than only the four supported ones.
+
+       chrome_render_battery guarded the DISC (r = W/60, five pixels on a small
+       panel) and not the ~42 px "BATTERY" label beneath it. All four supported
+       panels happen to be clear -- the Clara family by 48 px of margin -- so a
+       sweep restricted to them proves nothing about the guard; it proves the
+       four panels are lucky. Sweeping the resolver finds thousands of
+       width/scale combinations where the label ran into the game rect.
+
+       Only the game-rect columns are examined, and the lamp is drawn into a
+       freshly filled buffer, so this measures the battery element alone. */
+    {
+        int intruding_combos = 0, checked = 0;
+        static const int sweep_scales[] = { 0, 1, 2, 3, 4, 5 };
+        enum { SWEEP_MAX_W = 1440, SWEEP_MAX_H = SWEEP_MAX_W * 4 / 3 };
+        /* One buffer for the whole sweep, sized for the largest panel below.
+           Allocated once rather than per width so the sweep contributes one
+           check to the suite's count instead of three hundred. */
+        uint8_t *sfb = malloc((size_t)SWEEP_MAX_W * SWEEP_MAX_H);
+        CHECK(sfb != NULL);
+        for (int W = 176; sfb && W <= SWEEP_MAX_W; W += 4) {
+            int H = W * 4 / 3;
+            for (size_t si = 0; si < sizeof sweep_scales / sizeof sweep_scales[0]; si++) {
+                koboy_config cc; config_defaults(&cc);
+                cc.scale = sweep_scales[si];
+                koboy_profile q;
+                if (!config_resolve_profile(&q, &cc, W, H)) continue;
+                checked++;
+
+                int bad = 0;
+                /* Every shape the lamp can take: unknown (label only), empty,
+                   and full. */
+                static const int pcts[] = { -1, 0, 100 };
+                for (size_t pi = 0; pi < sizeof pcts / sizeof pcts[0]; pi++) {
+                    memset(sfb, 0x7F, (size_t)W * H);
+                    chrome_render_battery(sfb, W, &q, &cc.layout, pcts[pi]);
+                    for (int y = q.game_y; y < q.game_y + q.game_h; y++)
+                        for (int x = q.game_x; x < q.game_x + q.game_w; x++)
+                            if (sfb[(size_t)y * W + x] != 0x7F) bad++;
+                }
+                if (bad) {
+                    if (intruding_combos < 5)
+                        fprintf(stderr, "  battery inside game rect: %dx%d scale=%d"
+                                " -> resolved %d, game_x=%d, %d px\n",
+                                W, H, sweep_scales[si], q.scale, q.game_x, bad);
+                    intruding_combos++;
+                }
+            }
+        }
+        free(sfb);
+        /* The sweep must actually have swept: a resolver change that made
+           every combination unresolvable would otherwise leave this vacuous. */
+        CHECK(checked > 1000);
+        CHECK_EQ_INT(intruding_combos, 0);
+    }
+
+    /* Case tone, task 15's user-chosen ordering -- CORRECTED in round 2
+       against the reference photo. Round 1 shipped the controls LIGHTER
+       than the case (near-white d-pad/A/B/pills on a grey case), which
+       read as holes punched in the case rather than raised controls; the
+       photo's actual ordering, darkest to lightest, is d-pad, bezel,
+       A/B, Start/Select/MENU, case. "Clearly" is pinned at more than one
+       GC16 waveform step (~17 levels of 256) apart, so relationships
+       survive being quantised down to the panel's real 16-level driver,
+       not just on this exact 8-bit render; the pill-vs-case gap is
+       deliberately NOT held to that bar -- the photo's pills sit much
+       closer to the case tone than the buttons do ("a little darker",
+       not "clearly darker").
+       Sampled from coordinates guaranteed to land on exactly one tone
+       regardless of layout: (2,2) is above and left of the bezel on every
+       supported panel; the A disc's own centre is always BUTTON; the
+       Start pill's own centre is always PILL; game_x - 3 at the rect's
+       own vertical middle sits inside the LEFT bezel band, solid DARK for
+       every side_t >= 3 (side_t floors at 5); and the d-pad's vertical
+       arm at dr/2 above centre is always DPAD fill -- above the hub disc
+       (radius arm/2 = dr/6) and below where the tip ridges start
+       (>= ~3*dr/4), for every dr > 0.
+       Swept over all four supported panels, matching the sibling
+       chrome_controls_top guard just above: the tones themselves are
+       panel-size-independent constants (BG/DARK/DPAD/BUTTON/PILL never vary
+       with W or H), so this was never a live coverage gap the way the
+       margin/invariant tests were -- but sampling only 1264x1680 left it the
+       one tonal check in this file that was not symmetric with the rest,
+       and a future change that made a tone panel-size-dependent by accident
+       would only be caught here if the sweep were already in place. */
+    {
+        static const int panels[][2] = {
+            { 1072, 1448 }, { 1264, 1680 }, { 1404, 1872 }, { 1440, 1920 },
+        };
+        koboy_config c; config_defaults(&c);
+
+        for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
+            int W = panels[pi][0], H = panels[pi][1];
+            koboy_profile p;
+            CHECK(config_resolve_profile(&p, &c, W, H));
+            memset(fb, 0x7F, (size_t)W * H);
+            chrome_render(fb, W, &p, &c.layout);
+
+            int case_v  = fb[2 * W + 2];
+            int a_cx = c.layout.a_cx * W / 1000, a_cy = c.layout.a_cy * H / 1000;
+            int button_v = fb[(size_t)a_cy * W + a_cx];
+            int bezel_x = p.game_x - 3, bezel_y = p.game_y + p.game_h / 2;
+            int bezel_v = fb[(size_t)bezel_y * W + bezel_x];
+            int scx = c.layout.start_cx * W / 1000, scy = c.layout.start_cy * H / 1000;
+            int pill_v = fb[(size_t)scy * W + scx];
+            int dcx = c.layout.dpad_cx * W / 1000, dcy = c.layout.dpad_cy * H / 1000;
+            int dr = c.layout.dpad_r * W / 1000;
+            int dpad_v = fb[(size_t)(dcy - dr / 2) * W + dcx];
+
+            if (case_v - bezel_v <= 17 || bezel_v - dpad_v <= 17 ||
+                case_v - button_v <= 17 || pill_v <= button_v || case_v <= pill_v ||
+                dpad_v >= 64)
+                fprintf(stderr, "  case tone: %dx%d -> dpad=%d bezel=%d button=%d pill=%d case=%d\n",
+                        W, H, dpad_v, bezel_v, button_v, pill_v, case_v);
+            CHECK(case_v - bezel_v > 17);   /* bezel clearly darker than the case        */
+            CHECK(bezel_v - dpad_v > 17);   /* d-pad clearly darker than the bezel too   */
+            CHECK(dpad_v < 64);             /* d-pad reads as near-black                 */
+            CHECK(case_v - button_v > 17);  /* A/B clearly darker than the case          */
+            CHECK(case_v > pill_v);         /* Start/Select/MENU a LITTLE darker...      */
+            CHECK(pill_v > button_v);       /* ...but nowhere near as dark as A/B        */
+        }
+    }
+
+    /* NO NINTENDO MARKS. This is a public GPLv3 repo; the faceplate is an
+       homage to the industrial design and carries none of the word marks.
+       Asserted on the source rather than the pixels, because that is where a
+       future edit would add one. */
+    {
+        FILE *f = fopen("src/chrome.c", "rb");
+        CHECK(f != NULL);
+        static char src[200000];
+        size_t n = f ? fread(src, 1, sizeof src - 1, f) : 0;
+        if (f) fclose(f);
+        src[n] = 0;
+        for (size_t i = 0; i < n; i++)
+            if (src[i] >= 'a' && src[i] <= 'z') src[i] = (char)(src[i] - 32);
+        CHECK(strstr(src, "NINTENDO") == NULL);
+        CHECK(strstr(src, "GAME BOY") == NULL);
+        CHECK(strstr(src, "GAMEBOY") == NULL);
+    }
+
+    /* STRAPLINE WORDING. A deliberate honesty ruling: this build is silent
+       end to end, and the historic DMG strap's "DOT MATRIX WITH STEREO
+       SOUND" claim would be a false statement about the product if printed
+       on the faceplate (see STRAPLINE's own comment in chrome.c). Before
+       this check the wording was protected only indirectly, by the golden
+       pixel-diff -- a real gate, but not a direct one, and not one that
+       names what it is protecting against.
+       This cannot reuse the trademark check's shape exactly (scan the
+       WHOLE file, upper-cased, for the forbidden phrase): chrome.c's own
+       comment quotes "STEREO SOUND" by name to explain why it was rejected,
+       so a whole-file scan for that phrase would fail on the explanation
+       forever, not on a real regression -- unlike NINTENDO/GAME BOY/GAMEBOY,
+       which have no legitimate reason to appear anywhere in this file.
+       So this reads the STRAPLINE string literal itself, not the whole
+       file, and checks only what the faceplate actually prints: it must not
+       read the historic stereo-sound claim, and it must read the wording
+       this build ships. Case-sensitive and unmodified (no upper-casing),
+       since STRAPLINE is already all caps in source and an accidental
+       lower-case edit should also be caught. */
+    {
+        FILE *f = fopen("src/chrome.c", "rb");
+        CHECK(f != NULL);
+        static char src[200000];
+        size_t n = f ? fread(src, 1, sizeof src - 1, f) : 0;
+        if (f) fclose(f);
+        src[n] = 0;
+
+        const char *needle = "STRAPLINE[] = \"";
+        const char *start = strstr(src, needle);
+        CHECK(start != NULL);
+        if (start) {
+            start += strlen(needle);
+            const char *end = strchr(start, '"');
+            CHECK(end != NULL);
+            if (end && (size_t)(end - start) < 128) {
+                char strap[128];
+                size_t len = (size_t)(end - start);
+                memcpy(strap, start, len);
+                strap[len] = 0;
+                CHECK(strstr(strap, "STEREO SOUND") == NULL);
+                CHECK(strcmp(strap, "DOT MATRIX ON ELECTRONIC PAPER") == 0);
+            }
+        }
+    }
 })

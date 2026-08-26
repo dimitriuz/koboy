@@ -68,6 +68,12 @@ void config_defaults(koboy_config *c)
        flash on large scene changes, which is worth having only if the driver's
        own choice leaves residue you can see. */
     c->full_refresh_permille = 1000;
+    /* UNVALIDATED ON HARDWARE: this default is a starting guess, not a
+       measurement -- unlike full_refresh_permille above, no device run has
+       tuned it yet (that is Task 13's deferred Step 10). Pick it from a
+       koboy.log `stages` line and `rects` count at 20/40/80 the first time a
+       device is available, and record the result in TESTED.md. */
+    c->refresh_fixed_tiles = 40;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->grab_input = true;
     /* CROSS, because the faceplate chrome draws an absolute four-way cross and
@@ -81,13 +87,39 @@ void config_defaults(koboy_config *c)
     c->dpad_hysteresis = 10;
     snprintf(c->core_path, sizeof c->core_path, "gambatte_libretro.so");
     snprintf(c->save_dir, sizeof c->save_dir, ".");
+    snprintf(c->rom_dir, sizeof c->rom_dir, "roms");
     /* Control geometry, permille of panel. Game rect occupies the top; the
        d-pad sits lower-left under the left thumb, A/B lower-right. */
     koboy_layout l = { .dpad_cx = 220, .dpad_cy = 720, .dpad_r = 150,
                        .a_cx = 830, .a_cy = 670, .a_r = 85,
                        .b_cx = 660, .b_cy = 760, .b_r = 85,
                        .start_cx = 610, .start_cy = 920, .start_w = 200, .start_h = 55,
-                       .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55 };
+                       .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55,
+                       /* MENU sits on the Start/Select row, not in the open band
+                          below the game rect -- that band LOOKS free but is not:
+                          chrome_controls_top is bound by whichever control sits
+                          highest, and a zone placed at 540 permille (mid-panel)
+                          measured lower than Start/Select's 920 on every panel
+                          shorter than the Libra 2, dragging the auto-fit scale
+                          down with it. Measured: on the 1072x1448 Clara panel,
+                          chrome_controls_top went from 879 to 742 with the zone
+                          there, which knocked the shipped scale from 5 (800x720)
+                          down to 4 (640x576) -- a 36% area loss, and not only at
+                          scale = 0, because config_resolve_profile's fitting loop
+                          demotes an explicit configured scale too. The design spec's
+                          promise that 5x fits every supported panel depends on
+                          nothing lowering chrome_controls_top below the scale-5
+                          rect, so this is not a cosmetic choice.
+                          The Start/Select row is already reserved by two other
+                          controls, so a third one costs nothing there. Verified
+                          clear of both at scale 5 on every panel, no overlap
+                          with Start and clear of the B disc, right margin well
+                          past KOBOY_CHROME_MARGIN:
+                            Clara  1072x1448  x[804..1018] y[1293..1371]  gap-to-Start 44px  clear-of-B 102px  right-margin 54px
+                            Libra2 1264x1680  x[948..1200] y[1499..1591]  gap 51  clear 116  right-margin 64
+                            Elipsa 1404x1872  x[1053..1333] y[1671..1773] gap 57  clear 130  right-margin 71
+                            Sage   1440x1920  x[1080..1368] y[1714..1818] gap 58  clear 133  right-margin 72 */
+                       .menu_cx = 850, .menu_cy = 920, .menu_w = 200, .menu_h = 55 };
     c->layout = l;
 }
 
@@ -190,6 +222,8 @@ void config_resolve_paths(koboy_config *c)
         snprintf(c->rom_path, sizeof c->rom_path, "%s", tmp);
     if (config_join_sibling(tmp, sizeof tmp, c->save_dir, dir))
         snprintf(c->save_dir, sizeof c->save_dir, "%s", tmp);
+    if (config_join_sibling(tmp, sizeof tmp, c->rom_dir, dir))
+        snprintf(c->rom_dir, sizeof c->rom_dir, "%s", tmp);
 }
 
 static void trim(char *s)
@@ -200,7 +234,15 @@ static void trim(char *s)
     while (n && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\r' || s[n-1] == '\n')) s[--n] = 0;
 }
 
-static bool as_bool(const char *v) { return !(strcmp(v,"false")==0 || strcmp(v,"0")==0); }
+/* An EMPTY value leaves the default alone rather than meaning true. This
+   treated everything except "false" and "0" as true, including "", so a
+   blanked `grab_input = ` silently turned the grab on -- the opposite of what
+   clearing a line means, and invisible without reading this function. `trim`
+   has already run, so "" covers whitespace-only values too. */
+static bool as_bool(const char *v, bool dflt) {
+    if (!v || !v[0]) return dflt;
+    return !(strcmp(v,"false")==0 || strcmp(v,"0")==0);
+}
 
 /* The promotion test, extracted from the main loop so it can be tested.
    >= and not >, deliberately: a frame in which the entire game rect changed is
@@ -230,19 +272,38 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "present_divisor"))  c->present_divisor = atoi(v);
         else if (!strcmp(k, "cleanup_interval")) c->cleanup_interval = atoi(v);
         else if (!strcmp(k, "cleanup_max_ms"))   c->cleanup_max_ms = atoi(v);
-        else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v);
-        else if (!strcmp(k, "grab_input"))       c->grab_input = as_bool(v);
+        else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v, c->force_dither);
+        else if (!strcmp(k, "grab_input"))       c->grab_input   = as_bool(v, c->grab_input);
         else if (!strcmp(k, "dpad_deadzone"))    c->dpad_deadzone = atoi(v);
         else if (!strcmp(k, "dpad_hysteresis"))  c->dpad_hysteresis = atoi(v);
         else if (!strcmp(k, "dpad_mode"))        c->dpad_mode = strcmp(v,"cross") ? KOBOY_DPAD_RELATIVE : KOBOY_DPAD_CROSS;
         else if (!strcmp(k, "key_a"))            c->key_a = (uint16_t)atoi(v);
         else if (!strcmp(k, "key_b"))            c->key_b = (uint16_t)atoi(v);
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
+        else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
+        else if (!strcmp(k, "refresh_fixed_tiles")) {
+            /* Clamped to >= 0, not merely accepted. video_split_dirty's cost
+               sum adds fixed_tiles once per candidate rect (src/video.c), so
+               a negative value makes the split branch cheaper the MORE rects
+               it emits -- the opposite of a fixed cost, and unbounded as the
+               candidate count approaches KOBOY_MAX_RECTS. cleanup_interval and
+               full_refresh_permille guard <= 0 above for the same reason (a
+               bad config value must not invert the behaviour it controls);
+               this one clamps instead of treating <= 0 as "off" because 0 is
+               itself a real, meaningful value here (no fixed cost at all),
+               not a sentinel. */
+            int t = atoi(v);
+            c->refresh_fixed_tiles = t < 0 ? 0 : t;
+        }
         else if (!strcmp(k, "waveform_fast"))
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
         else if (!strcmp(k, "core"))             snprintf(c->core_path, sizeof c->core_path, "%s", v);
         else if (!strcmp(k, "save_dir"))         snprintf(c->save_dir,  sizeof c->save_dir,  "%s", v);
+        else if (!strcmp(k, "menu_cx"))          c->layout.menu_cx = atoi(v);
+        else if (!strcmp(k, "menu_cy"))          c->layout.menu_cy = atoi(v);
+        else if (!strcmp(k, "menu_w"))           c->layout.menu_w  = atoi(v);
+        else if (!strcmp(k, "menu_h"))           c->layout.menu_h  = atoi(v);
         /* unknown keys ignored on purpose: forward compatibility */
     }
     fclose(f);
@@ -326,6 +387,7 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 
     /* Read existing file if it exists, filtering out key_a/key_b lines */
     FILE *in = fopen(path, "r");
+    int last_char_written = 0;
     if (in) {
         char line[1024];
         while (fgets(line, sizeof line, in)) {
@@ -350,9 +412,18 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 
             /* Preserve this line (comments, blanks, other keys) */
             fputs(line, out);
+            size_t llen = strlen(line);
+            if (llen) last_char_written = line[llen - 1];
         }
         fclose(in);
     }
+
+    /* A source ini with no trailing newline would otherwise have the
+       calibration block concatenated onto its final line. Harmless today only
+       because config_load truncates at the resulting '#', but it silently
+       rewrites an unrelated line -- against the "preserve everything else"
+       intent this function exists to honour. */
+    if (last_char_written && last_char_written != '\n') fputc('\n', out);
 
     /* Write the new calibration */
     fprintf(out, "# written by first-run calibration\nkey_a = %u\nkey_b = %u\n",

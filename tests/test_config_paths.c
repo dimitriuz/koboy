@@ -70,14 +70,24 @@ TEST_MAIN({
     CHECK(config_join_sibling(self, sizeof self, "test_config_paths", dir));
     CHECK(access(self, X_OK) == 0);
 
-    /* --- config_resolve_paths: the three fields, end to end --- */
+    /* --- config_resolve_paths: the four fields, end to end --- */
 
     koboy_config c;
     config_defaults(&c);
     /* The shipped defaults are exactly the broken shapes: a slashless core
-       name and a save_dir of ".". */
+       name, a save_dir of ".", and a slashless rom_dir. rom_dir was added
+       after this function was already written and, the first time around,
+       skipped this file entirely: a reviewer mutant deleted both its
+       config_join_sibling call in config_resolve_paths (config.c:194-195) and
+       its ini dispatch line (config.c:243), and the suite -- including
+       smoke_host.sh, which only ever passes an absolute --rom-dir -- stayed
+       green. The failure that hides is device-only and silent: a NickelMenu
+       launch sets no cwd, so a shipped "rom_dir = roms" resolves against "/"
+       and the browser reports "cannot read rom directory" on a device where
+       that directory exists right next to the binary. */
     CHECK(strchr(c.core_path, '/') == NULL);
     CHECK(!strcmp(c.save_dir, "."));
+    CHECK(strchr(c.rom_dir, '/') == NULL);
     snprintf(c.rom_path, sizeof c.rom_path, "tetris.gb");
 
     config_resolve_paths(&c);
@@ -86,18 +96,36 @@ TEST_MAIN({
     CHECK(!strcmp(c.save_dir, dir));
     CHECK(strcmp(c.rom_path, "tetris.gb") != 0);
     CHECK(strchr(c.rom_path, '/') != NULL);
+    CHECK(strchr(c.rom_dir, '/') != NULL);
+    CHECK(strcmp(c.rom_dir, "roms") != 0);
 
     /* Idempotent: a second pass must not stack another directory on the
        front, because the paths now contain slashes. */
-    char once[512];
+    char once[512], once_rom[512];
     snprintf(once, sizeof once, "%s", c.core_path);
+    snprintf(once_rom, sizeof once_rom, "%s", c.rom_dir);
     config_resolve_paths(&c);
     CHECK(!strcmp(c.core_path, once));
+    CHECK(!strcmp(c.rom_dir, once_rom));
 
     /* An explicit path survives resolution untouched, so --core /tmp/x.so
-       still means /tmp/x.so. */
+       still means /tmp/x.so, and --rom-dir /tmp/roms still means /tmp/roms. */
     config_defaults(&c);
     snprintf(c.core_path, sizeof c.core_path, "/tmp/explicit.so");
+    snprintf(c.rom_dir, sizeof c.rom_dir, "/tmp/explicit_roms");
     config_resolve_paths(&c);
     CHECK(!strcmp(c.core_path, "/tmp/explicit.so"));
+    CHECK(!strcmp(c.rom_dir, "/tmp/explicit_roms"));
+
+    /* The ini dispatch line is the other half of the mutant that was deleted:
+       config_load must actually populate rom_dir from a "rom_dir = " line.
+       Checked before any resolution runs, so this cannot pass merely because
+       the untouched default happens to look plausible. */
+    FILE *rf = fopen("build/rom_dir.ini", "w");
+    CHECK(rf);
+    fprintf(rf, "rom_dir = mygames\n");
+    fclose(rf);
+    config_defaults(&c);
+    CHECK(config_load(&c, "build/rom_dir.ini"));
+    CHECK(!strcmp(c.rom_dir, "mygames"));
 });

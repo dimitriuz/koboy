@@ -1,0 +1,333 @@
+#include "test.h"
+#include "chrome.h"
+#include "config.h"
+#include "input.h"
+#include "ui.h"
+#include <string.h>
+
+/* Press one finger at a panel coordinate through the REAL evdev decode path,
+   the same way tests/test_chrome.c's zone sweep does. Nothing here builds a
+   koboy_input_state by hand: a synthetic state is precisely what made the
+   faceplate-versus-list bug invisible, because it skips input.c entirely and
+   input.c is where the touch-to-joypad synthesis lives. */
+static void feed_down(koboy_input *in, int x, int y)
+{
+    koboy_ev down[5] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, down, 5);
+}
+
+static void feed_up(koboy_input *in)
+{
+    koboy_ev up[2] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, up, 2);
+}
+
+static koboy_input_state touch_at(int x, int y)
+{
+    koboy_input_state st;
+    memset(&st, 0, sizeof st);
+    st.touch[0].x = x; st.touch[0].y = y; st.touch[0].down = true;
+    return st;
+}
+
+static koboy_input_state released(void)
+{
+    koboy_input_state st;
+    memset(&st, 0, sizeof st);
+    return st;
+}
+
+static koboy_input_state button(uint16_t bits)
+{
+    koboy_input_state st;
+    memset(&st, 0, sizeof st);
+    st.buttons = bits;
+    return st;
+}
+
+/* Row centre in panel coordinates for row `r` of the current page. */
+static int row_y(const koboy_ui_list *u, int r)
+{
+    return u->y + u->row_h + u->row_h * r + u->row_h / 2;
+}
+
+TEST_MAIN({
+    static const char *const items[] = {
+        "ZELDA.GB", "TETRIS.GB", "KIRBY 2.GBC", "DUCK.GB", "POKEMON.GBC",
+        "SIX.GB", "SEVEN.GB", "EIGHT.GB", "NINE.GB", "TEN.GB",
+        "ELEVEN.GB", "TWELVE.GB", "THIRTEEN.GB",
+    };
+    const int N = (int)(sizeof items / sizeof items[0]);
+
+    koboy_ui_list u;
+    ui_list_init(&u, "CHOOSE A GAME", items, N, 100, 200, 800, 900);
+
+    CHECK(ui_list_rows(&u) > 0);
+    CHECK(ui_list_pages(&u) >= 1);
+
+    int idx = -1;
+
+    /* A freshly created list requires a release before it accepts its first
+       tap -- see ui_list_init's prev_touch=true comment. A touch that is
+       already down on the very first poll must not select: that is exactly
+       the bug this guard exists to close (a still-down finger carrying a
+       selection through from the PREVIOUS screen into this new one). */
+    koboy_input_state down = touch_at(u.x + u.w / 2, row_y(&u, 0));
+    CHECK_EQ_INT(ui_list_feed(&u, &down, &idx), UI_NONE);
+    koboy_input_state up0 = released();
+    CHECK_EQ_INT(ui_list_feed(&u, &up0, &idx), UI_NONE);
+
+    /* NOW a touch that is merely HELD produces one action, not one per poll.
+       Level-triggered would select an item sixty times a second. */
+    CHECK_EQ_INT(ui_list_feed(&u, &down, &idx), UI_SELECT);
+    CHECK_EQ_INT(idx, 0);
+    CHECK_EQ_INT(ui_list_feed(&u, &down, &idx), UI_NONE);
+    CHECK_EQ_INT(ui_list_feed(&u, &down, &idx), UI_NONE);
+
+    /* Release, then a second tap on row 2 selects index 2. */
+    koboy_input_state up = released();
+    CHECK_EQ_INT(ui_list_feed(&u, &up, &idx), UI_NONE);
+    koboy_input_state down2 = touch_at(u.x + u.w / 2, row_y(&u, 2));
+    CHECK_EQ_INT(ui_list_feed(&u, &down2, &idx), UI_SELECT);
+    CHECK_EQ_INT(idx, 2);
+    CHECK_EQ_INT(ui_list_feed(&u, &up, &idx), UI_NONE);
+
+    /* Paging with the page-turn buttons, also edge-triggered.
+
+       UNCONDITIONAL, and that matters more than it looks. Every assertion
+       below used to sit inside `if (ui_list_pages(&u) > 1)` -- gated on the
+       very function under test. Mutating ui_list_pages() to `return 1` left
+       the whole 820-check suite green, including the CHECK_EQ_INT(idx, rows)
+       below that exists to catch "loads the wrong ROM". So the geometry this
+       list is built with is asserted OUTRIGHT first: 13 items at 10 rows a
+       page is two pages, and if that ever stops being true the two lines
+       below fail loudly instead of silently skipping the rest. */
+    CHECK_EQ_INT(ui_list_rows(&u), 10);
+    CHECK_EQ_INT(ui_list_pages(&u), 2);
+    {
+        koboy_input_state b = button(KOBOY_BTN_B);
+        CHECK_EQ_INT(ui_list_feed(&u, &b, &idx), UI_PAGE_NEXT);
+        CHECK_EQ_INT(u.page, 1);
+        CHECK_EQ_INT(ui_list_feed(&u, &b, &idx), UI_NONE);   /* held, not repeated */
+        koboy_input_state none = released();
+        CHECK_EQ_INT(ui_list_feed(&u, &none, &idx), UI_NONE);
+
+        /* A selection on page 1 must index into the SECOND page, not the
+           first. Getting this wrong loads the wrong ROM, which is the whole
+           point of the widget. */
+        int rows = ui_list_rows(&u);
+        koboy_input_state d = touch_at(u.x + u.w / 2, row_y(&u, 0));
+        CHECK_EQ_INT(ui_list_feed(&u, &d, &idx), UI_SELECT);
+        CHECK_EQ_INT(idx, rows);
+        CHECK_EQ_INT(ui_list_feed(&u, &up, &idx), UI_NONE);
+
+        koboy_input_state a = button(KOBOY_BTN_A);
+        CHECK_EQ_INT(ui_list_feed(&u, &a, &idx), UI_PAGE_PREV);
+        CHECK_EQ_INT(u.page, 0);
+    }
+
+    /* Paging never runs off either end. */
+    koboy_ui_list s;
+    static const char *const one[] = { "ONLY.GB" };
+    ui_list_init(&s, "ONE", one, 1, 0, 0, 400, 400);
+    koboy_input_state nb = released(), bb = button(KOBOY_BTN_B);
+    CHECK_EQ_INT(ui_list_feed(&s, &bb, &idx), UI_NONE);
+    CHECK_EQ_INT(s.page, 0);
+    CHECK_EQ_INT(ui_list_feed(&s, &nb, &idx), UI_NONE);
+    koboy_input_state ab = button(KOBOY_BTN_A);
+    CHECK_EQ_INT(ui_list_feed(&s, &ab, &idx), UI_NONE);
+    CHECK_EQ_INT(s.page, 0);
+
+    /* A tap on the last page must never select past the end of the list.
+       The last page is short, so the rows below the final item are dead. */
+    koboy_ui_list t;
+    ui_list_init(&t, "SHORT", items, N, 0, 0, 400, 400);
+    /* Clear the fresh-list guard unconditionally before the loop below, so
+       row 0 is exercised the same way regardless of whether this list has
+       one page or several (a bare touch_at() as the very first feed would
+       otherwise be swallowed by the guard on a single-page list, silently
+       skipping the row-0 case rather than failing). */
+    koboy_input_state prime = released();
+    ui_list_feed(&t, &prime, &idx);
+    while (t.page + 1 < ui_list_pages(&t)) {
+        koboy_input_state b = button(KOBOY_BTN_B), r = released();
+        ui_list_feed(&t, &b, &idx);
+        ui_list_feed(&t, &r, &idx);
+    }
+    int last_rows = ui_list_rows(&t);
+    for (int r = 0; r < last_rows; r++) {
+        koboy_input_state d = touch_at(t.x + t.w / 2, row_y(&t, r));
+        int got = -1;
+        ui_action a2 = ui_list_feed(&t, &d, &got);
+        koboy_input_state rel = released();
+        ui_list_feed(&t, &rel, &got);
+        if (a2 == UI_SELECT) CHECK(got >= 0 && got < N);
+    }
+
+    /* A touch outside the list region selects nothing. Primed with a
+       release first so this genuinely exercises the out-of-bounds check,
+       rather than trivially passing because the fresh-list guard alone would
+       already return UI_NONE for ANY position. */
+    koboy_ui_list o;
+    ui_list_init(&o, "OUT", items, N, 100, 200, 800, 900);
+    koboy_input_state prime_o = released();
+    ui_list_feed(&o, &prime_o, &idx);
+    koboy_input_state far = touch_at(10, 10);
+    CHECK_EQ_INT(ui_list_feed(&o, &far, &idx), UI_NONE);
+
+    /* Regression: a still-down finger must not carry a selection into the
+       NEXT screen. Reproduces the menu-chaining bug directly against ui.c,
+       the way the reviewer who found it did, rather than through main()'s
+       plumbing: build one list, select a row with a HELD touch, then build a
+       SECOND list sharing the same geometry and feed it that SAME still-down
+       state. Before ui_list_init's prev_touch=true fix, the second list had
+       no memory of the first and saw the touch as a fresh edge -- selecting
+       immediately. That is exactly how SAVE STATE silently overwrote slot 1
+       with no picker ever shown, and how CHOOSE ROM loaded the 4th ROM after
+       the current game had already been unloaded. */
+    koboy_ui_list first, second;
+    ui_list_init(&first, "MENU", items, N, 100, 200, 800, 900);
+    koboy_input_state rel_first = released();
+    ui_list_feed(&first, &rel_first, &idx);          /* clear its own guard */
+    koboy_input_state held = touch_at(first.x + first.w / 2, row_y(&first, 0));
+    CHECK_EQ_INT(ui_list_feed(&first, &held, &idx), UI_SELECT);
+    CHECK_EQ_INT(idx, 0);
+
+    ui_list_init(&second, "SLOT", items, N, 100, 200, 800, 900);
+    idx = -1;
+    CHECK_EQ_INT(ui_list_feed(&second, &held, &idx), UI_NONE);   /* still down */
+    koboy_input_state rel_second = released();
+    CHECK_EQ_INT(ui_list_feed(&second, &rel_second, &idx), UI_NONE);
+    CHECK_EQ_INT(ui_list_feed(&second, &held, &idx), UI_SELECT); /* fresh down selects */
+    CHECK_EQ_INT(idx, 0);
+
+    /* ------------------------------------------------------------------
+       REGRESSION, C1: the faceplate's A and B touch zones must not hijack a
+       UI list.
+
+       In every UI mode the drawn faceplate is still underneath the list, and
+       input.c's recompute() hit-tests the A and B discs against the layout
+       permille unconditionally -- it has no notion of a UI mode. ui_list_feed
+       tests a rising A/B FIRST and returns early, so those synthesised bits
+       were consumed as page-turns before any row hit-test ran. Measured at the
+       shipped defaults on 1264x1680: a tap at (1049,1125), which is row 7 of
+       the browser, produced buttons=0x0100 and UI_NONE; a tap at (834,1276),
+       row 8, produced 0x0001 and UI_PAGE_NEXT. Rows 6, 7 and 8 were unusable
+       over ~17% of the panel width each, on every panel, because the layout is
+       permille.
+
+       Driven through input_feed on purpose. tests/test_ui.c never touched
+       input.c before, which is exactly why this shipped: a test that builds
+       its own koboy_input_state reproduces the blind spot instead of closing
+       it. */
+    {
+        const int W = 1264, H = 1680;
+        koboy_config c; config_defaults(&c);
+        koboy_profile prof;
+        CHECK(config_resolve_profile(&prof, &c, W, H));
+
+        koboy_input *in = input_create(&c, &prof);
+        CHECK(in != NULL);
+        /* Identity transform: raw_max == panel - 1 makes scale_axis a no-op,
+           so the coordinates below are pixel-exact panel coordinates. */
+        input_set_touch_transform(in, W - 1, H - 1, false, false, false);
+
+        koboy_ui_list br;
+        ui_list_init(&br, "CHOOSE A GAME", items, N,
+                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                     W - 2 * KOBOY_CHROME_MARGIN, H - 2 * KOBOY_CHROME_MARGIN);
+
+        int acx = c.layout.a_cx * W / 1000, acy = c.layout.a_cy * H / 1000;
+        int bcx = c.layout.b_cx * W / 1000, bcy = c.layout.b_cy * H / 1000;
+
+        /* The rows those two discs sit on, computed from the widget's own
+           geometry rather than hardcoded. CHECKed, not `if`-ed: if a layout
+           change ever moved the discs off the list's rows this block would
+           quietly stop testing anything, which is the failure mode this whole
+           branch keeps finding. */
+        int a_row = (acy - br.y - br.row_h) / br.row_h;
+        int b_row = (bcy - br.y - br.row_h) / br.row_h;
+        int foot_top = br.y + br.h - br.row_h;
+        CHECK(acy >= br.y + br.row_h && acy < foot_top);
+        CHECK(bcy >= br.y + br.row_h && bcy < foot_top);
+        CHECK(a_row >= 0 && a_row < ui_list_rows(&br));
+        CHECK(b_row >= 0 && b_row < ui_list_rows(&br));
+        CHECK(a_row != b_row);
+
+        koboy_input_state ui;
+
+        /* Clear the fresh-list guard with a genuinely released poll. */
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        /* POSITIVE CONTROL. The raw game-facing state really does carry the A
+           bit for this coordinate -- so when the assertion below passes it is
+           because the UI projection dropped the bit, not because the hit-test
+           moved or the probe silently pressed nothing. */
+        feed_down(in, acx, acy);
+        CHECK((input_state(in)->buttons & KOBOY_BTN_A) != 0);
+
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, 0);
+        idx = -1;
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_SELECT);
+        CHECK_EQ_INT(idx, a_row);
+        CHECK_EQ_INT(br.page, 0);            /* it selected, it did not page */
+        feed_up(in);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        /* Same for B, whose disc paged the list forward instead. */
+        feed_down(in, bcx, bcy);
+        CHECK((input_state(in)->buttons & KOBOY_BTN_B) != 0);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, 0);
+        idx = -1;
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_SELECT);
+        CHECK_EQ_INT(idx, b_row);
+        CHECK_EQ_INT(br.page, 0);
+        feed_up(in);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        /* And the other half of the contract: REAL page-turn hardware must
+           still page. Dropping A/B inside ui.c would have "fixed" the taps by
+           breaking the buttons the list is named after. */
+        CHECK(c.key_a != 0 && c.key_b != 0);
+        input_feed_key(in, c.key_b, true);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, KOBOY_BTN_B);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_PAGE_NEXT);
+        CHECK_EQ_INT(br.page, 1);
+        input_feed_key(in, c.key_b, false);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_NONE);
+
+        input_feed_key(in, c.key_a, true);
+        input_ui_state(in, &ui);
+        CHECK_EQ_INT(ui.buttons, KOBOY_BTN_A);
+        CHECK_EQ_INT(ui_list_feed(&br, &ui, &idx), UI_PAGE_PREV);
+        CHECK_EQ_INT(br.page, 0);
+        input_feed_key(in, c.key_a, false);
+
+        input_destroy(in);
+    }
+
+    /* Rendering is clipped and draws something. */
+    enum { W = 1264, H = 1680 };
+    static uint8_t fb[W * H];
+    memset(fb, 0xFF, sizeof fb);
+    ui_list_render(&u, fb, W, W, H);
+    int painted = 0;
+    for (size_t i = 0; i < sizeof fb; i++) if (fb[i] != 0xFF) painted++;
+    CHECK(painted > 0);
+})

@@ -16,7 +16,53 @@ set -e
 SH="${1:-scripts/koboy.sh}"
 [ -f "$SH" ] || { echo "FAIL: no launcher at $SH"; exit 1; }
 
+# The packaging half needs the ARM cross toolchain (see docs/cross-compiling.md);
+# the launcher half needs nothing but a shell. They used to be one `set -e`
+# block, so on a host without the toolchain this script died inside `make dist`
+# at line 20 and exited 2 with no diagnostic, having run ZERO of the launcher
+# assertions -- while CLAUDE.md lists it among the host tests. A test that
+# silently checks nothing on the machine it is documented to run on is the same
+# failure this branch keeps finding, so the split is explicit and the skip is
+# LOUD.
+CROSS="${CROSS:-arm-linux-gnueabihf-}"
+SKIPPED=""
+if [ -z "$1" ] && ! command -v "${CROSS}gcc" >/dev/null 2>&1; then
+    SKIPPED="yes"
+    echo "SKIP: no ${CROSS}gcc on PATH -- packaging assertions (make dist, zip"
+    echo "SKIP: contents) NOT run. Launcher assertions below still run."
+    echo "SKIP: put the Linaro toolchain on PATH to check packaging too;"
+    echo "SKIP: see docs/cross-compiling.md."
+fi
+
+# Independent of the toolchain: verify-core.sh is a shell script and this check
+# stubs readelf outright, so it runs on any host. It used to sit AFTER the
+# packaging block and was therefore skipped along with it.
 if [ -z "$1" ]; then
+    # #10: the allowlist matched by substring, so a library named reallibc.so.6
+    # would have passed. Not attacker-facing -- it is a build-time script -- but
+    # anchors are free, and an allowlist that accepts a superstring is not an
+    # allowlist. The stub answers both invocations verify-core.sh actually makes
+    # (readelf -h for the architecture check, readelf -d for the NEEDED list) so
+    # the run reaches the dependency check itself instead of failing earlier on
+    # a fake ELF header.
+    fake="$(mktemp -d)"
+    cat > "$fake/readelf" <<'EOS'
+#!/bin/sh
+case "$*" in
+    *-h*) echo "  Machine:                           ARM" ;;
+    *-d*) echo " 0x00000001 (NEEDED)             Shared library: [reallibc.so.6]" ;;
+esac
+EOS
+    chmod +x "$fake/readelf"
+    if PATH="$fake:$PATH" sh scripts/verify-core.sh /bin/true >/dev/null 2>&1; then
+        echo "FAIL: verify-core.sh accepted reallibc.so.6"
+        rm -rf "$fake"; exit 1
+    fi
+    rm -rf "$fake"
+    echo "ok: verify-core.sh allowlist is anchored"
+fi
+
+if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     make dist
     Z=$(ls dist/koboy-*.zip | head -1)
     [ -n "$Z" ] || { echo "FAIL: no zip produced"; exit 1; }
@@ -32,9 +78,11 @@ if [ -z "$1" ]; then
     for f in .adds/koboy/koboy .adds/koboy/koboy-probe .adds/koboy/koboy.sh \
              .adds/koboy/koboy.ini .adds/koboy/gambatte_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
-             .adds/koboy/README.md .adds/koboy/TESTED.md; do
+             .adds/koboy/README.md .adds/koboy/TESTED.md \
+             .adds/koboy/roms/README.txt; do
         unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
     done
+    echo "ok: packaging"
 fi
 
 # ------------------------------------------------------- launcher assertions
@@ -99,4 +147,8 @@ printf '%s\n' "$GATE" | grep -q -- '--message' || {
     echo "FAIL: refusal does not report on the panel"; exit 1; }
 
 sh -n "$SH"
-echo "PASS test_dist"
+if [ -n "$SKIPPED" ]; then
+    echo "PASS test_dist (launcher only -- packaging SKIPPED, no ${CROSS}gcc)"
+else
+    echo "PASS test_dist"
+fi

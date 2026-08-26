@@ -24,9 +24,29 @@ Ordered by what would actually bite first.
    axis depends on an untested path. Irrelevant on the verified Libra 2,
    load-bearing on hardware nobody has tried.
 
-3. **The save path is unexercised on hardware.** Both titles tested (Tetris,
-   Darkwing Duck) report `rambanks: 0` — no battery SRAM. `sram_load` changed
-   materially in the final fix round, so this wants a battery-save game.
+3. ~~**The save path is unexercised on hardware.**~~ CLOSED, 2026-08-26 device
+   session. `Legend of Zelda, The - Link's Awakening (USA, Europe) (Rev 2).gb`
+   (cart type `0x03`, MBC1+RAM+BATTERY) is the first title this project has
+   run with `rambanks: 1` — both Tetris and Darkwing Duck report `rambanks:
+   0`. All three directions verified on the Libra 2, binary run directly
+   with `--frames` over ssh (Nickel not stopped — see the caveat on this in
+   `TESTED.md`, but `sram_save`/`sram_load` and the panel draw do not depend
+   on the input grab):
+   - **Write:** `sram_save` produced `saves/zelda.srm` at exactly 8192 bytes.
+   - **Read:** a marked save round-tripped intact — md5
+     `daa6696c5da463305bdec570cdad2a82` identical before and after a run,
+     `koboy: loaded .../zelda.srm` in the log.
+   - **The destructive path:** the `.srm` truncated to 100 bytes reproduced
+     the exact failure `src/main.c:650`'s comment describes — "could not be
+     read whole; SRAM left as the core initialised it and saving is disabled
+     this session" — drawn on the panel, and the file was **left at 100
+     bytes** rather than being overwritten with a fresh/short save. This is
+     the truncated-save-destroys-itself bug the comment records, now proven
+     fixed on real hardware rather than by inspection.
+   Save **states** (`state.c`/`safefile.c` — a different mechanism from
+   cartridge SRAM) are not covered by this and remain untested on hardware —
+   this session drove the ROM browser via `--ui-script` only (item 18 covers
+   `MODE_MENU`'s wider coverage gap, which save/load-state goes through).
 
 4. **`force_dither = true` never runs end-to-end.** `tests/test_video_pipeline.c:19`,
    `src/video.c:191-195`. The dither component is well tested directly; the
@@ -81,3 +101,121 @@ Ordered by what would actually bite first.
 16. **`video_scale_gray` has undocumented preconditions** (`scale >= 1`,
     `dst_stride >= src_w * scale`). `src/video.c:31-50`. Its only caller
     satisfies them by construction.
+
+## v2 follow-ups
+
+Found during the v2-core plan (ROM browser, in-game MENU, save states,
+multi-rect dirty regions, the redrawn faceplate). Same rule as above: real,
+deliberately deferred, not a known live bug.
+
+17. ~~**A `--ui-script` whose first verb is `tap` selects nothing.**~~ FIXED.
+    `src/ui.c:32` initialises a freshly built list's `prev_touch = true` so it
+    requires one release before it will accept a tap -- deliberate, to survive
+    a still-down finger chained across screens (see the comment there). A
+    script that opened with `tap X Y` therefore had its press swallowed as
+    "already held" and its release eaten as the priming edge, so the run
+    exhausted and returned "no selection" exactly as if the user had quit --
+    confirmed on hardware, `printf 'tap 300 300\n'` printed "no rom chosen"
+    and exited **0**. `run_list`'s scripted branch now feeds one released
+    state before the script's first entry, so a script is robust whatever its
+    opening verb, and a scripted run that selected nothing exits 4 instead of
+    0. `tests/smoke_host.sh` drives a deliberately tap-first script.
+
+18. **`MODE_MENU`'s interactive branches are verified by construction, not by
+    an executed test.** `src/main.c:647` (the `input_take_menu_request`
+    branch in the emulator loop). `--ui-script` drives `run_list` only in
+    `MODE_BROWSE` (see `run_list`'s own comment on why); `run_menu` is never
+    passed a script -- its one call site, `src/main.c:691`, passes `NULL, 0`
+    -- so the emulator loop itself never accepts scripted input, and
+    SAVE/LOAD/RESET/CHOOSE ROM/QUIT are exercised by inspection and by hand,
+    never by `make test`. Extending `--ui-script` through the emulator loop is
+    the obvious follow-up; #17's prerequisite is now cleared. `src/uiscript.h`
+    and `run_list`'s comment no longer claim MODE_MENU coverage they do not
+    have.
+
+19. **The d-pad horizontal-arm term in `chrome_controls_top` is provably
+    dead.** `src/chrome.c:41-42`. `top = min2(top, dcy - arm/2 - 1)` can never
+    win against the line immediately before it (`dcy - dr - 1`): with
+    `arm = dr/3`, `dr > arm/2` for every `dr > 0` this layout ever produces,
+    so the vertical-arm term is always the smaller of the two. The equality
+    check in `tests/test_chrome.c` does not catch this, because the
+    function's return value is identical whether the line is there or not --
+    only a term-by-term audit finds it.
+
+20. ~~**The speaker grille overdraws its right margin by 1px, on three of the
+    four tested panel sizes.**~~ FIXED, task 15, then the grille itself was
+    REMOVED, task 16 -- CLOSED as "removed, not fixed". `src/chrome.c`, the
+    grille's slash loop. Each slash was drawn with `hline(..., glx0+s,
+    glx0+s+1, ...)` -- two columns per step -- and the length clamp (`if
+    (glx0+len > gx1) len = gx1-glx0`) only fired when the *unclamped* last
+    column would exceed `gx1`. When it landed exactly on `gx1` instead, the
+    clamp never triggered and the two-wide `hline`'s second column painted at
+    `gx1`, one column into the margin `gx1` exists to keep clear. The clamp
+    was widened to reserve the inclusive second column too (`if
+    (glx0+len+1 > gx1) len = gx1-glx0-1`), and `tests/test_chrome.c` asserted
+    the margin directly (swept over all four supported panels) with a
+    verified mutant -- see the task 15 report. The grille itself also moved,
+    lower-right below the A/B cluster, matching the reference photo. Task 16
+    then removed the grille from the faceplate entirely at the user's
+    request (a purely aesthetic simplification -- it reclaims no vertical
+    space, since the grille's placement was independent of
+    `chrome_controls_top`), which took this fix's own code and its margin
+    test out with it. Left in the record rather than deleted, because the
+    inclusive-endpoint clamp bug it documents is a real class of mistake
+    (`hline`'s two-columns-per-call convention) that the next feature to use
+    the same pattern can still walk into.
+
+21. **`video_split_dirty`'s overflow fallbacks are untested.**
+    `src/video.c:245` (tile grid larger than `KOBOY_SPLIT_MAX_TILES`) and
+    `src/video.c:304` (more band/column candidates than
+    `KOBOY_SPLIT_MAX_CANDIDATES`) both degrade to the single merged rect and
+    are safe by construction, but nothing in `tests/test_video_multirect.c`
+    (or anywhere else) constructs a dirty pattern large or pathological
+    enough to actually reach either branch.
+
+22. **Emitted rects may partially overlap once the candidate list is capped.**
+    `src/video.c:313-323`. The merge-to-cap loop only removes a candidate that
+    ends up *fully contained* in another (documented in place as deliberate --
+    "does not attempt general deoverlap"); two capped rects can still
+    partially overlap, and every downstream consumer (`blit_gray8`, `refresh`)
+    redoes that overlap's area twice. Coverage is unaffected -- a union only
+    grows -- so this is a cost, not a correctness bug.
+
+23. **`video_submit` is the real optimisation target, not "presentation."**
+    2026-08-26 device session, Zelda at scale 5, `present_divisor = 3`,
+    per-stage means: core 2.3 ms, **submit 17.0 ms**, blit 2.8 ms, refresh
+    0.4-0.75 ms (max 29.2 ms, the fixed cost + unreliable-timing spread
+    `TESTED.md` already documents). `video_submit` -- the RGB565->gray LUT,
+    integer scale, quantise and 8x8-tile diff, `src/video.c` -- dominates the
+    other three stages combined by roughly 5x. That contradicts the v1
+    design spec §5's stated premise ("Emulation is cheap; presentation is
+    the entire bottleneck"): `video_submit` is neither emulation nor
+    presentation (panel refresh) in that dichotomy, it is the pixel pipeline
+    sitting between them, and it is the bottleneck. Confirmed pixel-bound by
+    a render-scale sweep (submit time only): scale 3 / 207,360 px / 8,997
+    µs, scale 4 / 368,640 px / 12,462 µs, scale 5 / 576,000 px / 16,639 µs --
+    linear fit `submit ~= 4.7 ms + 20.7 ns/px` predicts the scale-4 point
+    within 1%. v2-core's multi-rect work (§7 of the v2 design spec) reduces
+    `refresh`, which this measurement shows is already the cheapest of the
+    four stages -- the optimisation that would actually move the needle is
+    in `video_submit`'s per-pixel work, unstarted.
+
+24. **`refresh_fixed_tiles` tuning (20 vs 40 vs 80 vs split-off) is
+    inconclusive by construction, not just unmeasured.** 2026-08-26 device
+    session, same Zelda run, `--frames 900`: 20/40/80 all produced the same
+    339 rects over 292 frames (604 / 750 / 488 µs mean `refresh`) --
+    behaviourally identical on real content, exactly as a host reviewer
+    predicted from the code before any device was available. Splitting off
+    entirely (100000) dropped to 292 rects / 368 µs, which is the expected
+    mechanical cost of one ioctl per extra rect, not evidence against
+    splitting. The reason none of this settles the tuning question: refresh
+    submission is non-blocking by design (see "What the hardware overruled"
+    in `CLAUDE.md`), so the in-process `refresh` timer measures submission
+    only, never the panel's actual asynchronous work -- which is what the
+    fixed-cost-per-rect model in the v2 design spec §7 is actually trying to
+    amortise. Measuring the real benefit needs blocking refreshes, and this
+    device reports `unreliable_wait_for=1`, which applies to exactly the
+    ioctl a blocking measurement waits on -- so those figures would be
+    suspect by construction too. `refresh_fixed_tiles` stays shipped at 40
+    (the untuned starting guess) with this recorded as a limit of the
+    measurement method, not a verdict on the split heuristic.

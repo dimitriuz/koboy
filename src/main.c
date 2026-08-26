@@ -16,7 +16,14 @@
 #include "core.h"
 #include "koboy.h"
 #include "pacing.h"
+#include "romlist.h"
+#include "safefile.h"
 #include "sram.h"
+#include "state.h"
+#include "stats.h"
+#include "text.h"
+#include "ui.h"
+#include "uiscript.h"
 #include "video.h"
 
 #include <signal.h>
@@ -33,11 +40,7 @@
 extern bool platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
 
 #ifdef KOBOY_PLATFORM_KOBO
-extern koboy_platform *platform_kobo_create(void);
-extern void            platform_kobo_setup_touch(koboy_platform *pf, koboy_input *in);
-extern void            platform_kobo_selftest(koboy_platform *pf);
-extern void            platform_kobo_refresh_stats(koboy_platform *pf);
-extern void            platform_kobo_fatal(void *ctx, const char *msg);
+#include "platform_kobo.h"
 #else
 extern koboy_platform *platform_sdl_create(void);
 extern void            platform_sdl_set_panel(koboy_platform *pf, int w, int h);
@@ -84,65 +87,6 @@ static void fatal(const char *fmt, ...)
 #endif
 }
 
-/* ------------------------------------------------------- calibration text */
-
-/* A 5x7 bitmap font, one byte per column, bit 0 = top row. Only what the
-   calibration prompts need; anything else renders as a space. Text is the one
-   thing chrome.c does not draw, and pulling in a font library for two
-   sentences shown once would be absurd. */
-static const uint8_t FONT5x7[][5] = {
-    { 0x00,0x00,0x00,0x00,0x00 }, /* space */
-    { 0x7E,0x11,0x11,0x11,0x7E }, /* A */
-    { 0x7F,0x49,0x49,0x49,0x36 }, { 0x3E,0x41,0x41,0x41,0x22 },
-    { 0x7F,0x41,0x41,0x22,0x1C }, { 0x7F,0x49,0x49,0x49,0x41 },
-    { 0x7F,0x09,0x09,0x01,0x01 }, { 0x3E,0x41,0x49,0x49,0x7A },
-    { 0x7F,0x08,0x08,0x08,0x7F }, { 0x00,0x41,0x7F,0x41,0x00 },
-    { 0x20,0x40,0x41,0x3F,0x01 }, { 0x7F,0x08,0x14,0x22,0x41 },
-    { 0x7F,0x40,0x40,0x40,0x40 }, { 0x7F,0x02,0x04,0x02,0x7F },
-    { 0x7F,0x04,0x08,0x10,0x7F }, { 0x3E,0x41,0x41,0x41,0x3E },
-    { 0x7F,0x09,0x09,0x09,0x06 }, { 0x3E,0x41,0x51,0x21,0x5E },
-    { 0x7F,0x09,0x19,0x29,0x46 }, { 0x46,0x49,0x49,0x49,0x31 },
-    { 0x01,0x01,0x7F,0x01,0x01 }, { 0x3F,0x40,0x40,0x40,0x3F },
-    { 0x1F,0x20,0x40,0x20,0x1F }, { 0x7F,0x20,0x18,0x20,0x7F },
-    { 0x63,0x14,0x08,0x14,0x63 }, { 0x03,0x04,0x78,0x04,0x03 },
-    { 0x61,0x51,0x49,0x45,0x43 }, /* Z */
-};
-
-static const uint8_t *glyph(char ch)
-{
-    if (ch >= 'a' && ch <= 'z') ch = (char)(ch - 'a' + 'A');
-    if (ch >= 'A' && ch <= 'Z') return FONT5x7[1 + (ch - 'A')];
-    return FONT5x7[0];
-}
-
-static void draw_text(uint8_t *fb, int stride, int W, int H, int x, int y,
-                      const char *s, int px, uint8_t ink)
-{
-    for (const char *p = s; *p; p++, x += 6 * px) {
-        const uint8_t *g = glyph(*p);
-        for (int col = 0; col < 5; col++) {
-            for (int row = 0; row < 7; row++) {
-                if (!(g[col] & (1u << row))) continue;
-                for (int dy = 0; dy < px; dy++) {
-                    int fy = y + row * px + dy;
-                    if (fy < 0 || fy >= H) continue;
-                    for (int dx = 0; dx < px; dx++) {
-                        int fx = x + col * px + dx;
-                        if (fx >= 0 && fx < W) fb[(size_t)fy * stride + fx] = ink;
-                    }
-                }
-            }
-        }
-    }
-}
-
-static void draw_centred(uint8_t *fb, int stride, int W, int H, int y,
-                         const char *s, int px, uint8_t ink)
-{
-    int w = (int)strlen(s) * 6 * px;
-    draw_text(fb, stride, W, H, (W - w) / 2, y, s, px, ink);
-}
-
 /* ------------------------------------------------------------------- args */
 
 static void usage(const char *argv0)
@@ -158,8 +102,189 @@ static void usage(const char *argv0)
         "  --selftest        print machine-readable backend facts and continue\n"
         "  --message TEXT    draw TEXT on the panel and exit 3 (launcher errors)\n"
         "  --waveform auto|du4  waveform for fast refreshes (default auto)\n"
-        "  --quiet           suppress everything but the presented= counter\n",
+        "  --quiet           suppress everything but the presented= counter\n"
+        "  --rom-dir PATH    directory the ROM browser lists\n"
+        "  --ui-script PATH  replay synthetic UI input into the ROM browser;\n"
+        "                    exits 4 if the script selects nothing\n",
         argv0, DEFAULT_INI);
+}
+
+typedef enum { MODE_BROWSE, MODE_PLAY, MODE_MENU, MODE_QUIT } koboy_mode;
+
+/* One definition of "put the faceplate back", replacing three hand-copied
+   blocks (post-calibration, post-fatal, post-SRAM-warning) and now used by
+   every exit from a UI mode as well. */
+static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
+                          int pw, int ph, const koboy_profile *prof,
+                          const koboy_layout *layout)
+{
+    memset(panel, 0xFF, (size_t)stride * (size_t)ph);
+    chrome_render(panel, stride, prof, layout);
+    /* Free, because the panel is already being repainted. */
+    chrome_render_battery(panel, stride, prof, layout,
+                          pf->battery_percent ? pf->battery_percent(pf->ctx) : -1);
+    pf->blit_gray8(pf->ctx, panel, pw, ph, stride, 0, 0);
+    pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+}
+
+/* Drives one list widget to a selection. Returns the chosen index, or -1 if
+   the user quit, the run was stopped, or a script ran out.
+
+   `script`/`script_n` make MODE_BROWSE reachable in a bounded unattended run.
+   Without them every automated test would pass --rom and skip that screen
+   entirely -- the same blind spot that hid v1's first-run deadlock through
+   twenty reviews. MODE_MENU is NOT scripted: nothing passes a script to
+   run_menu or run_slot_picker (they are only ever reached from the emulator
+   loop, which has no --ui-script hook), and saying otherwise here would
+   overclaim coverage the suite does not have. */
+static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
+                    uint8_t *panel, int stride, int pw, int ph,
+                    const koboy_input_state *script, int script_n)
+{
+    int  chosen = -1;
+    int  si = 0;
+    bool need_draw = true;
+    bool primed = false;
+
+    while (!g_stop && !pf->should_quit(pf->ctx)) {
+        if (need_draw) {
+            need_draw = false;
+            memset(panel, 0xFF, (size_t)stride * (size_t)ph);
+            ui_list_render(u, panel, stride, pw, ph);
+            pf->blit_gray8(pf->ctx, panel, pw, ph, stride, 0, 0);
+            /* FULL, i.e. GC16: a list is about to sit still, and the game
+               rect's four-level ceiling does not apply to it. */
+            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+        }
+
+        const koboy_input_state *st;
+        koboy_input_state synth;
+        if (script) {
+            /* One RELEASED state before the script's first entry, always.
+               ui_list_init sets prev_touch = true (a fresh list demands a
+               release before it accepts a tap, so a still-down finger cannot
+               carry a selection in from the previous screen), so a script
+               whose first verb is `tap` had its press swallowed and its
+               release consumed as the priming edge -- selecting nothing and
+               exiting 0, i.e. a green CI run that tested nothing. Confirmed
+               on hardware with `printf 'tap 300 300\n'`.
+               Primed here rather than documented in uiscript.h: a note relies
+               on every future author reading it, and the scripted path is
+               precisely the one nobody's tests exercise honestly. */
+            if (!primed) {
+                primed = true;
+                memset(&synth, 0, sizeof synth);
+                st = &synth;
+            } else if (si >= script_n) {
+                break;                      /* script exhausted: give up */
+            } else {
+                st = &script[si++];
+            }
+        } else {
+            pf->poll_input(pf->ctx, in);
+            /* NOT input_state(): the faceplate's A/B touch zones stay live
+               under a full-panel list, and their synthesised joypad bits are
+               eaten by ui_list_feed as page-turns before any row hit-test
+               runs. input_ui_state passes the hardware keys and the touch
+               coordinates and drops the synthesised bits -- see input.h. */
+            input_ui_state(in, &synth);
+            st = &synth;
+        }
+
+        int idx = -1;
+        ui_action a = ui_list_feed(u, st, &idx);
+        if (a == UI_SELECT) { chosen = idx; break; }
+        if (a == UI_PAGE_NEXT || a == UI_PAGE_PREV) need_draw = true;
+
+        if (!script) usleep(5000);
+    }
+    return chosen;
+}
+
+/* Everything that must happen when a ROM becomes the current game, in the one
+   order that is safe.
+
+   Three hazards live here, all of them silent if got wrong:
+     - core_sram() is re-fetched every time. The pointer belongs to the core's
+       freshly loaded cartridge; caching it across unload/load is a
+       use-after-free waiting for a second game.
+     - The OUTGOING game's SRAM is flushed by the caller BEFORE unload, never
+       after: retro_unload_game takes the buffer, and its last minutes with it.
+     - sram_writeback stays false for the session when a save file exists but
+       could not be read whole, so nothing is written back over it. */
+typedef struct {
+    char     path[512];        /* .srm path for the current rom */
+    uint8_t *mem;
+    size_t   len;
+    bool     writeback;
+} koboy_sram_binding;
+
+static bool load_rom_into(koboy_core *core, koboy_config *cfg,
+                          koboy_sram_binding *sb, char *err, size_t errlen)
+{
+    if (!core_load_rom(core, cfg->rom_path, err, errlen)) return false;
+
+    sram_path_for_rom(sb->path, sizeof sb->path, cfg->save_dir, cfg->rom_path);
+    sb->len = 0;
+    sb->mem = core_sram(core, &sb->len);
+    sb->writeback = true;
+    return true;
+}
+
+enum {
+    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
+    MENU_COUNT
+};
+
+/* Returns the chosen MENU_* action, or MENU_RESUME if the user backed out.
+   `has_states` greys nothing out visually -- the label says so instead, which
+   is cheaper on a panel with no colour and no hover. */
+static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                    int stride, int pw, int ph, bool has_states,
+                    const koboy_input_state *script, int script_n)
+{
+    const char *items[MENU_COUNT];
+    items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
+    items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
+    items[MENU_RESET]       = "RESET GAME";
+    items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
+    items[MENU_RESUME]      = "RESUME";
+    items[MENU_QUIT]        = "QUIT";
+
+    koboy_ui_list list;
+    ui_list_init(&list, "MENU", items, MENU_COUNT,
+                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n);
+    if (pick < 0) return MENU_RESUME;
+    if ((pick == MENU_SAVE || pick == MENU_LOAD) && !has_states) return MENU_RESUME;
+    return pick;
+}
+
+/* Returns the chosen slot (1-based), or 0 if the user backed out. */
+static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                           int stride, int pw, int ph, const char *title,
+                           const char *save_dir, const char *rom_path,
+                           const koboy_input_state *script, int script_n)
+{
+    static char labels[KOBOY_STATE_SLOTS + 1][64];
+    const char *items[KOBOY_STATE_SLOTS + 1];
+    for (int s = 1; s <= KOBOY_STATE_SLOTS; s++) {
+        state_slot_label(labels[s - 1], sizeof labels[s - 1], save_dir, rom_path, s);
+        items[s - 1] = labels[s - 1];
+    }
+    snprintf(labels[KOBOY_STATE_SLOTS], sizeof labels[KOBOY_STATE_SLOTS], "BACK");
+    items[KOBOY_STATE_SLOTS] = labels[KOBOY_STATE_SLOTS];
+
+    koboy_ui_list list;
+    ui_list_init(&list, title, items, KOBOY_STATE_SLOTS + 1,
+                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n);
+    if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
+    return pick + 1;
 }
 
 int main(int argc, char **argv)
@@ -170,6 +295,8 @@ int main(int argc, char **argv)
     int panel_w = 0, panel_h = 0;
     bool selftest = false;
     const char *message = NULL;
+    const char *ui_script_path = NULL;
+    bool        rom_from_argv  = false;
 
     /* --config is read before the file so an alternate ini can be chosen. */
     for (int i = 1; i < argc - 1; i++)
@@ -185,12 +312,14 @@ int main(int argc, char **argv)
         else if (!strcmp(a, "--selftest")) selftest = true;
         else if (!strcmp(a, "--help") || !strcmp(a, "-h")) { usage(argv[0]); return 0; }
         else if (!has_val) { fprintf(stderr, "koboy: missing value for %s\n", a); return 2; }
-        else if (!strcmp(a, "--rom"))      snprintf(cfg.rom_path,  sizeof cfg.rom_path,  "%s", argv[++i]);
+        else if (!strcmp(a, "--rom"))      { snprintf(cfg.rom_path,  sizeof cfg.rom_path,  "%s", argv[++i]); rom_from_argv = true; }
         else if (!strcmp(a, "--core"))     snprintf(cfg.core_path, sizeof cfg.core_path, "%s", argv[++i]);
         else if (!strcmp(a, "--save-dir")) snprintf(cfg.save_dir,  sizeof cfg.save_dir,  "%s", argv[++i]);
         else if (!strcmp(a, "--config"))   i++;   /* already handled */
         else if (!strcmp(a, "--message"))  message = argv[++i];
         else if (!strcmp(a, "--frames"))   frame_limit = strtoul(argv[++i], NULL, 10);
+        else if (!strcmp(a, "--rom-dir"))  snprintf(cfg.rom_dir, sizeof cfg.rom_dir, "%s", argv[++i]);
+        else if (!strcmp(a, "--ui-script")) ui_script_path = argv[++i];
         else if (!strcmp(a, "--waveform")) {
             const char *w = argv[++i];
             if (!strcmp(w, "auto"))      cfg.wfm_fast_policy = KOBOY_WFM_AUTO;
@@ -261,15 +390,47 @@ int main(int argc, char **argv)
         return 3;
     }
 
-    /* Checked here rather than during argument parsing so that it is reportable:
-       before platform init there is no panel to draw on, and "you forgot to set
-       rom= in koboy.ini" is exactly the mistake a user makes with no terminal
-       in front of them. */
-    if (!cfg.rom_path[0]) {
-        fatal("no rom configured -- set rom= in the ini or pass --rom");
-        pf->shutdown(pf->ctx);
-        return 2;
+    static koboy_input_state ui_script[UISCRIPT_MAX];
+    int ui_script_n = 0;
+    if (ui_script_path) {
+        ui_script_n = uiscript_load(ui_script_path, ui_script, UISCRIPT_MAX);
+        if (ui_script_n < 0) {
+            fatal("cannot read ui script %s", ui_script_path);
+            pf->shutdown(pf->ctx);
+            return 2;
+        }
+        /* uiscript.h's own contract: "an error must fail the run rather than
+           silently pass a test that exercised nothing". An empty or
+           comment-only script is not a read error -- uiscript_load returns 0,
+           not -1 -- but treating it as "no script" here would fall back to
+           run_list's live-polling branch, and a --ui-script was explicitly
+           requested precisely because nobody is at the panel to poll. That
+           run then blocks forever instead of failing, which is a worse
+           silence than a bad read: this is exactly the unattended-run blind
+           spot uiscript.h exists to close. */
+        if (ui_script_n == 0) {
+            fatal("ui script %s is empty (no verbs)", ui_script_path);
+            pf->shutdown(pf->ctx);
+            return 2;
+        }
     }
+
+    /* An explicit --rom or rom= goes straight to play, which keeps every
+       existing smoke test, --frames run and scripted path behaving exactly as
+       it did in v1. The shipped ini leaves rom commented out, so a real user
+       starts in the browser. */
+    koboy_mode mode = cfg.rom_path[0] ? MODE_PLAY : MODE_BROWSE;
+
+    /* Genuinely unused past this point. It was carried here as groundwork for
+       MODE_MENU's CHOOSE ROM entry, on the theory that a ROM picked from
+       --rom (rather than the browser or the ini) might want its containing
+       directory offered as the CHOOSE ROM listing. That would mean silently
+       overriding cfg.rom_dir whenever it still held the compiled-in default,
+       which is a real feature with its own failure modes (what if rom_dir was
+       explicitly set to the same value on purpose?) and no request for it
+       exists -- so it is left alone rather than guessed at. `mode` is the
+       piece of this task's groundwork that actually gets consumed, below. */
+    (void)rom_from_argv;
 
     koboy_profile prof;
     if (!config_resolve_profile(&prof, &cfg, pw, ph)) {
@@ -286,6 +447,9 @@ int main(int argc, char **argv)
     if (!panel) { fatal("out of memory"); pf->shutdown(pf->ctx); return 1; }
     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
     chrome_render(panel, panel_stride, &prof, &cfg.layout);
+    /* Free, because the panel is already being repainted. */
+    chrome_render_battery(panel, panel_stride, &prof, &cfg.layout,
+                          pf->battery_percent ? pf->battery_percent(pf->ctx) : -1);
     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
 
@@ -323,12 +487,12 @@ int main(int argc, char **argv)
                 if (k.stage != last_stage) {
                     last_stage = k.stage;
                     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
-                    draw_centred(panel, panel_stride, pw, ph, ph / 2 - 40,
+                    text_draw_centred(panel, panel_stride, pw, ph, ph / 2 - 40,
                                  calib_prompt(&k), 5, 0x00);
                     /* The escape has to be ON THE PANEL. A device that cannot
                        answer the prompt is exactly the device whose user has no
                        terminal and no other way to find out. */
-                    draw_centred(panel, panel_stride, pw, ph, ph / 2 + 40,
+                    text_draw_centred(panel, panel_stride, pw, ph, ph / 2 + 40,
                                  calib_escape_prompt(), 3, 0x00);
                     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
                     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
@@ -361,12 +525,69 @@ int main(int argc, char **argv)
             }
 
             /* Put the faceplate back: calibration wrote over it. */
-            memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
-            chrome_render(panel, panel_stride, &prof, &cfg.layout);
-            pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
-            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
         }
     }
+
+    koboy_romlist roms;
+    if (mode == MODE_BROWSE) {
+        int n = romlist_scan(&roms, cfg.rom_dir);
+        if (n < 0) {
+            /* Distinct from "no roms": a wrong rom_dir and an empty one are
+               different mistakes, and this is the only diagnostic a user with
+               no terminal gets. */
+            fatal("cannot read rom directory\n%s", cfg.rom_dir);
+            free(panel); pf->shutdown(pf->ctx); return 2;
+        }
+        if (n == 0) {
+            fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+            free(panel); pf->shutdown(pf->ctx); return 2;
+        }
+
+        koboy_input *ui_in = input_create(&cfg, &prof);
+        if (!ui_in) { fatal("out of memory"); free(panel); pf->shutdown(pf->ctx); return 1; }
+#ifdef KOBOY_PLATFORM_KOBO
+        platform_kobo_setup_touch(pf, ui_in);
+#else
+        input_set_touch_transform(ui_in, pw, ph, false, false, false);
+#endif
+        koboy_ui_list list;
+        ui_list_init(&list, "CHOOSE A GAME", romlist_items(&roms), n,
+                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                     pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+        int pick = run_list(pf, ui_in, &list, panel, panel_stride, pw, ph,
+                            ui_script_n > 0 ? ui_script : NULL, ui_script_n);
+        input_destroy(ui_in);
+
+        if (pick < 0) {
+            /* A SCRIPTED run that chose nothing is a failure, not a clean
+               exit. Backing out of the browser is a legitimate thing for a
+               person to do, so an interactive run still exits 0 -- but
+               --ui-script exists to make an unattended run exercise the
+               browser, and a run that exercised nothing and reported success
+               is a CI job that is green for having tested nothing. That is
+               the exact shape of failure this project keeps finding, so it
+               gets its own exit code rather than being folded into 1 or 2. */
+            if (ui_script_n > 0) {
+                fatal("ui script selected nothing");
+                free(panel); pf->shutdown(pf->ctx); return 4;
+            }
+            say("koboy: no rom chosen, exiting\n");
+            free(panel); pf->shutdown(pf->ctx); return 0;
+        }
+        romlist_path(&roms, pick, cfg.rom_path, sizeof cfg.rom_path);
+        say("koboy: chose %s\n", cfg.rom_path);
+        mode = MODE_PLAY;
+
+        /* The browser painted over the faceplate. */
+        redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+    }
+    /* mode is MODE_PLAY from here on, until the emulator loop below reads and
+       writes it: MODE_QUIT ends the loop from inside the menu (a chosen QUIT,
+       or CHOOSE ROM leaving nothing loaded), kept distinct from g_stop so the
+       final status line does not call a menu-driven quit "stopped by
+       signal". */
 
     /* --------------------------------------------------- video, input, core */
     koboy_video *vid = video_create(&prof, cfg.force_dither);
@@ -395,17 +616,21 @@ int main(int argc, char **argv)
     }
     core_set_frame_cb(core, on_frame, NULL);
     core_set_input_fn(core, on_input, in);
-    if (!core_load_rom(core, cfg.rom_path, err, sizeof err)) {
+
+    /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
+       every compiler that matters here, but Linaro GCC 4.9 (the ARM cross
+       compiler; the host's newer GCC does not) applies -Wmissing-braces to
+       the nested path[] array and -Wmissing-field-initializers to the rest,
+       so a bare {0} is warning-free on host and warning-*full* on-device.
+       Spell out every field so both toolchains agree it is zeroed. */
+    koboy_sram_binding sb = {{0}, NULL, 0, false};
+    if (!load_rom_into(core, &cfg, &sb, err, sizeof err)) {
         fatal("%s", err);
         core_close(core);
         video_destroy(vid); input_destroy(in); free(panel);
         pf->shutdown(pf->ctx); return 1;
     }
 
-    char sram_path[512];
-    sram_path_for_rom(sram_path, sizeof sram_path, cfg.save_dir, cfg.rom_path);
-    size_t sram_len = 0;
-    uint8_t *sram = core_sram(core, &sram_len);
     /* Tetris is cartridge type 0x00: no battery-backed SRAM at all, so this is
        NULL/0 on the development ROM and must not be dereferenced. */
     /* Set false when a save file exists but could not be loaded whole. Then
@@ -417,23 +642,19 @@ int main(int argc, char **argv)
        of progress made in a game that started from a blank save anyway. So the
        file is left exactly as found, the user is told on the panel, and the fix
        is theirs to make (move the file aside, and saving resumes next run). */
-    bool sram_writeback = true;
-    if (sram && sram_len) {
-        if (sram_load(sram_path, sram, sram_len)) {
-            say("koboy: loaded %s\n", sram_path);
-        } else if (access(sram_path, F_OK) == 0) {
-            sram_writeback = false;
+    if (sb.mem && sb.len) {
+        if (sram_load(sb.path, sb.mem, sb.len)) {
+            say("koboy: loaded %s\n", sb.path);
+        } else if (access(sb.path, F_OK) == 0) {
+            sb.writeback = false;
             say("koboy: %s could not be read whole; SRAM left as the core "
-                "initialised it and saving is disabled this session\n", sram_path);
+                "initialised it and saving is disabled this session\n", sb.path);
             /* On the panel, not just the log: a save that silently did not load
                is how a user loses hours without ever being told. Short lines --
                FBInk wraps at the column edge, not at word boundaries. */
             fatal("Save file unreadable.\nStarting fresh.\nSaving is OFF this run.");
             /* fatal() drew over the faceplate; put it back. */
-            memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
-            chrome_render(panel, panel_stride, &prof, &cfg.layout);
-            pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
-            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
         }
     } else {
         say("koboy: cartridge has no save RAM\n");
@@ -443,11 +664,21 @@ int main(int argc, char **argv)
     koboy_pacer pace;
     pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
 
+    koboy_stats stats;
+    stats_reset(&stats);
+
     unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
+    unsigned long rects_emitted = 0;
     uint64_t last_sram_us = pf->now_us(pf->ctx);
     uint64_t last_cleanup_us = last_sram_us;
 
-    while (!g_stop && !pf->should_quit(pf->ctx)) {
+    /* mode != MODE_QUIT joins g_stop and should_quit() as a third way out: the
+       in-game menu sets it (QUIT, or CHOOSE ROM leaving nothing loaded) from
+       inside the loop body below. Kept separate from g_stop on purpose -- that
+       flag is the signal handler's, set from outside any call frame, and
+       reusing it for a menu-driven exit would make the final status line call
+       a chosen QUIT "stopped by signal". */
+    while (mode != MODE_QUIT && !g_stop && !pf->should_quit(pf->ctx)) {
         if (frame_limit && pace.frames >= frame_limit) break;
 
         /* Poll EVERY core iteration (60Hz), not once per presented frame.
@@ -455,30 +686,171 @@ int main(int argc, char **argv)
            50ms of latency on top of the panel's own. */
         pf->poll_input(pf->ctx, in);
 
+        if (input_take_menu_request(in)) {
+            size_t ssz = core_state_size(core);
+            int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0, NULL, 0);
+
+            if (act == MENU_SAVE || act == MENU_LOAD) {
+                int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
+                                           act == MENU_SAVE ? "SAVE TO" : "LOAD FROM",
+                                           cfg.save_dir, cfg.rom_path, NULL, 0);
+                if (slot) {
+                    char sp[512];
+                    state_path(sp, sizeof sp, cfg.save_dir, cfg.rom_path, slot);
+                    uint8_t *blob = malloc(ssz);
+                    if (!blob) {
+                        fatal("out of memory for a save state");
+                    } else if (act == MENU_SAVE) {
+                        if (core_state_save(core, blob, ssz) &&
+                            safefile_write(sp, blob, ssz))
+                            say("koboy: saved state %d\n", slot);
+                        else
+                            fatal("could not write\nsave state %d", slot);
+                    } else {
+                        /* All or nothing: safefile_read_exact leaves blob
+                           untouched on a short file, and only a complete blob
+                           ever reaches the running core. */
+                        if (safefile_read_exact(sp, blob, ssz) &&
+                            core_state_load(core, blob, ssz)) {
+                            say("koboy: loaded state %d\n", slot);
+                            /* The core's cartridge RAM was just rewritten --
+                               gambatte's blob includes it -- so the periodic
+                               flush will now write that to .srm. Correct, and
+                               worth knowing: a state load is indirectly a
+                               save-file write. Re-fetch in case the pointer
+                               moved. */
+                            sb.mem = core_sram(core, &sb.len);
+                        } else {
+                            fatal("could not load\nsave state %d", slot);
+                        }
+                    }
+                    free(blob);
+                }
+            } else if (act == MENU_RESET) {
+                core_reset(core);
+            } else if (act == MENU_QUIT) {
+                mode = MODE_QUIT;
+            } else if (act == MENU_CHOOSE_ROM) {
+                /* Flush BEFORE unload: retro_unload_game takes the buffer. */
+                if (sb.mem && sb.len && sb.writeback)
+                    sram_save(sb.path, sb.mem, sb.len);
+                core_unload_rom(core);
+                /* Cleared, not left stale: retro_unload_game takes the buffer,
+                   so sb.mem is dangling until a new load re-fetches it. If the
+                   picker below is cancelled or the next load fails, mode goes
+                   to MODE_QUIT and this run's final flush (after the loop)
+                   must see mem==NULL rather than dereference freed memory. */
+                sb.mem = NULL;
+                sb.len = 0;
+
+                koboy_romlist rl;
+                int n = romlist_scan(&rl, cfg.rom_dir);
+                int pick = -1;
+                if (n < 0) {
+                    /* Distinct from n == 0, matching the startup browser's two
+                       messages: romlist.h documents why they must stay
+                       distinguishable -- "your rom_dir is wrong" and "you
+                       have no ROMs" are different diagnoses to a user with no
+                       terminal, and this is the only diagnostic they get. */
+                    fatal("cannot read rom directory\n%s", cfg.rom_dir);
+                } else if (n == 0) {
+                    fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+                } else {
+                    koboy_ui_list list;
+                    ui_list_init(&list, "CHOOSE A GAME", romlist_items(&rl), n,
+                                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                                 pw - 2 * KOBOY_CHROME_MARGIN,
+                                 ph - 2 * KOBOY_CHROME_MARGIN);
+                    pick = run_list(pf, in, &list, panel, panel_stride,
+                                    pw, ph, NULL, 0);
+                }
+                /* No "return to the game" option in any of the three failure
+                   cases (n < 0, n == 0, or pick < 0): the running game was
+                   already flushed and unloaded above so CHOOSE ROM could have
+                   the core to itself, and by the time rom_dir turns out empty
+                   or unreadable -- or the user backs out of the picker --
+                   there is nothing left to resume. Quitting, after telling
+                   the user why on the panel, is the only coherent option: the
+                   alternative is a black or frozen screen with no
+                   explanation, which this project's own constraint calls
+                   "indistinguishable from a crash". */
+                if (pick < 0) { mode = MODE_QUIT; }
+                else {
+                    romlist_path(&rl, pick, cfg.rom_path, sizeof cfg.rom_path);
+                    char lerr[512];
+                    if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
+                        fatal("%s", lerr);
+                        mode = MODE_QUIT;
+                    } else if (sb.mem && sb.len &&
+                               !sram_load(sb.path, sb.mem, sb.len) &&
+                               access(sb.path, F_OK) == 0) {
+                        sb.writeback = false;
+                        fatal("Save file unreadable.\nStarting fresh.\n"
+                              "Saving is OFF this run.");
+                    }
+                }
+            }
+
+            /* Whatever happened, the panel is now showing a menu. */
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+            video_invalidate(vid);
+            /* Drain, don't just ignore: every run_list/run_menu call above
+               polled input while a menu screen -- not the faceplate -- was on
+               the panel, and recompute() latches a MENU-zone tap regardless
+               of what is drawn there. At the default layout the zone
+               overlaps the list's page-forward arrow, so a tap made to page
+               a long list can latch a pending request that nothing here has
+               consumed yet. Left alone, the very next iteration's
+               input_take_menu_request() would see it and reopen the menu
+               immediately -- "the menu keeps reopening by itself". The
+               return value is discarded on purpose: this call exists only to
+               clear the latch, not to act on it. */
+            (void)input_take_menu_request(in);
+            /* REBASE, not re-init: pacer_init zeroes p->frames, and the
+               bounded-run test above is `pace.frames >= frame_limit`, so a
+               --frames N run used to restart its whole budget every time the
+               menu closed. The wall clock does need re-anchoring (the menu may
+               have been open for a minute) -- that is all pacer_rebase does. */
+            pacer_rebase(&pace, pf->now_us(pf->ctx));
+            continue;
+        }
+
         uint64_t delay = pacer_delay_us(&pace, pf->now_us(pf->ctx));
         if (delay) usleep((useconds_t)delay);
 
         g_frame = NULL;
+        uint64_t t0 = pf->now_us(pf->ctx);
         core_run_frame(core);
+        stats_add(&stats, KOBOY_STAGE_CORE, pf->now_us(pf->ctx) - t0);
         bool present = pacer_tick(&pace);
         if (!present) goto sram_check;
 
-        /* A NULL g_frame is the core's can-dupe signal, which video_submit turns
-           into an empty rect -- so an unchanged frame costs no refresh at all. */
-        koboy_rect r = video_submit(vid, g_frame, (int)g_fw, (int)g_fh,
-                                    g_fpitch, core_pixfmt(core));
-        if (r.w == 0) goto sram_check;          /* nothing changed: skip the panel */
+        /* A NULL g_frame is the core's can-dupe signal, which video_submit_rects
+           turns into zero rects -- so an unchanged frame costs no refresh at
+           all. Up to KOBOY_MAX_RECTS rects instead of one merged box:
+           video_split_dirty (src/video.c) only splits when the summed cost of
+           the pieces beats the merged box's, so a full-screen scroller still
+           comes back as a single rect here. The rects are not guaranteed
+           disjoint (video_split_dirty's own comment has the detail) -- a
+           capped merge can leave one rect containing another -- so blitting
+           and refreshing each in turn can redo a small overlap; it never
+           misses one. */
+        koboy_rect rects[KOBOY_MAX_RECTS];
+        t0 = pf->now_us(pf->ctx);
+        int nrects = video_submit_rects(vid, g_frame, (int)g_fw, (int)g_fh,
+                                        g_fpitch, core_pixfmt(core),
+                                        cfg.refresh_fixed_tiles,
+                                        rects, KOBOY_MAX_RECTS);
+        stats_add(&stats, KOBOY_STAGE_SUBMIT, pf->now_us(pf->ctx) - t0);
+        if (nrects == 0) goto sram_check;       /* nothing changed: skip the panel */
 
-        pf->blit_gray8(pf->ctx, video_buffer(vid) + (size_t)r.y * video_stride(vid) + r.x,
-                       r.w, r.h, video_stride(vid),
-                       prof.game_x + r.x, prof.game_y + r.y);
-
-        /* Waveform by dirty area, not one waveform for every frame.
-           KOBOY_REFRESH_FAST maps to a non-flashing waveform (DU4 on this
-           panel), which never fully resets pixel state -- residue accumulates
-           on every update regardless of rect size. Observed on the device as
-           several Tetris scenes layered on top of each other.
-           A dirty rect covering most of the game rect means the scene has
+        /* Waveform by TOTAL dirty area across every emitted rect, not one
+           waveform for every frame. KOBOY_REFRESH_FAST maps to a non-flashing
+           waveform (DU4 on this panel), which never fully resets pixel state
+           -- residue accumulates on every update regardless of rect size.
+           Observed on the device as several Tetris scenes layered on top of
+           each other.
+           A dirty area covering most of the game rect means the scene has
            substantially changed, which is both when layered residue is most
            objectionable and when the refresh is already expensive, so paying
            for a flashing waveform there is cheap in relative terms. Small
@@ -487,15 +859,62 @@ int main(int argc, char **argv)
            Note this cannot be a substitute for the cleanup: the dirty diff
            compares our own output buffers, so it tracks what we sent, not what
            the panel shows. A region that ghosts and then stops changing is
-           never revisited by this test at all. */
-        koboy_refresh_mode mode = KOBOY_REFRESH_FAST;
-        if (config_promote_full(&cfg, (long)r.w * (long)r.h,
+           never revisited by this test at all.
+           Summing before deciding, rather than promoting per rect, matters
+           precisely because splitting exists now: two small pieces that
+           individually look nowhere near the promotion threshold could
+           together represent most of the game rect having changed, and
+           deciding rect-by-rect would miss exactly the scene change this
+           promotion exists to catch. */
+        long dirty_px = 0;
+        for (int i = 0; i < nrects; i++) dirty_px += (long)rects[i].w * rects[i].h;
+
+        /* Named wfm, not mode: koboy_mode mode is the outer loop's live
+           control variable (MODE_PLAY/MODE_QUIT), declared far above this
+           point. Reusing "mode" here for the waveform shadowed it silently --
+           -Wshadow is not in this project's flags, so nothing caught it, and
+           the code was correct only by accident of line ordering: moving this
+           block above the outer mode's use, or adding a `mode = MODE_QUIT`
+           anywhere after this point in the loop, would have assigned a
+           waveform instead of ending the run. */
+        koboy_refresh_mode wfm = KOBOY_REFRESH_FAST;
+        if (config_promote_full(&cfg, dirty_px,
                                 (long)prof.game_w * (long)prof.game_h)) {
-            mode = KOBOY_REFRESH_FULL;
+            wfm = KOBOY_REFRESH_FULL;
             big_refreshes++;
         }
-        pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, mode);
+
+        /* Accumulate BLIT and REFRESH across every rect of THIS frame and
+           call stats_add once, not once per rect. CORE and SUBMIT still fire
+           once per presented frame, and stats_mean_us divides by count[stage]
+           -- so a per-rect stats_add would silently change what the mean
+           MEANS, from "cost per presented frame" (CORE, SUBMIT, and every
+           reading before Task 13) to "cost per rect," with nothing in the
+           printed line saying so. That would bias Step 10's on-device tuning
+           run toward splitting by construction: quartering into four rects
+           mechanically quarters a per-rect mean even if the total refresh
+           time went up, which is the opposite of what the tuning run is
+           trying to measure. One stats_add per frame keeps all four stages'
+           means on the same "per presented frame" footing. */
+        uint64_t blit_us = 0, refresh_us = 0;
+        for (int i = 0; i < nrects; i++) {
+            const koboy_rect *r = &rects[i];
+            t0 = pf->now_us(pf->ctx);
+            pf->blit_gray8(pf->ctx,
+                           video_buffer(vid) + (size_t)r->y * video_stride(vid) + r->x,
+                           r->w, r->h, video_stride(vid),
+                           prof.game_x + r->x, prof.game_y + r->y);
+            blit_us += pf->now_us(pf->ctx) - t0;
+
+            t0 = pf->now_us(pf->ctx);
+            pf->refresh(pf->ctx, prof.game_x + r->x, prof.game_y + r->y,
+                        r->w, r->h, wfm);
+            refresh_us += pf->now_us(pf->ctx) - t0;
+        }
+        stats_add(&stats, KOBOY_STAGE_BLIT, blit_us);
+        stats_add(&stats, KOBOY_STAGE_REFRESH, refresh_us);
         presented++;
+        rects_emitted += (unsigned long)nrects;
 
         /* A value <= 0 disables cleanup. The explicit guard is required:
            without it, 0 makes this always true (a full refresh every presented
@@ -525,20 +944,28 @@ int main(int argc, char **argv)
 sram_check:
         /* Periodic flush while dirty: e-readers get suspended and killed
            unceremoniously, and sram_save is atomic so a kill mid-write is safe. */
-        if (sram && sram_len && sram_writeback) {
+        if (sb.mem && sb.len && sb.writeback) {
             uint64_t now = pf->now_us(pf->ctx);
             if (now - last_sram_us > 10ull * 1000000ull) {
-                sram_save(sram_path, sram, sram_len);
+                sram_save(sb.path, sb.mem, sb.len);
                 last_sram_us = now;
             }
         }
     }
 
-    if (sram && sram_len && sram_writeback) sram_save(sram_path, sram, sram_len);
+    if (sb.mem && sb.len && sb.writeback) sram_save(sb.path, sb.mem, sb.len);
     say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
-        "%lu large-area full refreshes\n",
+        "%lu large-area full refreshes, %lu rects emitted\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,
-        big_refreshes);
+        big_refreshes, rects_emitted);
+    /* Always printed, even under --quiet, for the same reason presented= is:
+       this is the run's evidence, and a run whose numbers were suppressed is a
+       run that has to be done again. */
+    {
+        char line[256];
+        stats_format(&stats, line, sizeof line);
+        fprintf(stderr, "koboy: stages %s\n", line);
+    }
     /* Always printed, even under --quiet: the smoke tests grep for it.
        --quiet suppresses other chatter only. */
     printf("presented=%lu\n", presented);

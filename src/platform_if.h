@@ -18,5 +18,10 @@ typedef struct koboy_platform {
     bool     (*poll_input)(void *ctx, struct koboy_input *in);
     uint64_t (*now_us)(void *ctx);
     bool     (*should_quit)(void *ctx);
+    /* Device battery, 0..100, or -1 when unknown. Optional: the SDL backend
+       has no battery, and an unseen Kobo may not expose one either. Read only
+       when the whole panel is already being repainted, so the faceplate keeps
+       its zero-per-frame-cost property and needs no timer. */
+    int      (*battery_percent)(void *ctx);
 } koboy_platform;
 #endif

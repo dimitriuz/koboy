@@ -15,6 +15,9 @@ struct koboy_input {
     int      pad_slot, pad_ox, pad_oy;
     uint16_t held_dirs;      /* latched directions, for hysteresis */
     uint16_t key_bits;       /* from hardware keys */
+
+    bool menu_latched;      /* set on a MENU tap, cleared by the taker */
+    bool menu_touching;     /* edge state, so a held finger latches once */
 };
 
 koboy_input *input_create(const koboy_config *c, const koboy_profile *p)
@@ -28,6 +31,15 @@ koboy_input *input_create(const koboy_config *c, const koboy_profile *p)
 
 void input_destroy(koboy_input *in) { free(in); }
 const koboy_input_state *input_state(const koboy_input *in) { return &in->st; }
+
+/* Contract and the full rationale in input.h. key_bits is exactly the hardware
+   half of what recompute() folds into st.buttons; the touch coordinates come
+   over untouched so the list can still hit-test rows. */
+void input_ui_state(const koboy_input *in, koboy_input_state *out)
+{
+    *out = in->st;
+    out->buttons = in->key_bits;
+}
 
 void input_set_touch_transform(koboy_input *in, int raw_max_x, int raw_max_y,
                                bool transpose, bool flip_x, bool flip_y)
@@ -134,6 +146,21 @@ static void recompute(koboy_input *in)
         if (in_rect(x, y, perm(l->select_cx, W), perm(l->select_cy, H),
                     perm(l->select_w, W), perm(l->select_h, H))) b |= KOBOY_BTN_SELECT;
     }
+
+    /* MENU is edge triggered for the same reason ui.c is: a held finger would
+       otherwise re-open the menu on every poll. */
+    bool menu_now = false;
+    for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
+        if (!in->st.touch[s].down) continue;
+        if (in->pad_active && s == in->pad_slot) continue;
+        if (in_rect(in->st.touch[s].x, in->st.touch[s].y,
+                    perm(l->menu_cx, W), perm(l->menu_cy, H),
+                    perm(l->menu_w, W), perm(l->menu_h, H)))
+            menu_now = true;
+    }
+    if (menu_now && !in->menu_touching) in->menu_latched = true;
+    in->menu_touching = menu_now;
+
     in->st.buttons = b;
 }
 
@@ -176,4 +203,11 @@ void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
         default: break;
         }
     }
+}
+
+bool input_take_menu_request(koboy_input *in)
+{
+    bool v = in->menu_latched;
+    in->menu_latched = false;
+    return v;
 }

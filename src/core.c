@@ -36,6 +36,11 @@ struct koboy_core {
     void *(*get_memory_data)(unsigned);
     size_t (*get_memory_size)(unsigned);
     void (*reset)(void);
+    /* Optional: serialisation. NULL when the core does not export it. */
+    size_t (*serialize_size)(void);
+    bool   (*serialize)(void *, size_t);
+    bool   (*unserialize)(const void *, size_t);
+    bool    game_loaded;
 };
 
 /* libretro's callbacks are plain C function pointers with no user data, so the
@@ -98,14 +103,18 @@ static void   audio_sample_cb(int16_t l, int16_t r) { (void)l; (void)r; }
 static size_t audio_batch_cb(const int16_t *d, size_t frames) { (void)d; return frames; }
 
 /* Binds one symbol, writing a specific "missing symbol: NAME" message into
-   err on the first failure so a bad core build fails loudly, not silently. */
-static void *xdlsym(void *so, const char *name, char *err, size_t errlen)
+   err on the first failure so a bad core build fails loudly, not silently.
+   #11: the message also names the core's .so path, like its dlopen sibling
+   below -- on a device where a photo of the panel is the only diagnostic,
+   the path is the useful half of the message. */
+static void *xdlsym(void *so, const char *name, const char *so_path,
+                    char *err, size_t errlen)
 {
     dlerror(); /* clear any pending error */
     void *sym = dlsym(so, name);
     const char *e = dlerror();
     if (e || !sym) {
-        if (err && errlen) snprintf(err, errlen, "core missing symbol: %s", name);
+        if (err && errlen) snprintf(err, errlen, "core %s is missing %s", so_path, name);
         return NULL;
     }
     return sym;
@@ -116,9 +125,16 @@ static void *xdlsym(void *so, const char *name, char *err, size_t errlen)
    active and mid-session if a second core_open() call fails partway through. */
 #define BIND(field, name) \
     do { \
-        *(void **)&c->field = xdlsym(so, name, err, errlen); \
+        *(void **)&c->field = xdlsym(so, name, so_path, err, errlen); \
         if (!c->field) { dlclose(so); free(c); return NULL; } \
     } while (0)
+
+/* Optional: a missing symbol is a capability answer, not a fatal error. The
+   test stub is the immediate reason, but the rule is general -- refusing to
+   start because a core cannot serialise would trade playing the game for a
+   feature the user did not ask for. */
+#define BIND_OPT(field, name) \
+    do { *(void **)&c->field = dlsym(so, name); } while (0)
 
 koboy_core *core_open(const char *so_path, const char *save_dir, char *err, size_t errlen)
 {
@@ -157,6 +173,10 @@ koboy_core *core_open(const char *so_path, const char *save_dir, char *err, size
     BIND(get_memory_size,         "retro_get_memory_size");
     BIND(reset,                   "retro_reset");
 
+    BIND_OPT(serialize_size, "retro_serialize_size");
+    BIND_OPT(serialize,      "retro_serialize");
+    BIND_OPT(unserialize,    "retro_unserialize");
+
     if (c->api_version() != 1) {
         if (err && errlen) snprintf(err, errlen, "core %s: unsupported API version", so_path);
         dlclose(so);
@@ -186,6 +206,17 @@ koboy_core *core_open(const char *so_path, const char *save_dir, char *err, size
 bool core_load_rom(koboy_core *c, const char *rom_path, char *err, size_t errlen)
 {
     if (err && errlen) err[0] = 0;
+
+    /* Symmetric with the double-unload guard in core_unload_rom: refuse
+       rather than silently re-entering retro_load_game on top of a cartridge
+       state that was never torn down. The caller must call core_unload_rom
+       first -- chosen over an implicit auto-unload so switching ROMs is
+       always the explicit two-call sequence the libretro API expects, with
+       no hidden state transition a caller could miss. */
+    if (c->game_loaded) {
+        if (err && errlen) snprintf(err, errlen, "core %s already has a ROM loaded; call core_unload_rom first", rom_path);
+        return false;
+    }
 
     struct retro_game_info info = {0};
     void *buf = NULL;
@@ -227,7 +258,46 @@ bool core_load_rom(koboy_core *c, const char *rom_path, char *err, size_t errlen
         if (err && errlen) snprintf(err, errlen, "core rejected rom %s", rom_path);
         return false;
     }
+    c->game_loaded = true;
     return true;
+}
+
+bool core_unload_rom(koboy_core *c)
+{
+    if (!c || !c->game_loaded) return false;
+    c->unload_game();
+    c->game_loaded = false;
+    return true;
+}
+
+bool core_reset(koboy_core *c)
+{
+    if (!c || !c->reset) return false;
+    c->reset();
+    return true;
+}
+
+size_t core_state_size(koboy_core *c)
+{
+    /* All three are required together: a core exporting only some of them
+       cannot round-trip, and reporting a non-zero size would offer the user a
+       Save that silently cannot be loaded. */
+    if (!c || !c->serialize_size || !c->serialize || !c->unserialize) return 0;
+    return c->serialize_size();
+}
+
+bool core_state_save(koboy_core *c, void *buf, size_t n)
+{
+    size_t need = core_state_size(c);
+    if (!need || n < need || !buf) return false;
+    return c->serialize(buf, need);
+}
+
+bool core_state_load(koboy_core *c, const void *buf, size_t n)
+{
+    size_t need = core_state_size(c);
+    if (!need || n < need || !buf) return false;
+    return c->unserialize(buf, need);
 }
 
 void core_set_frame_cb(koboy_core *c,
@@ -265,7 +335,7 @@ koboy_pixfmt core_pixfmt(const koboy_core *c)
 void core_close(koboy_core *c)
 {
     if (!c) return;
-    c->unload_game();
+    core_unload_rom(c); /* no-op if no ROM is loaded -- a double unload is impossible */
     c->deinit();
     dlclose(c->so);
     free(c);

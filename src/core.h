@@ -36,6 +36,24 @@ uint8_t *core_sram(koboy_core *c, size_t *len);
 /* The pixel format the core settled on via SET_PIXEL_FORMAT. */
 koboy_pixfmt core_pixfmt(const koboy_core *c);
 
+/* Unloads the current game but keeps the shared object open and initialised,
+   so another ROM can be loaded through the same handle. dlclose/dlopen cycling
+   of a C++ core mid-session is avoidable, so it is avoided. */
+bool core_unload_rom(koboy_core *c);
+
+/* retro_reset. */
+bool core_reset(koboy_core *c);
+
+/* Save-state support. core_state_size returns 0 when the core does not export
+   the serialisation symbols -- a capability answer, not an error. The menu
+   greys the entries out; the game still plays. */
+size_t core_state_size(koboy_core *c);
+
+/* Both refuse a buffer shorter than core_state_size rather than truncating:
+   handing a core a partial state corrupts a running game. */
+bool   core_state_save(koboy_core *c, void *buf, size_t n);
+bool   core_state_load(koboy_core *c, const void *buf, size_t n);
+
 /* Unloads the game, deinitializes, and closes the shared library. */
 void core_close(koboy_core *c);
 

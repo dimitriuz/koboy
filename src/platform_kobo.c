@@ -26,9 +26,11 @@
 
 #include "input.h"          /* must precede platform_if.h: declares struct koboy_input */
 #include "platform_if.h"
+#include "platform_kobo.h"
 
 #include <fbink.h>
 
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -651,14 +653,36 @@ static uint64_t kobo_now_us(void *ctx)
 
 static bool kobo_should_quit(void *ctx) { return ((kobo_ctx *)ctx)->quit; }
 
+/* Kobo exposes battery capacity through the standard power-supply class. The
+   node name differs by model, so the directory is scanned rather than
+   hardcoded -- the same capability-detection rule the rest of the backend
+   follows. A missing or unreadable node is -1, not an error. */
+static int kobo_battery_percent(void *ctx)
+{
+    (void)ctx;
+    DIR *d = opendir("/sys/class/power_supply");
+    if (!d) return -1;
+    int pct = -1;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.') continue;
+        char path[512];
+        snprintf(path, sizeof path, "/sys/class/power_supply/%s/capacity",
+                 e->d_name);
+        FILE *f = fopen(path, "r");
+        if (!f) continue;
+        int v = -1;
+        if (fscanf(f, "%d", &v) == 1 && v >= 0 && v <= 100) pct = v;
+        fclose(f);
+        if (pct >= 0) break;
+    }
+    closedir(d);
+    return pct;
+}
+
 /* ------------------------------------------------------------------- ctor */
 
-koboy_platform *platform_kobo_create(void);
 bool            platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
-void            platform_kobo_setup_touch(koboy_platform *pf, struct koboy_input *in);
-void            platform_kobo_selftest(koboy_platform *pf);
-void            platform_kobo_refresh_stats(koboy_platform *pf);
-void            platform_kobo_fatal(void *ctx, const char *msg);
 
 koboy_platform *platform_kobo_create(void)
 {
@@ -686,6 +710,7 @@ koboy_platform *platform_kobo_create(void)
     pf->poll_input  = kobo_poll_input;
     pf->now_us      = kobo_now_us;
     pf->should_quit = kobo_should_quit;
+    pf->battery_percent = kobo_battery_percent;
     return pf;
 }
 
