@@ -146,7 +146,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 38 deferred findings, ordered by what bites first. Start here for the next session's scope. **#33 is the live one: neither NES nor Pokemon Mini has run on hardware at all.** |
+| `docs/FOLLOWUPS.md` | 39 deferred findings, ordered by what bites first. Start here for the next session's scope. **#33 is the live one: neither NES nor Pokemon Mini has run on hardware at all.** |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |

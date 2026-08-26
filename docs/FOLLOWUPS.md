@@ -410,3 +410,18 @@ PokeMini reports 72. Nothing reads `retro_system_timing` (core.c says so at
 the SET_SYSTEM_AV_INFO handler). With `present_divisor = 3` on an e-ink panel
 this is very unlikely to be visible, but it is now wrong for three of the
 four cores rather than one.
+
+### 39. `ROMLIST_NAME` is 128 and a real NES collection overflows it
+
+Found by pointing the browser at the owner's actual `NES/` directory: one
+file is skipped and reported as "1 entry not shown", because ROM names in a
+translated NES set run long --
+`Go Go! Nekketu Hockey Club - Multi-Sport Battle (Japan) [T-En by
+Disconnected Translations v0.99] [Add by GAFF Translations v1.00] [n].nes`
+is 138 characters. The cap behaves exactly as designed (a name that would
+truncate is skipped, and the count is shown rather than swallowed), so this
+is a size question, not a bug: 128 was chosen when "Tetris (World).gb" was
+the shape of a filename. A dirent name is at most 255 bytes, and the row is
+elided for display anyway, so 256 would cost 128 bytes per entry -- 2.5 MB
+across a 20000-ROM hard cap, which is the real reason to think about it
+rather than just raising it.
