@@ -670,3 +670,48 @@ echo "$out" | grep -q "gray_map equal" \
     || { echo "FAIL: an unknown gray_map name did not keep the previous value"; echo "$out"; exit 1; }
 rm -rf "$gd"
 echo "ok: gray_map reaches the video pipeline, defaults to balanced, survives a typo"
+
+# ------------------------------------------------------------- rotation
+#
+# END TO END, for exactly the reason the gray_map block above is: every other
+# check on rotation stops at core.c or video.c, and the thing that can still be
+# missing is the WIRE BETWEEN THEM in main.c. A koboy that handled
+# SET_ROTATION perfectly in core.c and never called video_set_rotation would
+# pass tests/test_core.c and tests/test_video_pipeline.c and present Galaga
+# sideways on the device.
+#
+# The stub announces a quarter turn from inside retro_load_game -- where
+# FinalBurn Neo announces it -- with a deliberately NON-SQUARE 288x224
+# geometry, so "transposed" and "not transposed" are different numbers rather
+# than the same ones twice.
+rc=0
+out=$(KOBOY_STUB_ROTATE=3 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --panel 1264x1680 --frames 30 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: rotated run exited $rc"; echo "$out"; exit 1; }
+# The geometry line reports the PRESENTED shape: 288x224 turned is 224x288.
+echo "$out" | grep -q "core geometry 224x288" \
+    || { echo "FAIL: a quarter-turned core did not present transposed geometry"; echo "$out"; exit 1; }
+echo "$out" | grep -q "quarter turn" \
+    || { echo "FAIL: the rotation was never reported"; echo "$out"; exit 1; }
+# AND THE FRAMES ACTUALLY LANDED, which is the assertion that catches the one
+# mutant the two greps above cannot: a koboy that handles SET_ROTATION in
+# core.c (so the log lines are right) and never calls video_set_rotation.
+# The stub reports max == base at a NON-SQUARE 288x224, so the reserved rect
+# is 224 wide; an un-rotated 288-wide frame fails video_pipeline_run's bound
+# check and is DROPPED SILENTLY -- the run still exits 0, still prints both
+# lines above, and shows a black game rect. "0 rects emitted" is the only
+# outward sign, so it is what is asserted.
+echo "$out" | grep -qE 'stopped, [1-9][0-9]* presented frames' \
+    || { echo "FAIL: a rotated core presented no frames -- the turn never reached video.c"; echo "$out"; exit 1; }
+echo "$out" | grep -qE '[1-9][0-9]* rects emitted' \
+    || { echo "FAIL: a rotated core emitted no rects"; echo "$out"; exit 1; }
+
+# The un-rotated control, so the assertions above cannot pass by matching a
+# string koboy prints unconditionally.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --panel 1264x1680 --frames 30 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: unrotated control run exited $rc"; exit 1; }
+echo "$out" | grep -q "quarter turn" \
+    && { echo "FAIL: a core that asked for no rotation was reported as rotated"; echo "$out"; exit 1; }
+echo "ok: SET_ROTATION reaches the video pipeline and transposes the game rect"

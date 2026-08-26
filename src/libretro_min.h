@@ -52,6 +52,18 @@
 
 #define RETRO_ENVIRONMENT_EXPERIMENTAL 0x10000
 
+/* SET_ROTATION is the FIRST environment call koboy answers that changes what
+   a pixel means rather than how many there are, and it exists in this file
+   because a whole class of content cannot be presented without it: a
+   golden-age arcade board turned its MONITOR on its side, so FinalBurn Neo
+   renders Galaga into a 288x224 LANDSCAPE buffer and asks the frontend to
+   turn it a quarter turn. The value is a count of 90-degree COUNTER-CLOCKWISE
+   steps (0..3); 3 is what Galaga, Dig Dug, Donkey Kong, Frogger and Ms.
+   Pac-Man all ask for. Answering false -- which every unknown command still
+   does -- is a legal answer and is what koboy did before FBNeo arrived, but
+   for these boards it means the picture is played sideways. See core.c's
+   handler and video.c's video_set_rotation. */
+#define RETRO_ENVIRONMENT_SET_ROTATION            1
 #define RETRO_ENVIRONMENT_GET_CAN_DUPE            3
 #define RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY    9
 #define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT        10

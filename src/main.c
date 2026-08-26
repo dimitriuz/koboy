@@ -1049,7 +1049,19 @@ int main(int argc, char **argv)
        parses the wrong one. */
     koboy_video *vid = video_create(&prof, cfg.force_dither,
                                     (koboy_gray_map)cfg.gray_map);
+    /* The quarter turn a golden-age arcade board asks for. Set here rather
+       than inside video_create because the rotation belongs to the CORE and
+       koboy_profile belongs to the config -- config_resolve_profile is called
+       from tests that have no core at all. prof was already resolved from
+       core_get_geometry's transposed answer, so the two agree by
+       construction; every later rebuild below repeats both halves together
+       for the same reason. */
+    if (vid) video_set_rotation(vid, (int)core_rotation(core));
     if (vid) say("koboy: gray_map %s\n", video_gray_map_name(video_get_gray_map(vid)));
+    if (vid && core_rotation(core))
+        say("koboy: core asked for %u quarter turn%s; presenting %dx%d\n",
+            core_rotation(core), core_rotation(core) == 1 ? "" : "s",
+            prof.max_w, prof.max_h);
     koboy_input *in  = input_create(&cfg, &prof);
     if (!vid || !in) {
         fatal("out of memory");
@@ -1384,6 +1396,21 @@ int main(int argc, char **argv)
            this costs one cheap boolean check per frame and changes nothing
            else about existing Game Boy behaviour. */
         if (core_geometry_changed(core)) {
+            /* Rotation first, and unconditionally, because it is the one
+               announcement that can arrive WITHOUT the numbers moving: a
+               square frame turned a quarter turn is the same width and
+               height, so the base/max comparison below would see nothing to
+               do and the pipeline would keep presenting the old orientation
+               forever. Cheap when nothing changed (an int compare), and when
+               something did the whole picture moves, so prev is worthless --
+               hence the invalidate, which is exactly the obligation
+               video_set_rotation's own comment hands to a caller that flips
+               it on a live pipeline. The rebuild path below re-applies it
+               anyway; that is a harmless repeat, not a second mechanism. */
+            if (video_get_rotation(vid) != (int)core_rotation(core)) {
+                video_set_rotation(vid, (int)core_rotation(core));
+                video_invalidate(vid);
+            }
             int rbw, rbh, rmw, rmh;
             /* Only a change to MAX re-fits. The reserved rect, the chrome
                drawn around it and video's buffers are all sized from max
@@ -1438,6 +1465,13 @@ int main(int argc, char **argv)
                 video_destroy(vid);
                 vid = video_create(&prof, cfg.force_dither,
                                    (koboy_gray_map)cfg.gray_map);
+                /* Re-applied, not carried over: video_destroy took the old
+                   rotation with it, and a rotation CHANGE is one of the two
+                   things that can have brought us here (core.c sets
+                   geom_dirty for it, precisely so this rebuild happens). A
+                   WonderSwan toggling its display orientation mid-session is
+                   the case that exercises it. */
+                if (vid) video_set_rotation(vid, (int)core_rotation(core));
                 if (!vid) {
                     fatal("out of memory");
                     mode = MODE_QUIT;

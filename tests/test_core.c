@@ -471,6 +471,84 @@ TEST_MAIN({
     CHECK_EQ_INT(mw, 973); CHECK_EQ_INT(mh, 532);
     CHECK_EQ_INT(last_w, 973); CHECK_EQ_INT(last_h, 532);
 
+    /* ------------------------------------------------------------ rotation
+       A core may ask for its frames to be turned a quarter turn before they
+       are shown. FinalBurn Neo does, from inside retro_load_game, and it
+       answers differently PER GAME out of one .so -- 3 for Galaga, 0 for
+       Donkey Kong Jr. */
+    {
+        int *rot     = (int *)dlsym(so, "stub_rotation");
+        int *rot_ack = (int *)dlsym(so, "stub_rotation_accepted");
+        CHECK(rot && rot_ack);
+        /* Out of the late-geometry mode the block above left the stub in:
+           this one is about rotation, and a 128x128 placeholder would make
+           every geometry assertion below fail for an unrelated reason. */
+        *slg = 0;
+
+        /* Galaga's real numbers: a 288x224 buffer, a SQUARE 288x288 max (the
+           core reports max = max(w,h) so both orientations fit one buffer),
+           and 3 quarter turns. */
+        *sbw = 288; *sbh = 224; *smw = 288; *smh = 288;
+        *rot = 3; *rot_ack = -1;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+
+        /* THE ANSWER, not just the number. libretro's contract is that a
+           frontend returning true has promised to do the turn itself, and
+           beetle-wswan reads it that way -- on false it keeps rotating in
+           software, on true it stops. A koboy that recorded the rotation and
+           answered false would present a WonderSwan sideways while passing
+           every geometry assertion below. */
+        CHECK_EQ_INT(*rot_ack, 1);
+        CHECK_EQ_INT((int)core_rotation(c), 3);
+
+        /* And the geometry comes back TRANSPOSED, because what every caller
+           of this wants is the size of the picture as PRESENTED, not the size
+           of the buffer the core renders into. Galaga is 224x288 on screen. */
+        CHECK(core_get_geometry(c, &bw, &bh, &mw, &mh));
+        CHECK_EQ_INT(bw, 224); CHECK_EQ_INT(bh, 288);
+        CHECK_EQ_INT(mw, 288); CHECK_EQ_INT(mh, 288);
+
+        /* An EVEN rotation does not transpose. 2 is a half turn: same shape,
+           different pixels. A swap keyed on "rotation is non-zero" rather
+           than on "rotation is odd" reports 224x288 here and lays out a rect
+           of the wrong shape. */
+        *rot = 2; *rot_ack = -1;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK_EQ_INT((int)core_rotation(c), 2);
+        CHECK(core_get_geometry(c, &bw, &bh, &mw, &mh));
+        CHECK_EQ_INT(bw, 288); CHECK_EQ_INT(bh, 224);
+
+        /* THE ROTATION IS CLEARED WITH THE GAME. MENU -> CHOOSE ROM reuses
+           one open core handle, and a board that asks for no turn sends NO
+           SET_ROTATION at all -- so a rotation left behind from the previous
+           game is never corrected, and the next board plays sideways. Driven
+           exactly that way: stub_rotation = -1 means "never ask". */
+        *rot = 1; *rot_ack = -1;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK_EQ_INT((int)core_rotation(c), 1);
+        CHECK(core_get_geometry(c, &bw, &bh, &mw, &mh));
+        CHECK_EQ_INT(bw, 224);                       /* transposed, as above */
+
+        *rot = -1;                                   /* the next game asks nothing */
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK_EQ_INT((int)core_rotation(c), 0);
+        CHECK(core_get_geometry(c, &bw, &bh, &mw, &mh));
+        CHECK_EQ_INT(bw, 288); CHECK_EQ_INT(bh, 224);
+
+        /* A core that never asks at all -- which is nine of the eleven koboy
+           ships -- gets rotation 0 and untouched geometry, which is what
+           makes this whole addition invisible to them. Already covered by the
+           line above, restated here as the property rather than as a step in
+           a sequence. */
+        CHECK_EQ_INT((int)core_rotation(NULL), 0);
+
+        *rot = -1; *rot_ack = -1;
+    }
+
     /* Restored, not left pointed at Game & Watch numbers / late-geometry
        mode: the .so this dlsym reached is the SAME loaded object core_open's
        own dlopen returned (one shared object per path, refcounted -- not a

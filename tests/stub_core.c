@@ -115,6 +115,27 @@ int stub_sram_shrink_when_running = 0;
 static int stub_ran_since_load = 0;
 #define STUB_SRAM_SHRUNK 3
 
+/* Rotation, and this stub reproduces the two DIFFERENT core behaviours that
+   made it necessary, because they are different questions.
+
+   stub_rotation >= 0 makes retro_load_game announce that many quarter turns
+   through RETRO_ENVIRONMENT_SET_ROTATION, which is what FinalBurn Neo does
+   (SetRotation, called from inside retro_load_game -- 3 for Galaga, 0 for
+   Donkey Kong Jr., out of the same .so).
+
+   stub_rotation_accepted records WHAT KOBOY ANSWERED, and that is the half
+   that is not decoration: beetle-wswan asks this same question and REMEMBERS
+   the answer (third_party/wswan/libretro.c, hw_rotate_enabled). On false it
+   keeps rotating in software; on true it stops, and hands over frames that
+   the frontend now owes a turn. A koboy that recorded the number but
+   answered false would look correct in every geometry assertion and would
+   present a WonderSwan sideways. Only the answer catches that.
+
+   -1 (the default) never asks at all, which is every other core koboy ships
+   and every other test in this binary. */
+int stub_rotation = -1;
+int stub_rotation_accepted = -1;
+
 unsigned retro_api_version(void) { return 1; }
 void retro_set_environment(retro_environment_t cb)
 {
@@ -203,6 +224,37 @@ bool retro_load_game(const struct retro_game_info *g)
     memset(sram, 0, sizeof sram);
     stub_late_fired = 0;   /* each load gets its own chance to announce late */
     stub_ran_since_load = 0;
+    /* Announced from inside retro_load_game, where FBNeo announces it, and
+       NOT from retro_set_environment: rotation is a property of the GAME, so
+       a core that asked once at init could not answer differently for the
+       next ROM through the same handle. */
+    /* KOBOY_STUB_ROTATE, for the same reason KOBOY_STUB_OSCILLATE exists: the
+       test that needs it (tests/smoke_host.sh) runs koboy as a SEPARATE
+       PROCESS and cannot poke this binary's globals. It also sets the
+       geometry to a deliberately NON-SQUARE 288x224, so a koboy that recorded
+       the rotation but did not act on it reports the wrong shape. */
+    {
+        const char *e = getenv("KOBOY_STUB_ROTATE");
+        if (e && *e) {
+            stub_rotation = atoi(e);
+            /* NON-SQUARE, and max == base, which is stricter than FinalBurn
+               Neo (it reports a square max so both orientations fit one
+               buffer) and deliberately so: with a square max a frontend that
+               ignored the rotation entirely would still ACCEPT every frame
+               and merely draw it sideways -- invisible from outside the
+               process, which is all a smoke test can see. With max == base
+               the un-rotated frame is 288 wide against a 224-wide reserved
+               rect, video_pipeline_run's bound guard drops it, and "no rects
+               were ever emitted" is observable in the run's own summary line.
+               beetle-wswan reports its geometry this way for real. */
+            stub_base_w = 288; stub_base_h = 224;
+            stub_max_w  = 288; stub_max_h  = 224;
+        }
+    }
+    if (stub_rotation >= 0 && env_cb) {
+        unsigned r = (unsigned)stub_rotation;
+        stub_rotation_accepted = env_cb(RETRO_ENVIRONMENT_SET_ROTATION, &r) ? 1 : 0;
+    }
     return true;
 }
 void retro_unload_game(void) { stub_observed_unload++; }

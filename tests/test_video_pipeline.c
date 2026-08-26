@@ -638,6 +638,169 @@ TEST_MAIN({
             video_destroy(v2); video_destroy(ref);
         }
     }
+
+    /* ------------------------------------------------------------ rotation
+       A golden-age arcade board turned its MONITOR on its side: FinalBurn Neo
+       renders Galaga into a 288x224 LANDSCAPE buffer and asks the frontend,
+       through RETRO_ENVIRONMENT_SET_ROTATION, to turn it a quarter turn. This
+       block checks the turn itself, on a source small enough to write out by
+       hand, and then the two properties that a plausible-looking wrong
+       implementation would still satisfy.
+
+       The source is 4 wide by 2 tall with a DISTINCT VALUE PER PIXEL, so
+       every one of the eight can be traced to exactly one destination. Values
+       are picked to be already-quantised greys (0x0000 -> 0, 0xFFFF -> 255,
+       and two mid RGB565 greys), and the profile below is built at scale 1 so
+       the destination is the rotated source pixel for pixel with no scaling
+       in the way. */
+    {
+        /* RGB565 greys the four-level quantiser maps to 0/85/170/255. Chosen
+           by asking video_rgb565_to_gray rather than by assuming, because a
+           wrong constant here would make every assertion below trivially
+           true-or-false for the wrong reason. */
+        const uint16_t GREY[4] = { 0x0000, 0x52AA, 0xA555, 0xFFFF };
+        uint8_t lvl[4];
+        for (int i = 0; i < 4; i++) {
+            uint8_t g = video_rgb565_to_gray(GREY[i], KOBOY_GRAY_DEFAULT);
+            lvl[i] = g < 43 ? 0 : g < 128 ? 85 : g < 213 ? 170 : 255;
+        }
+        /* Eight source pixels drawn from four levels, in a layout chosen for
+           one property that is easy to get wrong and was: it must NOT be
+           symmetric under a half turn. Written out:
+             src (4x2):   0 1 2 3
+                          0 3 1 2
+           rot 3 is rot 1 turned 180 degrees, so a half-turn-symmetric pattern
+           renders IDENTICALLY at both and the "the two directions differ"
+           check below passes against an implementation that cannot tell them
+           apart. The first pattern tried here was { 0 1 2 3 / 3 2 1 0 }, which
+           is exactly that symmetry, and the check duly failed against correct
+           code -- the pattern was the bug, not the pipeline. */
+        static const int SRC[2][4] = { { 0, 1, 2, 3 }, { 0, 3, 1, 2 } };
+        uint16_t src[2 * 4];
+        for (int y = 0; y < 2; y++)
+            for (int x = 0; x < 4; x++) src[y * 4 + x] = GREY[SRC[y][x]];
+
+        /* A profile whose max is the SQUARE 4x4 -- which is what FBNeo really
+           reports (side = max(w,h)) precisely so that both orientations fit
+           one buffer -- resolved on a panel big enough that the scale search
+           cannot demote below 1. Scale is pinned to 1 explicitly so the
+           destination is the rotated frame with nothing added. */
+        koboy_config rc; config_defaults(&rc);
+        rc.scale = 1; rc.scale_explicit = true;
+        koboy_profile rp;
+        CHECK(config_resolve_profile(&rp, &rc, 1264, 1680, 4, 2, 4, 4));
+        CHECK_EQ_INT(rp.scale, 1);
+
+        /* Expected destinations, derived from libretro's own definition (the
+           value is 90-degree COUNTER-CLOCKWISE steps) and NOT from the
+           implementation:
+             rot 0 -> 4x2, unchanged
+             rot 1 -> 2x4, out[y][x] = src[x][3-y]
+             rot 2 -> 4x2, out[y][x] = src[1-y][3-x]
+             rot 3 -> 2x4, out[y][x] = src[1-x][y]            */
+        for (int rot = 0; rot < 4; rot++) {
+            koboy_video *rv = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            CHECK(rv != NULL);
+            video_set_rotation(rv, rot);
+            CHECK_EQ_INT(video_get_rotation(rv), rot);
+
+            koboy_rect rr = video_submit(rv, src, 4, 2,
+                                         4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            CHECK(rr.w > 0);          /* the frame must not have been dropped */
+
+            koboy_rect fit; video_frame_rect(rv, &fit);
+            const int ew = (rot & 1) ? 2 : 4;
+            const int eh = (rot & 1) ? 4 : 2;
+            CHECK_EQ_INT(fit.w, ew);
+            CHECK_EQ_INT(fit.h, eh);
+
+            const uint8_t *out = video_buffer(rv);
+            const int st = video_stride(rv);
+            for (int y = 0; y < eh; y++)
+                for (int x = 0; x < ew; x++) {
+                    int want;
+                    switch (rot) {
+                    case 0:  want = SRC[y][x];            break;
+                    case 1:  want = SRC[x][3 - y];        break;
+                    case 2:  want = SRC[1 - y][3 - x];    break;
+                    default: want = SRC[1 - x][y];        break;
+                    }
+                    CHECK_EQ_INT(out[(size_t)(fit.y + y) * st + fit.x + x],
+                                 lvl[want]);
+                }
+            video_destroy(rv);
+        }
+
+        /* THE BOUND IS CHECKED AGAINST THE ROTATED SIZE, and this is the case
+           that separates a working rotation from one that silently presents
+           nothing. The profile's max is what core_get_geometry reported --
+           ALREADY transposed -- so for a quarter-turned board it is 2x4 while
+           the core's own frame is 4x2. A guard comparing the core's w/h
+           against that max rejects 4 > 2 and drops EVERY FRAME: a black game
+           rect, which looks like a broken core rather than a broken
+           front-end.
+
+           Built at max 2x4 (not the square above) precisely so the two
+           comparisons disagree. */
+        {
+            koboy_config tc; config_defaults(&tc);
+            tc.scale = 1; tc.scale_explicit = true;
+            koboy_profile tp;
+            CHECK(config_resolve_profile(&tp, &tc, 1264, 1680, 2, 4, 2, 4));
+            koboy_video *tv = video_create(&tp, false, KOBOY_GRAY_DEFAULT);
+            CHECK(tv != NULL);
+            video_set_rotation(tv, 3);
+            koboy_rect tr = video_submit(tv, src, 4, 2,
+                                         4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            CHECK(tr.w > 0);
+            /* And the mirror image: at rot 0 the SAME frame does not fit that
+               same profile and must be refused, so the guard is still a guard
+               rather than having been deleted. */
+            video_invalidate(tv);
+            video_set_rotation(tv, 0);
+            koboy_rect tr0 = video_submit(tv, src, 4, 2,
+                                          4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            CHECK_EQ_INT(tr0.w, 0);
+            video_destroy(tv);
+        }
+
+        /* Rotation is not a no-op that happens to produce the right size: a
+           rot-1 and a rot-3 render of the same frame must DIFFER. An
+           implementation that transposed without reflecting -- the easiest
+           thing to get wrong, and invisible on a symmetric test pattern --
+           produces identical output for both. */
+        {
+            koboy_video *a = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            koboy_video *b = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            CHECK(a && b);
+            video_set_rotation(a, 1);
+            video_set_rotation(b, 3);
+            video_submit(a, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            video_submit(b, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            size_t n = (size_t)video_stride(a) * (size_t)rp.game_h;
+            CHECK(memcmp(video_buffer(a), video_buffer(b), n) != 0);
+            video_destroy(a); video_destroy(b);
+        }
+
+        /* And rot 0 leaves the pipeline BYTE FOR BYTE what it was before
+           rotation existed -- the property every other core koboy ships
+           depends on. Compared against a koboy_video that was never told
+           about rotation at all, not against a second one set to 0, so a
+           video_set_rotation that corrupted state on the way to 0 is caught
+           too. */
+        {
+            koboy_video *a = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            koboy_video *b = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            CHECK(a && b);
+            video_set_rotation(a, 0);
+            video_submit(a, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            video_submit(b, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            size_t n = (size_t)video_stride(a) * (size_t)rp.game_h;
+            CHECK_EQ_INT(memcmp(video_buffer(a), video_buffer(b), n), 0);
+            CHECK_EQ_INT(video_get_rotation(b), 0);   /* the default */
+            video_destroy(a); video_destroy(b);
+        }
+    }
 })
 
 

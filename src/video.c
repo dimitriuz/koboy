@@ -517,6 +517,11 @@ struct koboy_video {
        chose the other pixel format would render differently from one that
        chose RGB565. */
     koboy_gray_map map;
+    /* Quarter turns counter-clockwise to apply to each incoming frame, 0..3.
+       See video_set_rotation. 0 for every core that has ever run through this
+       pipeline before FinalBurn Neo, and the rot == 0 path below is byte for
+       byte the loop that existed before this field did. */
+    int      rot;
 };
 
 /* Largest integer scale at which a src_w x src_h frame fits the reserved rect,
@@ -646,6 +651,28 @@ koboy_video *video_create(const koboy_profile *p, bool force_dither,
     return v;
 }
 
+void video_set_rotation(koboy_video *v, int rot)
+{
+    if (!v) return;
+    /* Masked, not validated: 0..3 is the whole domain (see core.c, which
+       masks the core's answer the same way), and a caller that computed 4
+       means 0. */
+    v->rot = rot & 3;
+    /* NOT invalidating prev here, deliberately. This is called immediately
+       after video_create, whose prev is already seeded to an impossible
+       value so the first frame is fully dirty -- and it is called nowhere
+       else, because a rotation change arrives bundled with a geometry change
+       (core.c sets geom_dirty for it) and main.c answers that by destroying
+       and rebuilding the whole koboy_video. If a caller ever does flip this
+       on a live pipeline, it owes video_invalidate afterwards: every pixel
+       moves, and prev would otherwise claim most of them did not. */
+}
+
+int video_get_rotation(const koboy_video *v)
+{
+    return v ? v->rot : 0;
+}
+
 void video_set_gray_map(koboy_video *v, koboy_gray_map map)
 {
     if (!v || v->map == map) return;     /* rebuilding an identical LUT is pure cost */
@@ -698,18 +725,93 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
        broken core, not a koboy bug, and dropping the frame is the correct
        response -- the alternative is scribbling into whatever memory follows
        the buffer. */
-    if (src_w < 1 || src_h < 1 || src_w > v->p.max_w || src_h > v->p.max_h) return false;
+    /* The bound is checked against the PRESENTED size, not the buffer the core
+       handed over, because the presented size is what every buffer here was
+       allocated for: config_resolve_profile was given core_get_geometry's
+       already-transposed max (see core.h), so for a quarter-turned board
+       p.max_w/max_h are 224x288 while the core's own frame is 288x224.
+       Comparing the un-rotated w/h against them would reject every frame of
+       Galaga -- a black game rect, not a crash, which is the worse of the two
+       failures because it looks like a broken core. */
+    const int fw = (v->rot & 1) ? src_h : src_w;   /* frame width  as presented */
+    const int fh = (v->rot & 1) ? src_w : src_h;   /* frame height as presented */
+    if (fw < 1 || fh < 1 || fw > v->p.max_w || fh > v->p.max_h) return false;
 
-    for (int y = 0; y < src_h; y++) {
-        uint8_t *d = v->gray + (size_t)y * v->p.max_w;
-        if (fmt == KOBOY_PIXFMT_RGB565) {
-            const uint16_t *s = (const uint16_t *)((const uint8_t *)src + (size_t)y * src_pitch);
-            for (int x = 0; x < src_w; x++) d[x] = v->lut[s[x]];
-        } else {
-            const uint32_t *s = (const uint32_t *)((const uint8_t *)src + (size_t)y * src_pitch);
-            for (int x = 0; x < src_w; x++) d[x] = video_xrgb8888_to_gray(s[x], v->map);
-        }
+    /* rot == 0 is the pre-existing loop, unchanged and still the only path any
+       core but FinalBurn Neo takes -- kept as its own branch rather than
+       folded into a general addressing scheme, because this is the stage
+       CLAUDE.md names as the pipeline's measured bottleneck (17 ms of a 23 ms
+       frame) and a per-pixel indirection bought for a case nobody takes is
+       exactly the wrong trade here.
+
+       The three turning branches all write `d` SEQUENTIALLY and read the
+       source strided, rather than the other way round. That is the cheaper
+       half to make cache-hostile: the write side is a linear run the store
+       buffer absorbs, while a strided WRITE would dirty a fresh cache line
+       per pixel. The strided reads stay cheap in practice because a source
+       column is one byte-pair every src_pitch and the whole source of a
+       pre-1990 board is ~130 KB -- a Cortex-A9's L1 holds a column's worth of
+       lines and the next column reuses every one of them.
+
+       Rotation is COUNTER-CLOCKWISE quarter turns, matching libretro's
+       SET_ROTATION (see libretro_min.h). Derivations, with (W,H) the source's
+       own width and height:
+         rot 1  out is (H,W):  out[y][x] = src[x][W-1-y]
+         rot 2  out is (W,H):  out[y][x] = src[H-1-y][W-1-x]
+         rot 3  out is (H,W):  out[y][x] = src[H-1-x][y]
+       Verified against a rendered Galaga frame, not derived and trusted: at
+       rot 3 the score line reads left-to-right along the top and "CREDIT 0"
+       sits at the bottom; at rot 1 the same frame is upside down. */
+#define KOBOY_ROT_LOOP(TYPE, CONVERT)                                          \
+    do {                                                                       \
+        const uint8_t *base = (const uint8_t *)src;                            \
+        for (int y = 0; y < fh; y++) {                                         \
+            uint8_t *d = v->gray + (size_t)y * v->p.max_w;                     \
+            switch (v->rot) {                                                  \
+            case 0: {                                                          \
+                const TYPE *s = (const TYPE *)(base + (size_t)y * src_pitch);  \
+                for (int x = 0; x < fw; x++) d[x] = CONVERT(s[x]);             \
+            } break;                                                           \
+            case 1: {                                                          \
+                const int sx = src_w - 1 - y;                                  \
+                for (int x = 0; x < fw; x++) {                                 \
+                    const TYPE *s = (const TYPE *)(base + (size_t)x * src_pitch); \
+                    d[x] = CONVERT(s[sx]);                                     \
+                }                                                              \
+            } break;                                                           \
+            case 2: {                                                          \
+                const TYPE *s = (const TYPE *)(base + (size_t)(src_h - 1 - y) * src_pitch); \
+                for (int x = 0; x < fw; x++) d[x] = CONVERT(s[src_w - 1 - x]); \
+            } break;                                                           \
+            default: {                                                         \
+                for (int x = 0; x < fw; x++) {                                 \
+                    const TYPE *s = (const TYPE *)(base + (size_t)(src_h - 1 - x) * src_pitch); \
+                    d[x] = CONVERT(s[y]);                                      \
+                }                                                              \
+            } break;                                                           \
+            }                                                                  \
+        }                                                                      \
+    } while (0)
+
+    if (fmt == KOBOY_PIXFMT_RGB565) {
+#define KOBOY_CONV565(px) v->lut[(px)]
+        KOBOY_ROT_LOOP(uint16_t, KOBOY_CONV565);
+#undef KOBOY_CONV565
+    } else {
+#define KOBOY_CONV8888(px) video_xrgb8888_to_gray((px), v->map)
+        KOBOY_ROT_LOOP(uint32_t, KOBOY_CONV8888);
+#undef KOBOY_CONV8888
     }
+#undef KOBOY_ROT_LOOP
+
+    /* From here down the frame IS fw x fh: every consumer below -- the fit,
+       the margin-clear trigger, the quantiser's extent -- is talking about the
+       picture as it will be shown, and the core's own orientation has done its
+       last job. Rebinding the two names rather than editing a dozen call sites
+       is deliberate: it makes the rot == 0 case textually identical to what
+       was here before. */
+    src_w = fw;
+    src_h = fh;
 
     /* Fitted and centred in the reserved rect, not parked in its top-left.
        See video_fit: at max geometry this is p.scale at offset (0,0) -- the

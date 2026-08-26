@@ -74,9 +74,26 @@ koboy_pixfmt core_pixfmt(const koboy_core *c);
    arrives, not to duplicate what the frame callback already reports.
    Returns false, and leaves the outputs untouched, if no ROM has been loaded
    yet -- there is no honest geometry to report before retro_load_game has
-   run. */
+   run.
+
+   ROTATION IS ALREADY APPLIED to the numbers this returns. A core may ask,
+   through RETRO_ENVIRONMENT_SET_ROTATION, for its frames to be turned a
+   quarter of a turn before they are shown -- every golden-age arcade board
+   whose monitor was mounted on its side does, because FinalBurn Neo renders
+   Galaga into a 288x224 buffer that is meant to be seen as 224x288. This
+   function reports the PRESENTED size (224x288), not the buffer size, so
+   that nothing downstream has to remember the difference. core_rotation
+   below is how a caller finds out that a difference exists at all. */
 bool core_get_geometry(const koboy_core *c, int *base_w, int *base_h,
                        int *max_w, int *max_h);
+
+/* Quarter turns counter-clockwise the core has asked for, 0..3. Per GAME,
+   not per core: FBNeo answers 3 for Galaga and 0 for Donkey Kong Jr. out of
+   the same .so, and core_unload_rom clears it so the next ROM through a
+   reused handle starts from none. The one caller that needs it is main.c,
+   which hands it to video_set_rotation -- video.c is where the turn actually
+   happens. */
+unsigned core_rotation(const koboy_core *c);
 
 /* True the first time this is called since a SET_GEOMETRY/SET_SYSTEM_AV_INFO
    environ call last changed core_get_geometry's answer, and false on every

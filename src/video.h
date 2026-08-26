@@ -183,6 +183,20 @@ koboy_video   *video_create(const koboy_profile *p, bool force_dither,
    half-old, half-new frame that persists until something else happens to touch
    those tiles. main.c's return-from-MODE_MENU path already invalidates
    unconditionally, which is why the menu entry does not have to. */
+/* Quarter turns COUNTER-CLOCKWISE to apply to every frame this pipeline is
+   handed, 0..3, matching RETRO_ENVIRONMENT_SET_ROTATION. Defaults to 0, which
+   is byte-for-byte the behaviour that existed before rotation did.
+
+   Set it right after video_create and leave it alone: the profile this
+   koboy_video was built from was itself resolved from ALREADY-TRANSPOSED
+   geometry (core_get_geometry does the swap), so the rotation and the buffer
+   dimensions have to agree, and the way they are kept agreeing is that a
+   change to either destroys and rebuilds the koboy_video. Flipping it on a
+   live pipeline without a video_invalidate would leave prev claiming that
+   pixels which all moved did not. */
+void           video_set_rotation(koboy_video *v, int rot);
+int            video_get_rotation(const koboy_video *v);
+
 void           video_set_gray_map(koboy_video *v, koboy_gray_map map);
 koboy_gray_map video_get_gray_map(const koboy_video *v);
 void           video_destroy(koboy_video *v);

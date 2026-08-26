@@ -53,6 +53,12 @@ struct koboy_core {
     /* See core_geometry_changed. Left false by the initial core_load_rom
        query on purpose -- only env_cb's two geometry commands set it. */
     bool    geom_dirty;
+    /* Quarter turns COUNTER-CLOCKWISE the core has asked the frontend to
+       apply to every frame, 0..3, from RETRO_ENVIRONMENT_SET_ROTATION.
+       Announced per GAME rather than per core -- FinalBurn Neo asks for 3 on
+       Galaga and 0 on Donkey Kong Jr. -- so this is reset with the core's
+       handle and set again from inside each retro_load_game. */
+    unsigned rot;
     /* The save-RAM region's LENGTH, captured once by core_load_rom and never
        re-asked. See core_sram for why the length is load-once while the
        pointer is not. 0 until a ROM has loaded, and back to 0 on unload. */
@@ -143,6 +149,37 @@ static bool env_cb(unsigned cmd, void *data)
             v->value = "Monochrome Vector"; return true;
         }
         v->value = NULL; return false;
+    }
+    case RETRO_ENVIRONMENT_SET_ROTATION: {
+        /* ANSWERING TRUE IS A PROMISE, not an acknowledgement, and one core
+           koboy already ships reads it as one. libretro's contract is that a
+           frontend returning true will itself turn the picture; a frontend
+           returning false leaves the core to cope. beetle-wswan asks this
+           question at surface-init time and REMEMBERS THE ANSWER
+           (third_party/wswan/libretro.c, hw_rotate_enabled): on false it
+           allocates a second buffer and rotates every frame in software, and
+           on true it stops doing that and reports its geometry in the
+           orientation it is actually rendering. So this handler could not be
+           added as a no-op that merely records a number -- the moment it
+           returns true, a WonderSwan's frames arrive un-rotated and koboy
+           owes the rotation. video_pipeline_run pays it.
+
+           Values outside 0..3 are masked rather than rejected: the field is
+           documented as quarter turns and every core in reach sends 0-3, but
+           a stray 4 would index nothing sensible downstream and masking is
+           cheaper than a second failure mode.
+
+           geom_dirty because the PRESENTED geometry is what core_get_geometry
+           reports and an odd rotation transposes it -- a core that changes
+           rotation without also changing base/max (none seen, but the
+           WonderSwan changes both in the same breath and the order is its
+           business, not ours) still needs main.c to re-fit the rect. */
+        unsigned r = *(const unsigned *)data & 3u;
+        if (r != g_active->rot) {
+            g_active->rot = r;
+            g_active->geom_dirty = true;
+        }
+        return true;
     }
     case RETRO_ENVIRONMENT_SET_GEOMETRY: {
         /* A PARTIAL update, by libretro convention: only base_width/height
@@ -429,6 +466,12 @@ bool core_unload_rom(koboy_core *c)
     /* Cleared with the game, not left stale: retro_unload_game takes the
        buffer this length described, and the next cartridge's is its own. */
     c->sram_len = 0;
+    /* Same reasoning, and it is not hypothetical: MENU -> CHOOSE ROM reuses
+       one open core handle for the next game, and FinalBurn Neo asks for a
+       rotation PER GAME. Leaving Galaga's quarter turn behind would present
+       the next board sideways -- and Donkey Kong Jr., which asks for none,
+       never sends a SET_ROTATION to correct it. */
+    c->rot = 0;
     return true;
 }
 
@@ -534,11 +577,32 @@ bool core_get_geometry(const koboy_core *c, int *base_w, int *base_h,
                        int *max_w, int *max_h)
 {
     if (!c || !c->game_loaded) return false;   /* nothing honest to report yet */
-    if (base_w) *base_w = c->base_w;
-    if (base_h) *base_h = c->base_h;
-    if (max_w)  *max_w  = c->max_w;
-    if (max_h)  *max_h  = c->max_h;
+    /* TRANSPOSED for an odd rotation, and that is the whole point of putting
+       the swap HERE rather than in each of this function's callers. Every
+       consumer of this answer -- config_resolve_profile's scale search,
+       chrome's reserved rect, video_create's buffer sizing, main.c's
+       "geometry settled" log line -- wants the size of the picture AS IT WILL
+       BE PRESENTED, not the size of the buffer the core happens to render
+       into. A quarter turn makes those two different for the first time
+       (Galaga: a 288x224 buffer presented as 224x288), and every one of those
+       consumers would otherwise have to remember to transpose it itself. One
+       of them forgetting is a rect laid out for the wrong shape, which is
+       exactly the class of bug this project keeps paying for.
+
+       The frame callback still reports the core's own un-rotated w/h, which
+       is correct and deliberate: video_pipeline_run is the one place that
+       sees both, and it is where the rotation is actually performed. */
+    bool swap = (c->rot & 1u) != 0;
+    if (base_w) *base_w = swap ? c->base_h : c->base_w;
+    if (base_h) *base_h = swap ? c->base_w : c->base_h;
+    if (max_w)  *max_w  = swap ? c->max_h  : c->max_w;
+    if (max_h)  *max_h  = swap ? c->max_w  : c->max_h;
     return true;
+}
+
+unsigned core_rotation(const koboy_core *c)
+{
+    return c ? c->rot : 0u;
 }
 
 bool core_geometry_changed(koboy_core *c)
