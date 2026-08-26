@@ -6,9 +6,13 @@ panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
 **v1 is merged and verified on real hardware** (a Kobo Libra 2, playing Tetris
 and an action platformer, exiting to a working Nickel without a reboot).
-**v2-core (the ROM browser, in-game MENU, save states) cross-builds cleanly
-with a verified dependency closure, but has not run on a device** — no Kobo
-was attached for any of that plan. See "Known unfinished".
+**v2-core has run on the same device, but only partially:** a 2026-08-26
+session ran `koboy` directly with `--frames` over ssh (never through
+`scripts/koboy.sh`, so Nickel stayed up), which verified the core, the
+cartridge-SRAM save path (including its destructive-truncation fix), and the
+ROM browser via `--ui-script`, plus real per-stage timing on a real panel.
+The takeover, touch d-pad, in-game MENU and save *states* have still not run
+on hardware. See "Known unfinished".
 
 ## Build and test
 
@@ -102,9 +106,9 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 22 deferred findings (16 from v1, 6 from v2-core), ordered by what bites first. Start here for the next session's scope. |
+| `docs/FOLLOWUPS.md` | 24 deferred findings (16 from v1, 8 from v2-core), ordered by what bites first. Start here for the next session's scope. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
-| `TESTED.md` | The device matrix. Exactly one device is verified, and none of v2-core has run on it yet. |
+| `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
 | `docs/probe-readme.md` | Profiling a device nobody has tried. |
 
@@ -125,6 +129,17 @@ spec's appendices are the record; the short version:
 - **Refresh cost scales with area**, so dirty rectangles pay for themselves, and
   non-blocking submission beats blocking by ~2.6x. The main loop never waits for
   completion.
+- **The design spec's "emulation is cheap; presentation is the entire
+  bottleneck" premise is wrong about where the cost is.** Measured on-device
+  (Zelda, scale 5, `present_divisor = 3`): core 2.3 ms, blit 2.8 ms, refresh
+  0.4-0.75 ms — but `video_submit` (the RGB565->gray LUT, integer scale,
+  quantise and 8x8-tile diff, `src/video.c`) is **17.0 ms**, roughly 5x the
+  other three stages combined. It is neither emulation nor presentation
+  (panel refresh) — it is the pixel pipeline between them, and it is the
+  actual bottleneck. Confirmed pixel-bound by a render-scale sweep (submit
+  time scales ~4.7 ms + 20.7 ns/px). v2-core's multi-rect work optimised
+  `refresh`, already the cheapest stage; `video_submit` is where the next
+  optimisation belongs. See `docs/FOLLOWUPS.md` #23.
 - Scale 5 with a procedural faceplate, not full-width 7x.
 - `viewVertOrigin` is **not** a blit offset.
 - "Grab the buttons but not power" is impossible: they share `gpio-keys`.
@@ -152,21 +167,32 @@ hiding.
 
 ## Known unfinished
 
-- **The save path has never run on hardware.** Both tested titles report
-  `rambanks: 0` (no battery SRAM). Still true after v2-core: a battery-save
-  verification was planned for this cycle and did not happen because no
-  device was attached for the whole plan. Needs a battery-save game (a
-  Zelda, Pokemon, or Kirby's Dream Land 2). Save *states* (`state.c`,
-  `safefile.c` — a different mechanism from cartridge SRAM) are likewise
-  untested on hardware; see the next point.
-- **One verified device, and none of v2-core has run on it.** The Libra 2 row
-  in `TESTED.md` predates the ROM browser, the in-game MENU, save states and
-  the redrawn faceplate. `make kobo` cross-builds cleanly and
-  `scripts/verify-core.sh` confirms the dependency closure, but "builds and
-  links" is not "runs on a panel". Everything else is unmeasured, not known
-  broken.
-- `refresh_fixed_tiles` ships at a starting guess (40), not a measured value —
-  see `config/koboy.ini` and `TESTED.md`.
+- **The save path (cartridge SRAM) has now run on hardware, and the
+  destructive-truncation bug it was carried to test has been proven fixed.**
+  2026-08-26 device session: Zelda (cart type `0x03`, `rambanks: 1`, the
+  first battery-backed title this project has run — both prior titles were
+  `rambanks: 0`) verified write, read round-trip (md5-identical), and the
+  truncated-`.srm` destructive path, which left the file at its truncated
+  size instead of destroying it further. See `docs/FOLLOWUPS.md` #3
+  (closed) for the numbers. **Save *states*** (`state.c`, `safefile.c` — a
+  different mechanism from cartridge SRAM, reached through `MODE_MENU`) are
+  a separate code path and remain untested on hardware: this session drove
+  the ROM browser only, via `--ui-script`, never `MODE_MENU`.
+- **One verified device, and v2-core's UI layer has run on it only partially.**
+  The 2026-08-26 session ran the `koboy` binary directly with `--frames` over
+  ssh — never through `scripts/koboy.sh`, so Nickel was never stopped and the
+  takeover, touch d-pad, in-game MENU, and the ROM browser's real touch input
+  were **not** exercised. The ROM browser itself did run, driven by
+  `--ui-script` against a real directory listing, and device identification
+  (panel size, stride, waveform) was correct. Still needed: a NickelMenu
+  playtest with real touch input, exercising the takeover and `MODE_MENU`.
+  See `TESTED.md`.
+- `refresh_fixed_tiles` ships at a starting guess (40), still not a validated
+  value: an on-device sweep (20/40/80/split-off) found 20/40/80
+  behaviourally identical on real content, which the measurement method
+  cannot distinguish further — see `docs/FOLLOWUPS.md` #24 for why the
+  in-process timer can't see the panel-side cost the setting is meant to
+  amortise. `config/koboy.ini` and `TESTED.md` have the detail.
 - ~~`dpad_mode = cross` has no test distinguishing it from RELATIVE~~ — fixed:
   `tests/test_input_touch.c` (search `#1`) now asserts the actual distinction
   (a tap anywhere in the pad steers under CROSS; the same tap reports no

@@ -24,9 +24,29 @@ Ordered by what would actually bite first.
    axis depends on an untested path. Irrelevant on the verified Libra 2,
    load-bearing on hardware nobody has tried.
 
-3. **The save path is unexercised on hardware.** Both titles tested (Tetris,
-   Darkwing Duck) report `rambanks: 0` — no battery SRAM. `sram_load` changed
-   materially in the final fix round, so this wants a battery-save game.
+3. ~~**The save path is unexercised on hardware.**~~ CLOSED, 2026-08-26 device
+   session. `Legend of Zelda, The - Link's Awakening (USA, Europe) (Rev 2).gb`
+   (cart type `0x03`, MBC1+RAM+BATTERY) is the first title this project has
+   run with `rambanks: 1` — both Tetris and Darkwing Duck report `rambanks:
+   0`. All three directions verified on the Libra 2, binary run directly
+   with `--frames` over ssh (Nickel not stopped — see the caveat on this in
+   `TESTED.md`, but `sram_save`/`sram_load` and the panel draw do not depend
+   on the input grab):
+   - **Write:** `sram_save` produced `saves/zelda.srm` at exactly 8192 bytes.
+   - **Read:** a marked save round-tripped intact — md5
+     `daa6696c5da463305bdec570cdad2a82` identical before and after a run,
+     `koboy: loaded .../zelda.srm` in the log.
+   - **The destructive path:** the `.srm` truncated to 100 bytes reproduced
+     the exact failure `src/main.c:650`'s comment describes — "could not be
+     read whole; SRAM left as the core initialised it and saving is disabled
+     this session" — drawn on the panel, and the file was **left at 100
+     bytes** rather than being overwritten with a fresh/short save. This is
+     the truncated-save-destroys-itself bug the comment records, now proven
+     fixed on real hardware rather than by inspection.
+   Save **states** (`state.c`/`safefile.c` — a different mechanism from
+   cartridge SRAM) are not covered by this and remain untested on hardware —
+   this session drove the ROM browser via `--ui-script` only (item 18 covers
+   `MODE_MENU`'s wider coverage gap, which save/load-state goes through).
 
 4. **`force_dither = true` never runs end-to-end.** `tests/test_video_pipeline.c:19`,
    `src/video.c:191-195`. The dither component is well tested directly; the
@@ -160,3 +180,42 @@ deliberately deferred, not a known live bug.
     partially overlap, and every downstream consumer (`blit_gray8`, `refresh`)
     redoes that overlap's area twice. Coverage is unaffected -- a union only
     grows -- so this is a cost, not a correctness bug.
+
+23. **`video_submit` is the real optimisation target, not "presentation."**
+    2026-08-26 device session, Zelda at scale 5, `present_divisor = 3`,
+    per-stage means: core 2.3 ms, **submit 17.0 ms**, blit 2.8 ms, refresh
+    0.4-0.75 ms (max 29.2 ms, the fixed cost + unreliable-timing spread
+    `TESTED.md` already documents). `video_submit` -- the RGB565->gray LUT,
+    integer scale, quantise and 8x8-tile diff, `src/video.c` -- dominates the
+    other three stages combined by roughly 5x. That contradicts the v1
+    design spec §5's stated premise ("Emulation is cheap; presentation is
+    the entire bottleneck"): `video_submit` is neither emulation nor
+    presentation (panel refresh) in that dichotomy, it is the pixel pipeline
+    sitting between them, and it is the bottleneck. Confirmed pixel-bound by
+    a render-scale sweep (submit time only): scale 3 / 207,360 px / 8,997
+    µs, scale 4 / 368,640 px / 12,462 µs, scale 5 / 576,000 px / 16,639 µs --
+    linear fit `submit ~= 4.7 ms + 20.7 ns/px` predicts the scale-4 point
+    within 1%. v2-core's multi-rect work (§7 of the v2 design spec) reduces
+    `refresh`, which this measurement shows is already the cheapest of the
+    four stages -- the optimisation that would actually move the needle is
+    in `video_submit`'s per-pixel work, unstarted.
+
+24. **`refresh_fixed_tiles` tuning (20 vs 40 vs 80 vs split-off) is
+    inconclusive by construction, not just unmeasured.** 2026-08-26 device
+    session, same Zelda run, `--frames 900`: 20/40/80 all produced the same
+    339 rects over 292 frames (604 / 750 / 488 µs mean `refresh`) --
+    behaviourally identical on real content, exactly as a host reviewer
+    predicted from the code before any device was available. Splitting off
+    entirely (100000) dropped to 292 rects / 368 µs, which is the expected
+    mechanical cost of one ioctl per extra rect, not evidence against
+    splitting. The reason none of this settles the tuning question: refresh
+    submission is non-blocking by design (see "What the hardware overruled"
+    in `CLAUDE.md`), so the in-process `refresh` timer measures submission
+    only, never the panel's actual asynchronous work -- which is what the
+    fixed-cost-per-rect model in the v2 design spec §7 is actually trying to
+    amortise. Measuring the real benefit needs blocking refreshes, and this
+    device reports `unreliable_wait_for=1`, which applies to exactly the
+    ioctl a blocking measurement waits on -- so those figures would be
+    suspect by construction too. `refresh_fixed_tiles` stays shipped at 40
+    (the untuned starting guess) with this recorded as a limit of the
+    measurement method, not a verdict on the split heuristic.

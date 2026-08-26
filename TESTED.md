@@ -124,29 +124,119 @@ What did reproduce across sessions, and is what the design actually rests on:
   mechanism KOReader has used across many firmware versions, but it has been
   exercised on exactly one.
 
-## v2: still no device attached
+## v2-core: first device session, 2026-08-26
 
-Everything added since the row above -- the ROM browser, the in-game MENU,
-save states, the redrawn faceplate -- was built and reviewed with no Kobo
-plugged in for the entire plan. None of it has run on the Libra 2 or anything
-else. Specifically, and stated plainly rather than implied by omission:
+Same device as the row above (Kobo Libra 2, `Io`, Mark 9, firmware
+4.38.23684), over ssh. One finding for the workflow doc first: **this device
+does not answer ping** -- it has to be found by probing port 22, not with a
+ping sweep. Cost time this session; recorded in `docs/device-workflow.md`.
 
-- **The save path (battery-backed cartridge SRAM) has still never run on
-  hardware.** Both titles tested on the Libra 2 (Tetris, Darkwing Duck) report
-  `rambanks: 0`; a Zelda/Pokemon/Kirby's-Dream-Land-2-class SRAM verification
-  was planned for this cycle and did not happen -- no device was available.
-  This is unchanged from the paragraph above it, not a new finding.
-- **`refresh_fixed_tiles` ships at its default (40), not a measured value.**
-  The on-device tuning run that would pin it down (sweeping 20/40/80 and
-  reading the `stages`/`rects` lines back out of `koboy.log`) has not
-  happened. 40 is a starting guess; see the comment beside it in
-  `config/koboy.ini` and `config_defaults` in `src/config.c`.
-- **Save states, the MENU, and the ROM browser are exercised only by host
-  tests and `--ui-script`-driven runs**, none of them on a real panel or real
-  evdev nodes. `MODE_MENU`'s interactive branches in particular are verified
-  by construction (the code path is exercised, its on-panel behaviour is not)
-  -- see `docs/FOLLOWUPS.md`.
+### Method, and its limits
 
-The next device session should prioritise, in order: an SRAM-backed title (the
-one gap that predates v2), then `refresh_fixed_tiles`, then an actual play
-session through the browser and MENU.
+The v2 dist was deployed and the `koboy` binary was run **directly with
+`--frames`**, never through `scripts/koboy.sh`. That means **Nickel was never
+stopped**, so the takeover, the touch d-pad, the in-game MENU, and the ROM
+browser's real touch input were **not** exercised. The browser was driven
+only by `--ui-script`. A NickelMenu playtest with real touch input has still
+not happened.
+
+Device integrity held throughout: `/mnt/onboard/.kobo/version` byte-identical
+before and after (real serial `N4181B1025136` intact), FBInk still reporting
+`deviceName='Libra 2'`, `devicePlatform='Mark 9'`, `hasEclipseWfm=1`, Nickel
+alive, no reboot needed. The device's own calibration is still reversed
+(`key_a = 194`, `key_b = 193`) and was carried forward from the v1 ini during
+deployment, per the workflow doc's redeploy caveat.
+
+### The save path ran on hardware for the first time (FOLLOWUPS #3, closed)
+
+ROM: `Legend of Zelda, The - Link's Awakening (USA, Europe) (Rev 2).gb`,
+cartridge type `0x03` (MBC1+RAM+BATTERY), RAM size `0x02`. Gambatte reported
+**`rambanks: 1`** -- the first cartridge with battery SRAM this project has
+ever run; both Tetris and Darkwing Duck (above) are `rambanks: 0`.
+
+Three directions verified:
+
+- **Write:** `sram_save` produced `saves/zelda.srm` at exactly 8192 bytes.
+- **Read:** a marked save round-tripped intact -- md5
+  `daa6696c5da463305bdec570cdad2a82` identical before and after a run, with
+  `koboy: loaded .../zelda.srm` in the log.
+- **The destructive path:** truncated to 100 bytes, koboy reported "could not
+  be read whole; SRAM left as the core initialised it and saving is disabled
+  this session", drew the message on the panel, and **left the file at 100
+  bytes**. That is the exact bug `src/main.c`'s comment records -- loading a
+  truncated save used to destroy it further -- now proven fixed on real
+  hardware.
+
+Save **states** (`state.c`/`safefile.c`, a different mechanism reached
+through `MODE_MENU`) are not covered by this: this session never exercised
+`MODE_MENU`, so save states remain untested on hardware.
+
+### A measurement that overturns a spec premise: `video_submit`, not "presentation," is the bottleneck
+
+The v1 design spec §5 says *"Emulation is cheap; presentation is the entire
+bottleneck."* Measured per presented frame at scale 5, Zelda,
+`present_divisor = 3`:
+
+| stage | mean | max |
+|---|---|---|
+| core (emulation) | 2.3 ms | 12.8 ms |
+| **submit (pixel pipeline)** | **17.0 ms** | 44.8 ms |
+| blit | 2.8 ms | 13.4 ms |
+| refresh (submission) | 0.4-0.75 ms | 29.2 ms |
+
+`video_submit` -- the RGB565->gray LUT, integer scale, quantise and 8x8 tile
+diff -- dominates everything else combined by roughly 5x, and it is
+**neither** "emulation" **nor** "presentation" in the spec's dichotomy: it is
+the pixel pipeline sitting between the two. Confirmed pixel-bound by a
+render-scale sweep (submit time only):
+
+| scale | output px | submit |
+|---|---|---|
+| 3 | 207,360 | 8,997 µs |
+| 4 | 368,640 | 12,462 µs |
+| 5 | 576,000 | 16,639 µs |
+
+Linear fit `submit ≈ 4.7 ms + 20.7 ns/px` predicts the scale-4 point within
+1%. v2-core's multi-rect dirty-region work optimised `refresh` -- this
+measurement shows `refresh` was already the cheapest of the four stages by a
+wide margin. `video_submit` is where the next optimisation belongs; see
+`docs/FOLLOWUPS.md` #23.
+
+### `refresh_fixed_tiles` tuning: inconclusive by construction
+
+Same ROM, same frame count, `--frames 900`:
+
+| `refresh_fixed_tiles` | rects / frames | refresh mean |
+|---|---|---|
+| 20 | 339 / 292 | 604 µs |
+| 40 (shipped) | 339 / 292 | 750 µs |
+| 80 | 339 / 292 | 488 µs |
+| 100000 (splitting off) | 292 / 292 | 368 µs |
+
+20/40/80 are **behaviourally identical on real content** -- exactly what a
+host reviewer predicted from the code before any device was available.
+Splitting is measurably more expensive to *submit* (368 µs with it off vs
+488-750 µs on), which is mechanical: each extra rect is another ioctl.
+
+**But the in-process metric cannot see what the cost model actually
+optimises.** Refreshes are non-blocking by design (see the ratios below), so
+`refresh` times the *submission*, not the panel's work, which happens
+asynchronously afterwards. Measuring the real benefit would need blocking
+refreshes -- and this device reports `unreliable_wait_for=1`, so those
+figures are suspect by construction. This is a **limit of the measurement**,
+not a verdict on the split feature. `refresh_fixed_tiles` stays shipped at 40
+(the untuned starting guess), unvalidated against actual panel time; see
+`docs/FOLLOWUPS.md` #24.
+
+### First on-device run of the v2 UI layer
+
+The ROM browser works on the real panel: `koboy: chose
+/mnt/onboard/.adds/koboy/roms/zelda.gb` from a real directory listing, driven
+by `--ui-script`. Device identification was correct throughout: `Libra 2 (id
+388, Io, Mark 9), 1264x1680 @ 32bpp, stride 5120 bytes (1280 px), origin
+(0,0), fast=AUTO`, resolving to `scale 5, game 800x720 at (232,84)`.
+
+The next device session should prioritise, in order: a NickelMenu playtest
+with real touch input (the takeover, the touch d-pad, `MODE_MENU`'s
+interactive branches, save states), then anything further on
+`video_submit`'s cost now that it is the known bottleneck.

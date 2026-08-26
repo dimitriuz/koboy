@@ -21,6 +21,12 @@ Preinstalled by NiLuJe's KoboStuff and relied on: `fbink`, `fbdepth`, `evtest`,
 
 ## Getting a shell
 
+**The device does not answer ping.** Do not look for it with a ping sweep —
+that cost time in the 2026-08-26 session and found nothing. Find it by
+probing port 22 directly instead, e.g. `nmap -p 22 <subnet>` or a shell loop
+of `nc -zw1 <host> 22` over the LAN's address range; dropbear answers even
+though ICMP echo does not.
+
 The device runs dropbear on the LAN as `root`. The password is the stock Kobo
 one — ask the user, or set `KOBO_PW`; it is deliberately not committed here.
 
@@ -100,6 +106,22 @@ restore: framebuffer back to 32bpp rota=1 (now 32bpp)
 restore: starting hindenburg and nickel
 restore: done
 ```
+
+### A narrower, safe exception: `--frames` over ssh, without the takeover
+
+The rule above is about the full launcher (`scripts/koboy.sh`, the input
+grab, the Nickel stop/restart) and it stands. But `koboy --frames N` run
+directly over ssh, bypassing `koboy.sh` entirely, is a genuinely safe way to
+exercise the core, the SRAM path, and the video/panel pipeline **without**
+stopping Nickel or touching the input grab — used in the 2026-08-26 session
+to verify the save path and get real per-stage timing. Because Nickel is
+never stopped, this does **not** exercise the takeover, the touch d-pad, the
+in-game MENU, or the ROM browser's real touch input (`--ui-script` stands in
+for touch there). It is a way to get partial device truth cheaply, not a
+substitute for the NickelMenu playtest that exercises the rest. Confirm
+device integrity afterwards the same way as any other session (compare
+`/mnt/onboard/.kobo/version`, check `fbink -e` still reports the real device
+identity).
 
 ## Diagnosing a run
 
