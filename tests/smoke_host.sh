@@ -4,9 +4,19 @@
 set -e
 : "${ROM:=build/fake.gb}"
 [ -f "$ROM" ] || printf '\0' > "$ROM"
+# Explicit rc capture rather than a bare `out=$(...)`, for the reason spelled
+# out at length further down: under `set -e` a nonzero exit inside a command
+# substitution assignment aborts the script AT THIS LINE, before the echo or
+# any FAIL message below. This was the FIRST run in the file and therefore the
+# first to notice any breakage, so a mutant anywhere in startup killed the
+# whole suite with no diagnostic whatsoever -- confirmed while mutation-testing
+# core selection, where `--core` losing its explicit flag made this run fail to
+# open a core and the suite exit 1 having printed nothing at all.
+rc=0
 out=$(SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
-        --rom "$ROM" --frames 120 --quiet 2>&1)
+        --rom "$ROM" --frames 120 --quiet 2>&1) || rc=$?
 echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: baseline run exited $rc"; exit 1; }
 echo "$out" | grep -q "presented=" || { echo "FAIL: no presentation counter"; exit 1; }
 presented=$(echo "$out" | sed -n 's/.*presented=\([0-9]*\).*/\1/p')
 [ "$presented" -ge 1 ] || { echo "FAIL: presented $presented frames"; exit 1; }
