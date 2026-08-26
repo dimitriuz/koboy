@@ -107,7 +107,14 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # an .nes that wandered in from a test directory. A packaging step that
     # copied any of them would look exactly like a working build. Checked on
     # the zip's own listing, which is the artefact that actually ships.
-    BAD='\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|a26|col|int|sms|gg|srm|ngf|flash|rom|bin)$'
+    #
+    # `.zip` joins the list with this batch and is the one entry that needs
+    # its own sentence, because the artefact being checked IS a zip: this
+    # matches a zip INSIDE the package, which is what an arcade romset is
+    # (galaga.zip). An arcade set is content exactly like a .nes is, and it is
+    # the first content type whose extension collides with the container it
+    # would be smuggled in.
+    BAD='\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|a26|col|int|sms|gg|zip|srm|ngf|flash|rom|bin)$'
     if unzip -Z1 "$Z" | grep -qiE "$BAD"; then
         echo "FAIL: the package contains content or a BIOS:"
         unzip -Z1 "$Z" | grep -iE "$BAD"
@@ -120,20 +127,76 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # to copy anything for. Extracted and read, not assumed from the Makefile.
     rd=$(mktemp -d)
     unzip -qo "$Z" .adds/koboy/roms/README.txt -d "$rd"
-    for ext in .gb .gbc .mgw .nes .min .ws .wsc .ngp .ngc .a26 .col .int .sms .gg; do
+    for ext in .gb .gbc .mgw .nes .min .ws .wsc .ngp .ngc .a26 .col .int .sms .gg .zip; do
         grep -qF -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not mention $ext"; rm -rf "$rd"; exit 1; }
     done
     # The BIOS instruction is the only thing standing between a user and a
     # ColecoVision that shows NO BIOS or an Intellivision that shows nothing,
     # so it is asserted by NAME. A README that lists the extensions but not
-    # the files is a README that makes two of the ten systems look broken.
+    # the files is a README that makes two of the eleven systems look broken.
     for f in colecovision.rom exec.bin grom.bin; do
         grep -qF -- "$f" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not name $f"; rm -rf "$rd"; exit 1; }
     done
+    # .zip is the first extension the browser lists whose CORE IS NOT IN THIS
+    # PACKAGE, so listing the extension without saying where the core comes
+    # from would be worse than not listing it: the user would see the row
+    # appear and the load fail with nothing to act on. Asserted by the archive
+    # name, not by a vague word like "separate".
+    grep -qF -- "koboy-fbneo-" "$rd/.adds/koboy/roms/README.txt" \
+        || { echo "FAIL: roms/README.txt lists .zip but never names the arcade archive"; rm -rf "$rd"; exit 1; }
     rm -rf "$rd"
+
+    # THE ARCADE CORE IS NOT IN THE MAIN PACKAGE, and this is the assertion
+    # that keeps it that way. 41 MB against the whole rest of koboy's 4 MB is
+    # the entire reason `make fbneo-dist` exists; a stray `cp` in the dist rule
+    # would inflate the download tenfold for every user who has no arcade
+    # romset, and nothing else here would notice.
+    if unzip -Z1 "$Z" | grep -q 'fbneo'; then
+        echo "FAIL: the main package carries the arcade core -- it ships separately"
+        unzip -Z1 "$Z" | grep 'fbneo'
+        exit 1
+    fi
     echo "ok: packaging"
+
+    # ------------------------------------------------- the arcade package
+    # Built and checked here rather than left to a human, for the reason the
+    # main package is: a deliverable nothing verifies is a deliverable that
+    # rots. The core itself is not rebuilt on every run (dist/fbneo_libretro.so
+    # is a non-phony target, like every other core), so this costs one zip
+    # after the first build.
+    make fbneo-dist
+    ZF=$(ls dist/koboy-fbneo-*.zip | head -1)
+    [ -n "$ZF" ] || { echo "FAIL: no arcade zip produced"; exit 1; }
+    if unzip -Z1 "$ZF" | grep -v '^\.adds/koboy/'; then
+        echo "FAIL: arcade zip writes outside .adds/koboy/"; exit 1
+    fi
+    unzip -Z1 "$ZF" | grep -qx '.adds/koboy/fbneo_libretro.so' \
+        || { echo "FAIL: arcade zip has no core in it"; exit 1; }
+    # It must NOT duplicate the main package. The two are installed on top of
+    # each other, so a second copy of koboy or koboy.ini here would overwrite
+    # whatever the user already has -- including a koboy.ini they edited.
+    for f in koboy koboy.sh koboy.ini koboy-probe; do
+        if unzip -Z1 "$ZF" | grep -qx ".adds/koboy/$f"; then
+            echo "FAIL: arcade zip duplicates $f from the main package"; exit 1
+        fi
+    done
+    # No romset, by the same rule and the same regex as the main package.
+    if unzip -Z1 "$ZF" | grep -qiE "$BAD"; then
+        echo "FAIL: the arcade package contains content:"
+        unzip -Z1 "$ZF" | grep -iE "$BAD"
+        exit 1
+    fi
+    # The one instruction that decides whether a failed load is diagnosable:
+    # an FBNeo romset is version-matched, and a set built for another release
+    # fails exactly like a broken core.
+    rdf=$(mktemp -d)
+    unzip -qo "$ZF" .adds/koboy/README-fbneo.txt -d "$rdf"
+    grep -qF -- "1.0.0.03" "$rdf/.adds/koboy/README-fbneo.txt" \
+        || { echo "FAIL: arcade README does not state the FBNeo version the set must match"; rm -rf "$rdf"; exit 1; }
+    rm -rf "$rdf"
+    echo "ok: arcade packaging"
 fi
 
 # ------------------------------------------------------- launcher assertions

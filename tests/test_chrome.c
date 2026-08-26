@@ -694,6 +694,14 @@ TEST_MAIN({
                it at 512x288. */
             { "/roms/Atlantis.int",       2, 352, 224 },
             { "/roms/BurgerTime.col",     2, 512, 288 },
+            /* Arcade, at the LARGEST max geometry the author's 227-romset
+               collection reports (Tapper and Popeye both hit 512x512;
+               FinalBurn Neo reports a SQUARE max, side = max(w,h), so that a
+               quarter-turned board fits the same buffer either way round).
+               This is the biggest reserved rect any system in this table
+               produces and therefore the hardest case for a disc to stay
+               clear of. */
+            { "/roms/galaga.zip",         2, 512, 512 },
         };
         static uint8_t fbc[1440 * 1920], fbn[1440 * 1920];
 
@@ -916,6 +924,43 @@ TEST_MAIN({
                   a.extra[1].bit != b.extra[1].bit);
         }
 
+        /* ARCADE GETS TWO, and they are JOYPAD_Y and JOYPAD_X -- Button 3
+           and Button 4 in FinalBurn Neo's flat mapping, where the faceplate's
+           own B and A are already Button 1 and Button 2. Chosen by COUNTING:
+           of the 227 romsets in the author's set, 134 bind Y and 71 bind X,
+           against 45-48 for the shoulder buttons there is no room for.
+           Asserting the bits is the point, as everywhere else here: two discs
+           in the right places carrying L1/R1 would look identical and press
+           nothing on most boards. */
+        static const char *arc[] = {
+            "galaga.zip", "/roms/fbneo/MSPACMAN.ZIP", "/roms/arcade/dkong.Zip",
+        };
+        for (size_t i = 0; i < sizeof arc / sizeof arc[0]; i++) {
+            config_extra_buttons_for_rom(&c.layout, arc[i]);
+            CHECK(c.layout.extra[0].r > 0);
+            CHECK(c.layout.extra[1].r > 0);
+            CHECK_EQ_INT(c.layout.extra[0].bit, KOBOY_BTN_Y);
+            CHECK_EQ_INT(c.layout.extra[1].bit, KOBOY_BTN_X);
+            CHECK(!strcmp(c.layout.extra[0].label, "3"));
+            CHECK(!strcmp(c.layout.extra[1].label, "4"));
+        }
+        /* Arcade and ColecoVision genuinely DO share both bits (Y and X), so
+           the pairwise-distinctness check above cannot be extended to them --
+           what distinguishes them is the LABEL, which is what the player
+           reads off the panel. K1/K2 on a ColecoVision means "the keypad
+           digit the BIOS is asking for"; 3/4 on an arcade board means "the
+           third and fourth fire button". Asserted so that a copy-paste that
+           carried K1/K2 into the arcade case is caught. */
+        {
+            koboy_layout a, b;
+            memset(&a, 0, sizeof a); memset(&b, 0, sizeof b);
+            config_extra_buttons_for_rom(&a, "galaga.zip");
+            config_extra_buttons_for_rom(&b, "BurgerTime.col");
+            CHECK_EQ_INT(a.extra[0].bit, b.extra[0].bit);   /* same bit, and that is fine */
+            CHECK(strcmp(a.extra[0].label, b.extra[0].label) != 0);
+            CHECK(strcmp(a.extra[1].label, b.extra[1].label) != 0);
+        }
+
         /* A NEO GEO POCKET gets NONE -- its stick, A, B and OPTION are exactly
            what the DMG faceplate already draws. An ATARI 2600 and a MASTER
            SYSTEM / GAME GEAR likewise: one fire button plus Reset/Select, and
@@ -946,6 +991,7 @@ TEST_MAIN({
             "Atlantis.intx", "Atlantis.in", "BurgerTime.colx",
             "BurgerTime.co", "Adventure.a26x", "Alex Kidd.smsx",
             "Crystal Warriors.ggx", "Crystal Warriors.g",
+            "galaga.zipx", "galaga.zi", "galaga.7z",
         };
         for (size_t i = 0; i < sizeof others / sizeof others[0]; i++) {
             config_extra_buttons_for_rom(&c.layout, "GunPey.ws");

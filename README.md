@@ -7,13 +7,18 @@ Pokemon Mini `.min`, beetle-wswan for WonderSwan and WonderSwan Color
 `.ws`/`.wsc`, RACE for Neo Geo Pocket and Pocket Color `.ngp`/`.ngc`,
 stella2014 for Atari 2600 `.a26`, Gearcoleco for ColecoVision `.col`,
 FreeIntv for Intellivision `.int`, Genesis Plus GX for Master System `.sms`
-and Game Gear `.gg` --- renders four greys straight onto the e-ink panel
-through FBInk, and reads the page-turn buttons and the touchscreen directly
-from evdev.
+and Game Gear `.gg`, FinalBurn Neo for arcade `.zip` --- renders four greys
+straight onto the e-ink panel through FBInk, and reads the page-turn buttons
+and the touchscreen directly from evdev.
 
-Eight of the ten systems need no BIOS file. **ColecoVision and Intellivision
+Nine of the eleven systems need no BIOS file. **ColecoVision and Intellivision
 do**, and neither file ships with koboy because neither is ours to
 distribute --- see "BIOS files" below.
+
+**Arcade is a separate download.** The FinalBurn Neo core is 41 MB, ten times
+the rest of koboy put together, and most people running a Game Boy on an
+e-reader have no arcade romset --- so it ships as `koboy-fbneo-<version>.zip`,
+unzipped on top of the main archive. See "Arcade" below.
 
 The two greyscale handhelds suit the panel best: a WonderSwan and a Neo Geo
 Pocket both drive eight shades of grey natively, so a mono title loses almost
@@ -37,7 +42,7 @@ Game Boy.
   "Launching" below for why that is a hard requirement.
 - **Your own ROMs.** None are included, and none ever will be. Either point
   `rom=` in `koboy.ini` at a specific `.gb`/`.gbc`/`.mgw`/`.nes`/`.min`/
-  `.ws`/`.wsc`/`.ngp`/`.ngc`/`.a26`/`.col`/`.int`/`.sms`/`.gg` file,
+  `.ws`/`.wsc`/`.ngp`/`.ngc`/`.a26`/`.col`/`.int`/`.sms`/`.gg`/`.zip` file,
   or drop several into `.adds/koboy/roms/` (the `rom_dir` default) and pick
   one from koboy's own on-panel menu at launch -- see "Playing" below.
   Subfolders work: the browser walks them one level at a time, which is what
@@ -46,9 +51,45 @@ Game Boy.
   a real collection carries stay out of the way --- including the two files
   that ARE a BIOS.
 
+## Arcade
+
+Install `koboy-fbneo-<version>.zip` over the main archive --- it adds one file,
+`fbneo_libretro.so`, to `.adds/koboy/`. After that a `.zip` in `roms/` appears
+in the browser and runs.
+
+**The romset has to match the core.** An arcade "ROM" is a zip of one board's
+individual EPROM dumps, checked by name and CRC against the emulator's own
+database, and FinalBurn Neo changes that database between releases. This build
+is **FinalBurn Neo v1.0.0.03, the revision of 2025-07-24**. A set built for a
+different FBNeo release will not load, and a MAME set of any vintage will not
+load at all --- both failures look exactly like a broken emulator.
+
+**Some zips in a complete set are not games.** `neogeo.zip`, `midssio.zip`,
+`namcoc69.zip` and friends are device and BIOS dumps that games load beside
+themselves. They list in the browser and cannot be started. Leave them
+alone --- `tapper.zip` does not run without `midssio.zip`.
+
+**No BIOS file is needed for the 1980s boards**: an arcade PCB carries its
+whole program. Later hardware (Neo Geo, CPS) wants a BIOS zip in `roms/`
+beside the games, not in the koboy directory.
+
+**This is the panel's best fit so far, with one exception.** The golden-age
+cabinets turned their monitor on its side, so Galaga, Dig Dug, Donkey Kong,
+Ms. Pac-Man and Frogger are portrait games on a portrait e-reader --- and
+they are single-screen, so the smearing that spoils a scrolling platformer
+cannot happen. The vertical *shooters* (Xevious, 1942) scroll continuously
+and do smear, exactly as a Game Boy platformer does.
+
+**Coin, then Start.** A board will not begin until it has been paid: `SELECT`
+is Coin and `START` is Start. The faceplate's `B` and `A` are the board's
+buttons 1 and 2, and the two extra discs are buttons 3 and 4.
+
+**Saving.** An arcade board has no battery, so there is no `.srm`. Use the
+in-game MENU's save states.
+
 ## BIOS files
 
-Two of the ten systems cannot run without the console's own boot ROM, which
+Two of the eleven systems cannot run without the console's own boot ROM, which
 is copyrighted and is not distributed here. Put the files in `.adds/koboy/`
 itself --- the directory the `koboy` binary lives in, not `roms/`:
 
@@ -63,8 +104,10 @@ If you have a MiSTer Intellivision setup, `boot0.rom` **is** `exec.bin` and
 `boot3.rom` (ECS) are not needed. Rename copies rather than the originals.
 
 Every other system here needs nothing: the Game Boy, Game & Watch, NES,
-WonderSwan, Neo Geo Pocket, Atari 2600, Master System and Game Gear cores
-either need no boot ROM or link a free replacement.
+WonderSwan, Neo Geo Pocket, Atari 2600, Master System, Game Gear and arcade
+cores either need no boot ROM or link a free replacement. (Arcade's own
+device zips are romset members, not BIOS files in this sense --- they live in
+`roms/` beside the games. See "Arcade".)
 
 ## Install
 

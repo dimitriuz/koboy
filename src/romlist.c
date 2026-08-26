@@ -31,14 +31,14 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    /* One list, ten systems. .mgw is Game & Watch content for gw-libretro,
+    /* One list, eleven systems. .mgw is Game & Watch content for gw-libretro,
        .nes is a NES cartridge for fceumm, .min is a Pokemon Mini cartridge
        for PokeMini, .ws/.wsc are WonderSwan and WonderSwan Color for
        beetle-wswan, .ngp/.ngc are Neo Geo Pocket and Pocket Color for RACE,
        .a26 is an Atari 2600 cartridge for stella2014, .col is a ColecoVision
        one for Gearcoleco, .int an Intellivision one for FreeIntv, and
-       .sms/.gg are Master System and Game Gear for Genesis Plus GX; none of
-       them is a Game Boy ROM. The browser lists them all because the core is
+       .sms/.gg are Master System and Game Gear for Genesis Plus GX, and .zip
+       is an arcade romset for FinalBurn Neo; none of them is a Game Boy ROM. The browser lists them all because the core is
        chosen from the extension at load time (config_core_for_rom, whose
        table this list must stay in step with), so a mixed roms/ directory is
        one list, not two.
@@ -57,7 +57,18 @@ bool romlist_is_rom(const char *name)
        ARE the BIOS this project asks the owner to install by hand. None is
        content, all would list as selectable "games", and all are excluded by
        this being an allowlist of extensions rather than a blocklist of the
-       ones seen so far. */
+       ones seen so far.
+
+       An arcade directory is the one place that allowlist gets less
+       protective rather than more, and it is worth saying so: a real FBNeo
+       set carries device and BIOS zips beside the games -- the author's has
+       neogeo.zip, midssio.zip, nmk004.zip, namcoc69/70/75.zip, ym2608.zip,
+       cchip.zip -- and every one of them is a .zip, so every one of them
+       lists as a row. They are not games and selecting one gets an error.
+       They are also NOT removable: FBNeo looks for them beside the game it is
+       loading (tapper does not run without midssio.zip). So a handful of
+       unplayable rows is the cost of the sets being complete, which is the
+       right way round. */
     return ends_with_ci(name, ".gb") || ends_with_ci(name, ".gbc")
         || ends_with_ci(name, ".mgw")
         || ends_with_ci(name, ".nes")
@@ -67,7 +78,16 @@ bool romlist_is_rom(const char *name)
         || ends_with_ci(name, ".a26")
         || ends_with_ci(name, ".col")
         || ends_with_ci(name, ".int")
-        || ends_with_ci(name, ".sms") || ends_with_ci(name, ".gg");
+        || ends_with_ci(name, ".sms") || ends_with_ci(name, ".gg")
+        /* .zip is the one entry here that is a CONTAINER rather than a
+           system, and it is listed for exactly one reason: nothing else koboy
+           ships can open a zip, so there is no file this row could steal.
+           config_core_for_rom's matching entry carries the full argument and
+           the cost. What it means in practice is that a zipped Game Boy ROM
+           now appears in the browser as a selectable row that fails to load,
+           where before it was invisible -- the browser and the core map agree
+           about that, which is the property this list exists to keep. */
+        || ends_with_ci(name, ".zip");
 }
 
 /* Row order, in one place: kind first (the enum's own order -- ".." above

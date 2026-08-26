@@ -806,12 +806,42 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("exec.bin"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.mvc"), "gambatte_libretro.so") == 0);
 
-        /* The ten cores are ten DISTINCT files. A table whose entries had
-           been copy-pasted with one name left unchanged would satisfy every
-           individual assertion above and still ship a .min to fceumm. */
+        /* .zip -> FinalBurn Neo, the first extension in this table that names
+           a CONTAINER rather than a system. Uppercase because the device
+           partition is FAT32 and a set unpacked on Windows can be either.
+
+           The path cases are the ones that matter for arcade specifically: an
+           FBNeo romset is loaded BY PATH (need_fullpath), and its members --
+           the parent set, the device zips a board needs beside it -- are
+           found by FBNeo in the same directory. A name with spaces and a
+           directory prefix has to route the same as a bare one. */
+        CHECK(strcmp(config_core_for_rom("galaga.zip"),
+                     "fbneo_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("GALAGA.ZIP"),
+                     "fbneo_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/fbneo/mspacman.zip"),
+                     "fbneo_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/mnt/onboard/.adds/koboy/roms/arcade/dkong.Zip"),
+                     "fbneo_libretro.so") == 0);
+        /* Superstring and prefix, the same guard every other row gets. */
+        CHECK(strcmp(config_core_for_rom("A.zipx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.zi"),   "gambatte_libretro.so") == 0);
+        /* FBNeo's OTHER advertised extensions, deliberately unclaimed. .7z is
+           not merely unlisted: scripts/build-fbneo-core.sh compiles 7-Zip
+           support OUT of the device build (lib7z does not build against glibc
+           2.19's headers), so a .zip routed here can be opened and a .7z
+           could not be even if this row existed. .cue/.ccd are Neo Geo CD,
+           outside this batch's pre-1990 scope. */
+        CHECK(strcmp(config_core_for_rom("A.7z"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.cue"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ccd"), "gambatte_libretro.so") == 0);
+
+        /* The eleven cores are eleven DISTINCT files. A table whose entries
+           had been copy-pasted with one name left unchanged would satisfy
+           every individual assertion above and still ship a .min to fceumm. */
         static const char *distinct[] = { "A.gb", "A.mgw", "A.nes", "A.min",
                                           "A.ws", "A.ngp", "A.a26", "A.col",
-                                          "A.int", "A.sms" };
+                                          "A.int", "A.sms", "A.zip" };
         for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
             for (size_t j = i + 1; j < sizeof distinct / sizeof distinct[0]; j++)
                 CHECK(strcmp(config_core_for_rom(distinct[i]),
@@ -826,6 +856,7 @@ TEST_MAIN({
            exists to prevent. */
         CHECK(strchr(config_core_for_rom("BALL.mgw"), '/') == NULL);
         CHECK(strchr(config_core_for_rom("ZELDA.gb"), '/') == NULL);
+        CHECK(strchr(config_core_for_rom("galaga.zip"), '/') == NULL);
 
         /* The length guard in ends_with_mgw, made deterministic rather than
            ASan-only -- same construction as tests/test_romlist.c's short-name

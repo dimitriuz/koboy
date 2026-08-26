@@ -155,6 +155,31 @@ TEST_MAIN({
     CHECK_EQ_INT(romlist_is_rom("Battletoads (USA).GG"), 1);
     CHECK_EQ_INT(romlist_is_rom("Chakan (USA, Europe).Gg"), 1);
 
+    /* .zip, the arcade romset, and the row that behaves differently from
+       every other one here: it is a CONTAINER extension, so the same three
+       characters would be a perfectly ordinary archive of anything. It is
+       listed anyway because nothing else koboy ships can open a zip at all
+       (see src/config.c's table), so there is no file this steals. */
+    CHECK_EQ_INT(romlist_is_rom("galaga.zip"), 1);
+    CHECK_EQ_INT(romlist_is_rom("GALAGA.ZIP"), 1);
+    CHECK_EQ_INT(romlist_is_rom("mspacman.Zip"), 1);
+    /* The device and BIOS zips a complete FBNeo set carries beside the games
+       list too, and that is not a bug to be fixed by a longer list -- they
+       are indistinguishable from games by name, they cannot be deleted
+       (tapper does not run without midssio.zip), and pretending otherwise
+       would mean maintaining FBNeo's device table inside koboy. Asserted so
+       the behaviour is a decision on record rather than an accident. */
+    CHECK_EQ_INT(romlist_is_rom("neogeo.zip"), 1);
+    CHECK_EQ_INT(romlist_is_rom("midssio.zip"), 1);
+    /* And .7z is NOT listed, which is not squeamishness: the device build has
+       7-Zip support compiled out entirely (lib7z will not build against
+       glibc 2.19's headers -- see scripts/build-fbneo-core.sh), so a listed
+       .7z would be a row that could never load. */
+    CHECK_EQ_INT(romlist_is_rom("galaga.7z"), 0);
+    CHECK_EQ_INT(romlist_is_rom("neogeo.cue"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Adventure.zipx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Adventure.zi"), 0);
+
     /* THE THREE BIOS FILES THIS PROJECT NOW ASKS THE OWNER TO INSTALL must
        never list as games, and they are not hypothetical files: exec.bin and
        grom.bin go beside the koboy binary, which on a default install is the

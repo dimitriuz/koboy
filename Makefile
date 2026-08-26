@@ -174,8 +174,23 @@ $(CORE_SMS_SO):
 	CROSS=$(CROSS) OUT=$@ sh scripts/build-gpgx-core.sh kobo
 
 core-sms: $(CORE_SMS_SO)
+
+# FinalBurn Neo, the arcade core, and THE ONLY CORE THAT IS NOT A PREREQUISITE
+# OF `dist`. Same non-phony reasoning as every core rule above -- delete the .so
+# to force a rebuild -- but a different packaging answer, and the number is the
+# argument: the ten cores above plus the binary, the launcher and the docs come
+# to a 4 MB zip; this one core is 41 MB on its own, ten times the whole rest of
+# the project. Most people running koboy on a Kobo do not have an arcade romset
+# and would be downloading it for nothing. So it ships as its own archive --
+# `make fbneo-dist` -- that unpacks into the same .adds/koboy/ beside the main
+# one, and tests/test_dist.sh asserts the main package still does not carry it.
+CORE_FBNEO_SO := dist/fbneo_libretro.so
+$(CORE_FBNEO_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-fbneo-core.sh kobo
+
+core-fbneo: $(CORE_FBNEO_SO)
 .PHONY: kobo fbink core core-gw core-nes core-pm core-ws core-ngp \
-        core-a26 core-col core-int core-sms
+        core-a26 core-col core-int core-sms core-fbneo
 
 # ------------------------------------------------------------------ packaging
 # The archive unzips onto the device's user partition and touches nothing else:
@@ -220,7 +235,7 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $
 	# the browser's first run would report a missing directory -- the
 	# README.txt is what actually makes the directory exist in the zip.
 	mkdir -p build/pkg/.adds/koboy/roms
-	printf 'Put .gb, .gbc, .mgw, .nes, .min, .ws, .wsc, .ngp, .ngc, .a26, .col,\n.int, .sms and .gg files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini),\n.ws/.wsc use wswan (WonderSwan, WonderSwan Color),\n.ngp/.ngc use race (Neo Geo Pocket, Neo Geo Pocket Color),\n.a26 uses stella2014 (Atari 2600),\n.col uses gearcoleco (ColecoVision),\n.int uses freeintv (Intellivision),\n.sms/.gg use genesis_plus_gx (Master System, Game Gear).\n\nTWO SYSTEMS NEED A BIOS THAT IS NOT OURS TO SHIP. Put these files in\nthe koboy directory itself (the one above this one, beside koboy):\n  ColecoVision   colecovision.rom   8192 bytes\n  Intellivision  exec.bin           8192 bytes\n  Intellivision  grom.bin           2048 bytes\nWithout them a .col shows a NO BIOS screen and a .int does not run.\nEvery other system here needs no BIOS file at all.\n' \
+	printf 'Put .gb, .gbc, .mgw, .nes, .min, .ws, .wsc, .ngp, .ngc, .a26, .col,\n.int, .sms, .gg and .zip files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini),\n.ws/.wsc use wswan (WonderSwan, WonderSwan Color),\n.ngp/.ngc use race (Neo Geo Pocket, Neo Geo Pocket Color),\n.a26 uses stella2014 (Atari 2600),\n.col uses gearcoleco (ColecoVision),\n.int uses freeintv (Intellivision),\n.sms/.gg use genesis_plus_gx (Master System, Game Gear),\n.zip uses fbneo (arcade) -- SEE BELOW, it is a separate download.\n\nTWO SYSTEMS NEED A BIOS THAT IS NOT OURS TO SHIP. Put these files in\nthe koboy directory itself (the one above this one, beside koboy):\n  ColecoVision   colecovision.rom   8192 bytes\n  Intellivision  exec.bin           8192 bytes\n  Intellivision  grom.bin           2048 bytes\nWithout them a .col shows a NO BIOS screen and a .int does not run.\nEvery other system here needs no BIOS file at all.\n\nARCADE IS A SEPARATE ARCHIVE. The FinalBurn Neo core is 41 MB -- ten\ntimes the rest of koboy put together -- so it is not in this package.\nInstall koboy-fbneo-VERSION.zip on top of this one and .zip files\nstart working; without it a .zip lists in the browser and fails to\nload with "cannot open core". Nothing else here needs it.\n' \
 	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from
@@ -230,6 +245,32 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $
 	cd build/pkg && zip -qrD ../../dist/koboy-$(VERSION).zip .adds
 	@echo "dist: dist/koboy-$(VERSION).zip"
 .PHONY: dist
+
+# ------------------------------------------------------- the arcade package
+# FinalBurn Neo, on its own, for the same reason probe-dist exists: a
+# deliverable that is separable should be separate. 41 MB of core against a
+# 4 MB everything-else is not a rounding error, and an owner with no arcade
+# romset gets no use out of a single byte of it.
+#
+# It unpacks into the SAME .adds/koboy/ as the main archive and is installed on
+# top of it -- one more .so beside the ten. Nothing in the main package changes
+# and nothing in this one duplicates it: no binary, no launcher, no koboy.ini,
+# because a user who has not already installed koboy has nothing for this core
+# to plug into. The README says so.
+#
+# The roms/README.txt in the MAIN package already tells the user this archive
+# exists (and that a .zip fails to load without it), because that is the file a
+# confused user reads first -- the one in the directory they are dropping ROMs
+# into.
+fbneo-dist: $(CORE_FBNEO_SO) | build
+	rm -rf build/fbneo-pkg && mkdir -p build/fbneo-pkg/.adds/koboy
+	cp $(CORE_FBNEO_SO)  build/fbneo-pkg/.adds/koboy/
+	printf 'koboy arcade add-on: FinalBurn Neo\n\nThis archive carries ONE FILE, fbneo_libretro.so, and it only does\nanything if koboy itself is already installed. Unzip it over the same\nplace you unzipped koboy: everything lands in .adds/koboy/.\n\nAfter that, .zip files in .adds/koboy/roms/ appear in the browser and\nrun. An arcade "ROM" is a zip of one board dump, named the way\nFinalBurn Neo names it -- galaga.zip, dkong.zip, mspacman.zip.\n\nTHE SET HAS TO MATCH THE CORE. This build is FinalBurn Neo v1.0.0.03\n(revision of 2025-07-24). A set built for a different FBNeo release,\nand a MAME set of any vintage, will not load -- the failure looks\nexactly like a broken emulator and is not one.\n\nSOME ZIPS ARE NOT GAMES. A complete set carries device and BIOS zips\n(neogeo.zip, midssio.zip, namcoc69.zip, ...) that games load beside\nthemselves. They list in the browser and cannot be started. Leave\nthem there: tapper does not run without midssio.zip.\n\nWHAT THIS PANEL IS GOOD AT. The 1980s classics turned their monitor\non its side, so Galaga, Dig Dug, Donkey Kong, Frogger and Ms. Pac-Man\nare PORTRAIT games on a portrait e-reader, and they are single-screen\nas well -- no scrolling, which is what smears on e-ink. The vertical\nshooters that DO scroll (1942, Xevious) smear; that is the panel, not\nthe emulator.\n\nNO BIOS FILE IS NEEDED for the 1980s boards -- an arcade PCB has its\nwhole program on the board. Later hardware (Neo Geo, CPS) wants a\nBIOS zip beside the games, not in the koboy directory.\n\nSaving: arcade boards have no battery, so there is no .srm. Use the\nin-game MENU save states.\n' \
+	    > build/fbneo-pkg/.adds/koboy/README-fbneo.txt
+	mkdir -p dist && rm -f dist/koboy-fbneo-$(VERSION).zip
+	cd build/fbneo-pkg && zip -qrD ../../dist/koboy-fbneo-$(VERSION).zip .adds
+	@echo "fbneo-dist: dist/koboy-fbneo-$(VERSION).zip"
+.PHONY: fbneo-dist
 
 # The probe's own package: just the probe binary and a README, deployable
 # before the emulator, the core or even koboy.ini exist. This is the growth

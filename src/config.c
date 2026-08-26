@@ -147,11 +147,12 @@ void config_defaults(koboy_config *c)
 
 /* ------------------------------------------------------ core by extension
  *
- * koboy ships ten cores now, and which one a file needs is knowable from its
- * name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats .min,
- * beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, stella2014 eats .a26,
- * Gearcoleco eats .col, FreeIntv eats .int, Genesis Plus GX eats .sms/.gg,
- * and gambatte eats everything else this project lists. The browser hands
+ * koboy ships eleven cores now, and which one a file needs is knowable from
+ * its name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats
+ * .min, beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, stella2014 eats
+ * .a26, Gearcoleco eats .col, FreeIntv eats .int, Genesis Plus GX eats
+ * .sms/.gg, FinalBurn Neo eats .zip, and gambatte eats everything else this
+ * project lists. The browser hands
  * main.c a path long after the config was read, so this cannot live in
  * config_load -- it is a pure function of the ROM name, called at load time.
  *
@@ -211,6 +212,39 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        claim. */
     { ".sms", "genesis_plus_gx_libretro.so" }, /* Master System, GPGX     */
     { ".gg",  "genesis_plus_gx_libretro.so" }, /* Game Gear, same core    */
+    /* THE FIRST EXTENSION IN THIS TABLE THAT IS NOT A SYSTEM'S OWN, and the
+       decision behind it is the interesting part of adding arcade.
+       An arcade "ROM" is a ZIP of the individual EPROM dumps off one PCB,
+       named and CRC-checked against the emulator's own database -- so the
+       extension says "archive", not "Namco board", and .zip is a container
+       anything could be in.
+
+       .ZIP IS CLAIMED FOR THE ARCADE CORE OUTRIGHT, rather than routed by a
+       subdirectory convention or by looking the name up in FBNeo's dat. The
+       reason is that the alternative is not "less ambiguous", it is
+       "ambiguous plus a second mechanism to get wrong": nothing else koboy
+       ships can open a .zip AT ALL. Nine of the ten other cores set
+       need_fullpath = false, so core.c hands them the file's BYTES (core.c,
+       core_load_rom) -- a zipped .nes reaches fceumm as the literal bytes
+       "PK\3\4...", which it rejects as not a NES header. There is no case
+       where routing .zip somewhere else would have worked and this row breaks
+       it.
+
+       WHAT IT COSTS, stated rather than discovered: a user who drops a zipped
+       Game Boy ROM into roms/ now gets FinalBurn Neo refusing it ("core
+       rejected rom") instead of the browser ignoring the file. That is a
+       worse-looking failure for a file that could never have run either way,
+       and it is the price of not building a dat parser into a 40 KB
+       front-end. The error names the core, so the diagnosis is one line of
+       koboy.log away.
+
+       FBNeo also advertises `7z`, `cue` and `ccd`. None is claimed. .7z is
+       not merely unclaimed but UNBUILDABLE for the device -- lib7z does not
+       compile against glibc 2.19's headers, so scripts/build-fbneo-core.sh
+       switches it off (see the script) and the shipped core physically
+       cannot open one. .cue/.ccd are Neo Geo CD, which is outside this
+       batch's pre-1990 scope and wants a BIOS besides. */
+    { ".zip", "fbneo_libretro.so"          }, /* arcade, FinalBurn Neo    */
 };
 
 const char *config_core_for_rom(const char *rom_path)
@@ -436,6 +470,56 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
        A Master System and a Game Gear are likewise fully covered: two
        buttons on JOYPAD_B and JOYPAD_A, and PAUSE/START on JOYPAD_START
        (third_party/gpgx's DEVICE_PAD2B branch). Nothing left over. */
+
+    /* ARCADE, and this is the first system where the extra discs are chosen
+       from a POPULATION rather than from one console's control panel --
+       FinalBurn Neo is 227 different boards in the author's set alone, with
+       no single answer to "what does the hardware have".
+
+       So it was counted. Every one of those 227 romsets was loaded and its
+       retro_input_descriptors read (port 0, RETRO_DEVICE_JOYPAD), and the
+       mapping FBNeo uses is flat and consistent: JOYPAD_B is always the
+       board's "Button 1", JOYPAD_A its "Button 2", JOYPAD_Y its "Button 3",
+       JOYPAD_X its "Button 4". Counts across the 227:
+
+         B  208    Y  134    L1 45    L2 45    L3 26
+         A  185    X   71    R1 48    R2 46    R3 14
+
+       B and A the DMG faceplate already has. Y is bound by 134 boards --
+       more than half -- and X by 71, so those two are the discs, and they
+       take the L/R-stacked slots the WonderSwan pair uses. That covers every
+       board with four or fewer fire buttons, which is all of the pre-1990
+       era this batch is scoped to and most of what came after.
+
+       Labelled 3 and 4, NOT C and D, and the labels are the honest part:
+       on this system the faceplate's moulded B and A ARE buttons 1 and 2, so
+       numbering the new pair continues a sequence the player can actually
+       follow. (The ColecoVision case above had the same problem and answered
+       it the same way with K1/K2.)
+
+       WHAT IS STILL UNREACHABLE, counted rather than guessed: L1/R1 (45/48
+       boards), L2/R2 (45/46) and L3/R3 (26/14). Those are the SIX-BUTTON
+       layouts -- Street Fighter's strong punch and kick, a Neo Geo D button,
+       Defender's "Reverse" -- and there is no seventh and eighth place on
+       this faceplate for them. Every one of those boards is outside the
+       pre-1990 scope this core was added for. Within that scope the only
+       casualty measured is Defender, which puts Hyperspace on Y, Thrust on X
+       and Reverse on R1: the first two are reachable through these discs,
+       Reverse is not.
+
+       COIN AND START need no disc and this is worth writing down because it
+       is the thing a reader will check first: FBNeo binds "Coin 1" to
+       JOYPAD_SELECT and "Start 1" to JOYPAD_START (retro_input.cpp,
+       GameInpStandardOne), which are the faceplate's SELECT and START pills.
+       An arcade board will not start without a coin, so a missing SELECT
+       would have been the "button that exists and is unreachable" bug for a
+       fourth time. It is reachable. Verified by playing: Galaga reaches
+       STAGE 1 from SELECT then START. */
+    if (ends_with_ext(rom_path, ".zip")) {
+        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "3" };
+        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "4" };
+        return;
+    }
 
     /* A Neo Geo Pocket has a stick, A, B and OPTION and nothing else, so it
        needs NO extra disc -- recorded here as a deliberate empty case rather
