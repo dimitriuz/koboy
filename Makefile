@@ -4,11 +4,18 @@ INC     := -Isrc -Itests
 TESTSRC := $(wildcard tests/test_*.c)
 TESTBIN := $(patsubst tests/%.c,build/%,$(TESTSRC))
 SRC     := $(filter-out src/main.c src/probe.c src/platform_%.c,$(wildcard src/*.c))
+# Header prerequisites, and they are load-bearing rather than tidiness. Without
+# them `make` does not relink a test binary when only a header changed, so a
+# MUTANT APPLIED TO A HEADER runs against a stale binary and appears not to
+# fail -- which would silently invalidate the one discipline this project leans
+# on hardest (break the guard, confirm the test fails). Verified: touching
+# src/input.h produced a byte-identical build/test_input_buttons before this.
+HDR     := $(wildcard src/*.h) $(wildcard tests/*.h)
 
 build:
 	@mkdir -p build tests/golden
 
-build/test_%: tests/test_%.c $(SRC) | build
+build/test_%: tests/test_%.c $(SRC) $(HDR) | build
 	$(CC) $(CFLAGS) $(INC) -o $@ $< $(SRC) -lm -ldl
 
 build/stub_core.so: tests/stub_core.c | build
@@ -40,7 +47,7 @@ clean:
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
 SDL_LIBS   := $(shell pkg-config --libs sdl2)
 
-build/koboy: src/main.c src/platform_sdl.c $(SRC) | build
+build/koboy: src/main.c src/platform_sdl.c $(SRC) $(HDR) | build
 	$(CC) $(CFLAGS) $(INC) $(SDL_CFLAGS) -o $@ $^ $(SDL_LIBS) -ldl -lm
 
 host: build/koboy build/stub_core.so
@@ -65,7 +72,7 @@ $(FBINK_LIB):
 
 fbink: $(FBINK_LIB)
 
-build/koboy-arm: src/main.c src/platform_kobo.c $(SRC) $(FBINK_LIB) | build
+build/koboy-arm: src/main.c src/platform_kobo.c $(SRC) $(HDR) $(FBINK_LIB) | build
 	$(CROSS)gcc $(CFLAGS) $(ARM_FLAGS) $(INC) -I$(FBINK_DIR) -DKOBOY_PLATFORM_KOBO \
 	    -o $@ src/main.c src/platform_kobo.c $(SRC) $(FBINK_LIB) -ldl -lm
 
