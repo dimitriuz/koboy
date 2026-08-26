@@ -6,6 +6,8 @@ dist/
 third_party/fbink/
 third_party/gambatte-libretro/
 third_party/gw/
+third_party/fceumm/
+third_party/pokemini/
 *.srm
 *.log
 koboy
@@ -14,3 +16,5 @@ koboy-probe
 *.gbc
 *.sav
 *.mgw
+*.nes
+*.min

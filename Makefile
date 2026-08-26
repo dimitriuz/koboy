@@ -107,7 +107,22 @@ $(CORE_GW_SO):
 	CROSS=$(CROSS) OUT=$@ sh scripts/build-gw-core.sh kobo
 
 core-gw: $(CORE_GW_SO)
-.PHONY: kobo fbink core core-gw
+
+# The NES and Pokemon Mini cores, same non-phony reasoning again: fceumm in
+# particular is ~600 translation units and minutes of cross-build, and `make
+# dist` must not repeat it. Delete the .so to force a rebuild.
+CORE_NES_SO := dist/fceumm_libretro.so
+$(CORE_NES_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-fceumm-core.sh kobo
+
+core-nes: $(CORE_NES_SO)
+
+CORE_PM_SO := dist/pokemini_libretro.so
+$(CORE_PM_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-pokemini-core.sh kobo
+
+core-pm: $(CORE_PM_SO)
+.PHONY: kobo fbink core core-gw core-nes core-pm
 
 # ------------------------------------------------------------------ packaging
 # The archive unzips onto the device's user partition and touches nothing else:
@@ -116,7 +131,7 @@ core-gw: $(CORE_GW_SO)
 # directory and a bad build cannot brick anything.
 VERSION := 0.1.0
 
-dist: kobo $(CORE_SO) $(CORE_GW_SO) | build
+dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) | build
 	rm -rf build/pkg && mkdir -p build/pkg/.adds/koboy
 	cp build/koboy-arm           build/pkg/.adds/koboy/koboy
 	cp scripts/koboy.sh          build/pkg/.adds/koboy/
@@ -126,6 +141,8 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) | build
 	cp README.md TESTED.md       build/pkg/.adds/koboy/
 	cp $(CORE_SO)                build/pkg/.adds/koboy/
 	cp $(CORE_GW_SO)             build/pkg/.adds/koboy/
+	cp $(CORE_NES_SO)            build/pkg/.adds/koboy/
+	cp $(CORE_PM_SO)             build/pkg/.adds/koboy/
 	# `kobo` (a prerequisite above) now always produces build/koboy-probe-arm
 	# too, so this branch is normally taken -- kept as a guard rather than an
 	# unconditional cp so a partial/manual build still packages the emulator
@@ -143,7 +160,7 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) | build
 	# the browser's first run would report a missing directory -- the
 	# README.txt is what actually makes the directory exist in the zip.
 	mkdir -p build/pkg/.adds/koboy/roms
-	printf 'Put .gb, .gbc and .mgw files in this directory.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch).\n' \
+	printf 'Put .gb, .gbc, .mgw, .nes and .min files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini).\nNo BIOS file is needed for any of them.\n' \
 	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from

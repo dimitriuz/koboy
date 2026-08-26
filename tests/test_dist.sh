@@ -78,11 +78,37 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     for f in .adds/koboy/koboy .adds/koboy/koboy-probe .adds/koboy/koboy.sh \
              .adds/koboy/koboy.ini .adds/koboy/gambatte_libretro.so \
              .adds/koboy/gw_libretro.so \
+             .adds/koboy/fceumm_libretro.so \
+             .adds/koboy/pokemini_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
              .adds/koboy/README.md .adds/koboy/TESTED.md \
              .adds/koboy/roms/README.txt; do
         unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
     done
+
+    # NO BIOS AND NO ROM, ever. The Pokemon Mini core links its own free BIOS
+    # (third_party/pokemini/freebios/) so none is needed -- but a dumped
+    # "[BIOS] Nintendo Pokemon Mini (World).min", or an .nes that wandered in
+    # from a test directory, is not ours to distribute and a packaging step
+    # that copied one would look exactly like a working build. Checked on the
+    # zip's own listing, which is the artefact that actually ships.
+    if unzip -Z1 "$Z" | grep -qiE '\.(min|nes|gb|gbc|mgw|srm|rom)$'; then
+        echo "FAIL: the package contains content or a BIOS:"
+        unzip -Z1 "$Z" | grep -iE '\.(min|nes|gb|gbc|mgw|srm|rom)$'
+        exit 1
+    fi
+
+    # The generated roms/README.txt must name every extension the browser
+    # actually lists. It is the only instruction a user gets, and a system
+    # whose files are accepted but never mentioned is a system nobody knows
+    # to copy anything for. Extracted and read, not assumed from the Makefile.
+    rd=$(mktemp -d)
+    unzip -qo "$Z" .adds/koboy/roms/README.txt -d "$rd"
+    for ext in .gb .gbc .mgw .nes .min; do
+        grep -q -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
+            || { echo "FAIL: roms/README.txt does not mention $ext"; rm -rf "$rd"; exit 1; }
+    done
+    rm -rf "$rd"
     echo "ok: packaging"
 fi
 
