@@ -8,7 +8,12 @@ third_party/gambatte-libretro/
 third_party/gw/
 third_party/fceumm/
 third_party/pokemini/
+third_party/wswan/
+third_party/race/
+third_party/ngp/
 *.srm
+*.ngf
+*.flash
 *.log
 koboy
 koboy-probe
@@ -18,3 +23,7 @@ koboy-probe
 *.mgw
 *.nes
 *.min
+*.ws
+*.wsc
+*.ngp
+*.ngc

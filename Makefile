@@ -122,7 +122,25 @@ $(CORE_PM_SO):
 	CROSS=$(CROSS) OUT=$@ sh scripts/build-pokemini-core.sh kobo
 
 core-pm: $(CORE_PM_SO)
-.PHONY: kobo fbink core core-gw core-nes core-pm
+
+# The WonderSwan and Neo Geo Pocket cores, same non-phony reasoning as every
+# core rule above: a cross-build is minutes of work and `make dist` must not
+# repeat it. Each is named for the .so its own upstream Makefile produces, so
+# a file in dist/ can be traced back to the project that built it -- the same
+# convention gw/fceumm/pokemini already follow. Delete the .so to force a
+# rebuild.
+CORE_WS_SO := dist/mednafen_wswan_libretro.so
+$(CORE_WS_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-wswan-core.sh kobo
+
+core-ws: $(CORE_WS_SO)
+
+CORE_NGP_SO := dist/race_libretro.so
+$(CORE_NGP_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-race-core.sh kobo
+
+core-ngp: $(CORE_NGP_SO)
+.PHONY: kobo fbink core core-gw core-nes core-pm core-ws core-ngp
 
 # ------------------------------------------------------------------ packaging
 # The archive unzips onto the device's user partition and touches nothing else:
@@ -131,7 +149,7 @@ core-pm: $(CORE_PM_SO)
 # directory and a bad build cannot brick anything.
 VERSION := 0.1.0
 
-dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) | build
+dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $(CORE_NGP_SO) | build
 	rm -rf build/pkg && mkdir -p build/pkg/.adds/koboy
 	cp build/koboy-arm           build/pkg/.adds/koboy/koboy
 	cp scripts/koboy.sh          build/pkg/.adds/koboy/
@@ -143,6 +161,8 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) | build
 	cp $(CORE_GW_SO)             build/pkg/.adds/koboy/
 	cp $(CORE_NES_SO)            build/pkg/.adds/koboy/
 	cp $(CORE_PM_SO)             build/pkg/.adds/koboy/
+	cp $(CORE_WS_SO)             build/pkg/.adds/koboy/
+	cp $(CORE_NGP_SO)            build/pkg/.adds/koboy/
 	# `kobo` (a prerequisite above) now always produces build/koboy-probe-arm
 	# too, so this branch is normally taken -- kept as a guard rather than an
 	# unconditional cp so a partial/manual build still packages the emulator
@@ -160,7 +180,7 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) | build
 	# the browser's first run would report a missing directory -- the
 	# README.txt is what actually makes the directory exist in the zip.
 	mkdir -p build/pkg/.adds/koboy/roms
-	printf 'Put .gb, .gbc, .mgw, .nes and .min files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini).\nNo BIOS file is needed for any of them.\n' \
+	printf 'Put .gb, .gbc, .mgw, .nes, .min, .ws, .wsc, .ngp and .ngc files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini),\n.ws/.wsc use wswan (WonderSwan, WonderSwan Color),\n.ngp/.ngc use race (Neo Geo Pocket, Neo Geo Pocket Color).\nNo BIOS file is needed for any of them.\n' \
 	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from

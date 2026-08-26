@@ -80,21 +80,26 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
              .adds/koboy/gw_libretro.so \
              .adds/koboy/fceumm_libretro.so \
              .adds/koboy/pokemini_libretro.so \
+             .adds/koboy/mednafen_wswan_libretro.so \
+             .adds/koboy/race_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
              .adds/koboy/README.md .adds/koboy/TESTED.md \
              .adds/koboy/roms/README.txt; do
         unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
     done
 
-    # NO BIOS AND NO ROM, ever. The Pokemon Mini core links its own free BIOS
-    # (third_party/pokemini/freebios/) so none is needed -- but a dumped
-    # "[BIOS] Nintendo Pokemon Mini (World).min", or an .nes that wandered in
-    # from a test directory, is not ours to distribute and a packaging step
-    # that copied one would look exactly like a working build. Checked on the
-    # zip's own listing, which is the artefact that actually ships.
-    if unzip -Z1 "$Z" | grep -qiE '\.(min|nes|gb|gbc|mgw|srm|rom)$'; then
+    # NO BIOS AND NO ROM, ever. Every core koboy ships either needs no BIOS or
+    # links its own free one (PokeMini's freebios/, RACE's ngpBios.c) -- but a
+    # dumped "[BIOS] Nintendo Pokemon Mini (World).min", or the boot.rom /
+    # boot1.rom that sit beside a real WonderSwan or Neo Geo Pocket
+    # collection, or an .nes that wandered in from a test directory, is not
+    # ours to distribute, and a packaging step that copied one would look
+    # exactly like a working build. `.rom` covers the two boot files by
+    # extension. Checked on the zip's own listing, which is the artefact that
+    # actually ships.
+    if unzip -Z1 "$Z" | grep -qiE '\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|srm|ngf|flash|rom)$'; then
         echo "FAIL: the package contains content or a BIOS:"
-        unzip -Z1 "$Z" | grep -iE '\.(min|nes|gb|gbc|mgw|srm|rom)$'
+        unzip -Z1 "$Z" | grep -iE '\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|srm|ngf|flash|rom)$'
         exit 1
     fi
 
@@ -104,7 +109,7 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # to copy anything for. Extracted and read, not assumed from the Makefile.
     rd=$(mktemp -d)
     unzip -qo "$Z" .adds/koboy/roms/README.txt -d "$rd"
-    for ext in .gb .gbc .mgw .nes .min; do
+    for ext in .gb .gbc .mgw .nes .min .ws .wsc .ngp .ngc; do
         grep -qF -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not mention $ext"; rm -rf "$rd"; exit 1; }
     done
