@@ -425,3 +425,102 @@ the shape of a filename. A dirent name is at most 255 bytes, and the row is
 elided for display anyway, so 256 would cost 128 bytes per entry -- 2.5 MB
 across a 20000-ROM hard cap, which is the real reason to think about it
 rather than just raising it.
+
+## WonderSwan and Neo Geo Pocket (added 2026-08-26)
+
+### 40. NEITHER NEW SYSTEM HAS RUN ON HARDWARE
+
+The highest-value item in this file, and the same shape as #33 was for NES
+and Pokemon Mini. Everything about beetle-wswan and RACE in this repo was
+measured on the x86_64 host -- `scripts/probe_core.c`, plus a throwaway
+harness driving koboy's own `config.c`/`video.c`/`chrome.c` and dumping
+panel-sized PGMs. The ARM cores were cross-built and put through
+`scripts/verify-core.sh` (both pass with `libc.so.6` alone, the smallest
+closure of any core this project ships), and nothing else.
+
+| | |
+|---|---|
+| The ARM cores `dlopen` at all | not established |
+| Either system renders on the panel | not established |
+| Playable speed | not established -- see #41 |
+| The L1/R1 discs are reachable by a real finger | not established |
+| A WonderSwan `.srm` survives a real session | not established (the path is the one verified on-device for a Game Boy cartridge) |
+| A Neo Geo Pocket `.ngf` is written at all on the device | not established -- and it is a DIFFERENT path from every other system's, see #44 |
+
+A `--frames` run over ssh, as the 2026-08-26 session did for the Game Boy,
+settles the first three cheaply and without stopping Nickel.
+
+### 41. Neo Geo Pocket is now the most expensive thing koboy renders
+
+160x152 auto-fits to scale 6 on the Libra 2: a 960x912 rect, 875k destination
+pixels, ~22.8 ms of `video_submit` by #23's model -- against the Game Boy's
+measured 17.0 ms. On a Sage (1440x1920) it takes scale 7: 1120x1064, 1.19M
+px, ~29.4 ms. Both are estimates from a linear model fitted on one device,
+not measurements, and `present_divisor = 3` may absorb the difference
+entirely. But it is the first system whose auto-fit lands materially ABOVE
+the Game Boy's tuned cost, and if anything feels slow this is where to look
+first. `scale = 5` in `koboy.ini` brings it back to 800x760 / 17.3 ms.
+
+### 42. Two WonderSwan buttons are still unreachable in portrait
+
+`wswan_rotate_keymap = auto` remaps the retropad when a title is rotated.
+The faceplate now covers the d-pad (Y cursor), START, SELECT, the two
+X-cursor buttons that land on `JOYPAD_A`/`JOYPAD_B`, and -- via the new L1/R1
+discs -- the console's own A and B on `JOYPAD_L`/`JOYPAD_R`. What is left out
+is the X cursor's UP and RIGHT, which land on `JOYPAD_Y` and `JOYPAD_X`. The
+DMG faceplate has no X or Y disc and `KOBOY_MAX_EXTRA_BTNS` is 2 because that
+is what fits between the d-pad and the B button without moving anything.
+
+No title measured so far needs them -- GunPey's portrait mode answers
+`JOYPAD_A`, Klonoa's answers `JOYPAD_L` -- so this is filed rather than
+fixed. If a report arrives, the options are a third and fourth slot (needing
+somewhere to put them) or a MENU toggle that remaps the two drawn face discs.
+
+### 43. Colour on four greys: blue skies go black, and no core option fixes it
+
+The owner's Neo Geo Pocket library is 250 `.ngc` against 27 `.ngp`, and the
+WonderSwan one 175 `.wsc` against 163 `.ws`, so both systems are in practice
+COLOUR systems here -- the "natively greyscale, nothing is discarded"
+framing is true of the mono hardware only. Rec.601 weights blue at 29/256, so
+a saturated blue fill lands at luma ~29 and `video_quantise4`'s first
+threshold (43) puts it on the darkest level: Sonic Pocket Adventure's first
+zone renders with a black sky, and Sonic is nearly invisible against it.
+
+Checked for a core-side answer and there is none. `wswan_mono_palette`
+applies only to mono titles; `wswan_gfx_colors` is a bit-depth switch; RACE's
+`race_dark_filter_level` only darkens. The fix, if one is wanted, is a
+contrast or per-frame histogram stretch in koboy's own pipeline between the
+gray LUT and the quantiser -- which is the same stage #23 already wants
+optimised, and would be cheapest folded into that work. It would also affect
+NES, which has the identical problem, so it is a video.c question rather than
+a per-system one.
+
+### 44. Neo Geo Pocket saves do not go through sram.c, and nothing on the device has proved they go anywhere
+
+`retro_get_memory_size(RETRO_MEMORY_SAVE_RAM)` is 0 for every one of the
+owner's ten `.ngp` titles on BOTH candidate cores, because an NGP cartridge
+saves into flash. RACE writes that flash itself as `<rom>.ngf` in the
+directory the frontend answers `GET_SAVE_DIRECTORY` with, and koboy answers
+with `cfg.save_dir`, whose shipped default resolves to the install directory.
+So saves should work -- verified on the host, where fourteen titles left
+twelve `.ngf` files in an initially empty directory -- but:
+
+- the file lands in `.adds/koboy/` beside the binary, not in a `saves/`
+  subdirectory, and nothing in koboy names or manages it;
+- `sram_save`'s atomic temp-file/fsync/rename discipline does not apply to
+  it, because koboy is not the writer;
+- an unwritable `save_dir` fails silently, exactly the way a working save
+  looks.
+
+`tests/test_core.c` now pins the callback's answer. What it cannot pin is
+that the answer is a directory that exists and is writable on the device.
+
+### 45. `KOBOY_MAX_EXTRA_BTNS` is 2 for a spatial reason, not a design one
+
+`koboy_layout.extra[]` is sized 2 because the DMG faceplate has room for
+exactly two more discs -- the pocket below A (the Pokemon Mini's C) and the
+column between the d-pad and B (the WonderSwan's L1/R1 pair) -- without
+moving a Game Boy control or pushing `chrome_controls_top` up into the game
+rect. A seventh system needing three would need somewhere to put the third,
+not just a bigger number. Recorded so nobody raises the constant and
+discovers that at render time.

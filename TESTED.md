@@ -62,6 +62,122 @@ is by far the cheapest thing koboy renders and correspondingly small on the
 panel -- `scale = 0` auto-fits it to 13x (1248x832, ~26 ms). See
 `docs/FOLLOWUPS.md` #34 and #35.
 
+### WonderSwan and Neo Geo Pocket: NOT RUN ON THE DEVICE, 2026-08-26
+
+Both systems were added and wired on the same day and **neither has been on
+a Kobo**. Everything below was measured on the x86_64 dev host with
+`scripts/probe_core.c` and a throwaway harness driving koboy's own
+`config.c`/`video.c`/`chrome.c` against ROMs from a real collection; the ARM
+cores were cross-built and passed `scripts/verify-core.sh`, and that is the
+whole of the device-side evidence.
+
+| | WonderSwan (beetle-wswan) | Neo Geo Pocket (RACE) |
+|---|---|---|
+| Geometry before the first `retro_run` | 224x144 base, **224x224 max** | 160x152 base and max |
+| ...and after | unchanged | unchanged |
+| `SET_GEOMETRY` at runtime | **yes, on rotation only** -- base becomes 144x224, max stays 224x224 | never |
+| Pixel format | RGB565 | RGB565 |
+| Asks for a system directory | no | no |
+| Asks for a save directory | no | **yes -- and this is its save path** |
+| `valid_extensions` | `ws\|wsc\|pc2` | `ngp\|ngc\|ngpc\|npc` |
+| `RETRO_MEMORY_SAVE_RAM` | 128 / 2048 / 8192 / 32768 / 262144 by cart, 0 for the five titles with no battery | **0, always, on both candidate cores** |
+| BIOS required | **no** -- verified against an empty system directory | **no** -- links its own HLE BIOS, same verification |
+| ARM closure | `libc.so.6` **alone** | `libc.so.6` **alone** |
+| ARM size, stripped | 607 KB | 208 KB |
+| Host emulation cost | 0.21 ms/frame | 0.16-0.25 ms/frame |
+
+Neither reports a placeholder geometry, unlike gw-libretro -- established by
+asking, which is the only reason it is written here.
+
+**The rotation question, settled by measurement.** A WonderSwan has two grips
+and many titles are played with the console on its side. beetle-wswan does not
+detect that per title (the header bit that would is `#if 0`'d out upstream)
+and does not report rotated geometry at load. What it does is offer
+`wswan_rotate_display = manual`, which toggles rotation on SELECT, and
+`wswan_rotate_keymap = auto`, which swaps the button map to match. koboy
+answers neither option, so both keep those defaults, and that turns out to be
+exactly right: koboy returns false for `SET_ROTATION` (it is an unknown
+command), so the core rotates the pixels itself and announces `144x224` base
+with max unchanged -- which main.c's base-only branch already absorbs without
+re-fitting anything. Verified end to end: GunPey renders sideways in a 896x576
+box, and after one SELECT press upright in a 576x896 one, with no koboy change
+at all.
+
+**What the rotation costs.** `wswan_rotate_keymap = auto` also moves the
+console's own A and B onto `JOYPAD_L` / `JOYPAD_R`, which the DMG faceplate
+had no buttons for. Measured on a real title: `Kaze no Klonoa - Moonlight
+Museum` in portrait responds to exactly two inputs, START and `JOYPAD_L`, so
+without those buttons it cannot be started. The faceplate now draws an L1 and
+an R1 disc for `.ws`/`.wsc`. Still **not** reachable: the rotated map's
+X-cursor up/right, on `JOYPAD_Y` / `JOYPAD_X` -- see `docs/FOLLOWUPS.md` #42.
+
+Resolved presentation, from `config_resolve_profile`, with `video_submit`
+estimated from #23's 4.7 ms + 20.7 ns per destination pixel:
+
+| System | Panel | Scale | Rect | drawn | est. `submit` |
+|---|---|---|---|---|---|
+| WonderSwan 224x144 | 1072x1448 | 3 | 672x672 | 672x432 | 10.7 ms |
+| WonderSwan 224x144 | 1264x1680 | 4 | 896x896 | 896x576 | 15.4 ms |
+| WonderSwan 144x224 (rotated) | 1264x1680 | 4 | 896x896 | 576x896 | 15.4 ms |
+| Neo Geo Pocket 160x152 | 1072x1448 | 5 | 800x760 | 800x760 | 17.3 ms |
+| Neo Geo Pocket 160x152 | 1264x1680 | 6 | 960x912 | 960x912 | 22.8 ms |
+| Neo Geo Pocket 160x152 | 1440x1920 | 7 | 1120x1064 | 1120x1064 | 29.4 ms |
+| (Game Boy, for scale) | 1264x1680 | 5 | 800x720 | 800x720 | 16.6 ms |
+
+The WonderSwan's rect is SQUARE because its max is: the core reports 224x224
+so that both orientations fit one rect and rotation never re-fits. A landscape
+title therefore leaves 36% of that rect as margin for the whole session. That
+margin used to quantise to solid black; it is now cleared to the lightest of
+the four levels and excluded from the per-frame quantise pass, which is where
+the "drawn" column above comes from. Neo Geo Pocket is the most expensive
+thing koboy renders -- see `docs/FOLLOWUPS.md` #41.
+
+**How four greys actually look.** Rendered through koboy's real pipeline and
+examined, not assumed:
+
+- *Mono WonderSwan* is the best case this project has had. The hardware drives
+  eight shades and a frame arrives with seven distinct luma values in it;
+  quantised to four, GunPey's dithered skies and Makaimura's stonework both
+  read cleanly, because the source is already grey and the reduction is a
+  regular 8->4 fold rather than a projection.
+- *Mono Neo Geo Pocket* is the same story at 160x152: Samurai Shodown's
+  portrait screen and Baseball Stars' logo come through as crisp dark-on-white
+  line art.
+- *Colour is a different matter, and it is the majority of the owner's
+  library* (250 `.ngc` against 27 `.ngp`; 175 `.wsc` against 163 `.ws`). A
+  WonderSwan Color or NGPC frame carries 20-90 distinct luma values and loses
+  exactly what NES loses. The specific failure is saturated mid-luma colour,
+  and blue above all: Rec.601 weights blue at 29/256, so a solid blue sky
+  lands at luma ~29 and quantises to the DARKEST level. Sonic Pocket
+  Adventure's first zone renders with a **black** sky that Sonic himself
+  nearly disappears into; Golden Axe's title does the same. Legible, playable,
+  but plainly a lossy translation rather than the free one the mono halves
+  get.
+- **No core option helps.** Looked for, and there is none: `wswan_mono_palette`
+  applies only to MONO titles (its default, "Grayscale", is already the right
+  answer there), `wswan_gfx_colors` is a bit-depth switch, and RACE's only
+  relevant option is `race_dark_filter_level`, which darkens -- the wrong
+  direction on reflective paper, and left at its default 0. Improving colour
+  would mean a contrast or gamma stage in koboy's own pipeline before
+  `video_quantise4`; see `docs/FOLLOWUPS.md` #43.
+
+**Saves diverge between the two systems, and that matters.** A WonderSwan
+cartridge exposes `RETRO_MEMORY_SAVE_RAM` and `sram.c` is the right path for
+it. A Neo Geo Pocket one does not: `retro_get_memory_size(SAVE_RAM)` is 0 for
+every title on both candidate cores, because an NGP saves into flash, and the
+core writes that file itself -- `<rom>.ngf` for RACE, `<rom>.flash` for
+beetle-ngp -- into whatever directory the frontend answers
+`GET_SAVE_DIRECTORY` with. Observed directly: running fourteen titles against
+an initially empty directory left twelve `.ngf` files in it. koboy already
+answers that query with `cfg.save_dir`, so this works, but it works through
+one environment callback that nothing pinned until now
+(`tests/test_core.c`).
+
+**Not established:** everything device-side. The ARM cores have not been
+`dlopen`ed on a Kobo, nothing has rendered on the panel, no playable-speed
+figure exists, the L1/R1 discs have never been touched by a real finger, and
+no WonderSwan `.srm` or Neo Geo Pocket `.ngf` has survived a real session.
+
 ### Game & Watch: VERIFIED on the device, 2026-08-26
 
 Confirmed working by the device owner on the Kobo Libra 2: a Game & Watch

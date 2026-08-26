@@ -3,9 +3,16 @@
 A retro emulator for Kobo e-readers, built Game-Boy-first. It runs a libretro
 core picked from the ROM's own extension --- gambatte for `.gb`/`.gbc`,
 gw-libretro for Game & Watch `.mgw`, fceumm for NES `.nes`, PokeMini for
-Pokemon Mini `.min` --- renders four greys straight onto the e-ink panel
-through FBInk, and reads the page-turn buttons and the touchscreen directly
-from evdev. No BIOS file is needed for any of them.
+Pokemon Mini `.min`, beetle-wswan for WonderSwan and WonderSwan Color
+`.ws`/`.wsc`, RACE for Neo Geo Pocket and Pocket Color `.ngp`/`.ngc` ---
+renders four greys straight onto the e-ink panel through FBInk, and reads the
+page-turn buttons and the touchscreen directly from evdev. No BIOS file is
+needed for any of them.
+
+The two greyscale handhelds suit the panel best: a WonderSwan and a Neo Geo
+Pocket both drive eight shades of grey natively, so a mono title loses almost
+nothing on the way to four. Their Color halves lose what any colour system
+loses --- see [TESTED.md](TESTED.md).
 
 It is built around what the hardware can actually do rather than around what a
 desktop emulator expects: each refresh lets the panel controller pick its own
@@ -23,13 +30,14 @@ Game Boy.
 - NickelMenu or KFMon, to launch it. koboy will not run without one; see
   "Launching" below for why that is a hard requirement.
 - **Your own ROMs.** None are included, and none ever will be. Either point
-  `rom=` in `koboy.ini` at a specific `.gb`/`.gbc`/`.mgw`/`.nes`/`.min` file,
+  `rom=` in `koboy.ini` at a specific `.gb`/`.gbc`/`.mgw`/`.nes`/`.min`/
+  `.ws`/`.wsc`/`.ngp`/`.ngc` file,
   or drop several into `.adds/koboy/roms/` (the `rom_dir` default) and pick
   one from koboy's own on-panel menu at launch -- see "Playing" below.
   Subfolders work: the browser walks them one level at a time, which is what
   makes a 1386-file NES collection usable. Files that are not ROMs are not
-  listed, so the `.pal` palettes and `boot.rom` a real collection carries
-  stay out of the way.
+  listed, so the `.pal` palettes, `boot.rom` and `boot1.rom` a real collection
+  carries stay out of the way.
 
 ## Install
 
