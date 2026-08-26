@@ -37,6 +37,11 @@ typedef struct {
                                      measured moved by up to a factor of 2.2
                                      between sessions -- see config/koboy.ini. */
     bool     force_dither;
+    /* koboy_gray_map, held as an int for the same reason dpad_mode is: this
+       struct is memset to zero and parsed from text, and an enum-typed field
+       would make an out-of-range ini value undefined rather than merely
+       wrong. video.c's gray_of guards the range. */
+    int      gray_map;
     bool     grab_input;
     int      dpad_mode;
     int      dpad_deadzone;      /* px */
@@ -84,6 +89,18 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
                             int panel_w, int panel_h,
                             int base_w, int base_h, int max_w, int max_h);
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b);
+
+/* Rewrites `path` with exactly one `gray_map = <name>` line, preserving every
+   other line, comment and blank included -- the same read-filter-rename dance
+   config_save_keys does for the calibrated keys, and literally the same code
+   underneath, so the two cannot drift.
+
+   It exists because the greyscale mapping is a SUBJECTIVE judgement about how
+   a reflective panel looks, which means the owner has to be able to flip
+   between mappings while looking at the game, and a choice made that way has
+   to survive the next launch. The ini key and the in-game menu are one
+   setting, not two: the menu writes the same key config_load reads. */
+bool config_save_gray_map(const char *path, koboy_gray_map map);
 
 /* Should a frame whose dirty rect covers dirty_px of a whole_px game rect be
    promoted from the fast waveform to the flashing one? Lives here, and is

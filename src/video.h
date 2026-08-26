@@ -2,9 +2,46 @@
 #define KOBOY_VIDEO_H
 #include "koboy.h"
 
-uint8_t video_rgb565_to_gray(uint16_t px);
-uint8_t video_xrgb8888_to_gray(uint32_t px);
-void    video_gray_lut_build(uint8_t lut[65536]);
+/* The RGB -> grey reduction, under whichever koboy_gray_map is selected (the
+   enum, and why it exists at all, are in koboy.h).
+
+   These three MUST agree: video_gray_lut_build is just 65536 calls to
+   video_rgb565_to_gray, and video_xrgb8888_to_gray is the same arithmetic for
+   the other pixel format a core may request. A core that hands koboy
+   XRGB8888 must not render differently from one that hands it RGB565, so all
+   three go through one static gray_of() in video.c rather than three copies
+   of the weights.
+
+   An out-of-range map renders as KOBOY_GRAY_DEFAULT rather than reading past
+   the weight table -- see the guard's comment in video.c. */
+uint8_t video_rgb565_to_gray(uint16_t px, koboy_gray_map m);
+uint8_t video_xrgb8888_to_gray(uint32_t px, koboy_gray_map m);
+void    video_gray_lut_build(uint8_t lut[65536], koboy_gray_map m);
+
+/* The range check, exported and named rather than left as an `if` at each use
+   site, and that is deliberate rather than tidiness.
+
+   koboy_gray_map reaches video.c through an `int` field in koboy_config --
+   set from an ini file and from the in-game MENU -- so an out-of-range value
+   is one bad edit away, and unguarded it would index the weight table off its
+   end. But a guard whose only observable failure is reading past an array is
+   a guard NO TEST CAN PROVE: what such a read returns is undefined, and on
+   this host it may well land on a plausible value inside the next object and
+   look like the guard working. That exact trap is written up in CLAUDE.md
+   ("if a test can only fail via UB, it is not a test"). Exposing the clamp
+   lets tests/test_video_gray.c assert the CLAMPED VALUE directly, so deleting
+   the guard fails a check instead of merely becoming undefined.
+
+   LIVE: video.c calls it on every gray_of and every video_gray_map_name. */
+koboy_gray_map video_gray_map_clamp(int m);
+
+/* The ini/menu spelling of a map, and the reverse. video_gray_map_name never
+   returns NULL (an out-of-range map names the default), which is what lets
+   main.c build a menu label without a null check. video_gray_map_parse
+   returns false and touches nothing for a name it does not know, so a typo in
+   koboy.ini keeps the previous value instead of silently becoming map 0. */
+const char *video_gray_map_name(koboy_gray_map m);
+bool        video_gray_map_parse(const char *s, koboy_gray_map *out);
 void video_scale_gray(uint8_t *dst, int dst_stride, const uint8_t *src,
                       int src_w, int src_h, int src_stride, int scale);
 
@@ -131,7 +168,23 @@ void video_fit_rect(const koboy_profile *p, int src_w, int src_h,
 
 typedef struct koboy_video koboy_video;
 
-koboy_video   *video_create(const koboy_profile *p, bool force_dither);
+koboy_video   *video_create(const koboy_profile *p, bool force_dither,
+                            koboy_gray_map map);
+
+/* Swaps the greyscale mapping of a live koboy_video, rebuilding the 65536-entry
+   LUT in place. Costs one LUT build (~65k multiply/divide pairs, microseconds)
+   and nothing per frame afterwards, which is the whole point of keeping this a
+   LUT: video_submit is this pipeline's measured bottleneck and must not gain a
+   branch per pixel.
+
+   Does NOT invalidate: the caller must follow this with video_invalidate(),
+   because `prev` still holds pixels produced by the OLD mapping and the dirty
+   diff would leave every unchanged tile showing them. On e-ink that is a
+   half-old, half-new frame that persists until something else happens to touch
+   those tiles. main.c's return-from-MODE_MENU path already invalidates
+   unconditionally, which is why the menu entry does not have to. */
+void           video_set_gray_map(koboy_video *v, koboy_gray_map map);
+koboy_gray_map video_get_gray_map(const koboy_video *v);
 void           video_destroy(koboy_video *v);
 koboy_rect     video_submit(koboy_video *v, const void *src, int src_w, int src_h,
                             size_t src_pitch, koboy_pixfmt fmt);

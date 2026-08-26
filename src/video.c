@@ -2,30 +2,114 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* Rec.601 luma with integer weights; 8-bit channels expanded from 5/6 bits by
-   bit replication so 0x1F -> 0xFF exactly. */
-static inline uint8_t luma(unsigned r, unsigned g, unsigned b)
+/* The shadow-lift curve: out = v * (255 + K) / (v + K).
+
+   A gamma of about 0.85 is what the measurements wanted, and this is that
+   curve without a pow() or a float anywhere -- the pixel path is integer by
+   constraint, and a table would need generating by something this project
+   cannot reproduce in a test. Monotone, exactly 0 at 0 and exactly 255 at
+   255 (so white stays paper-white and black stays black), and every value in
+   between is one multiply and one divide a reviewer can redo by hand.
+
+   WHY it is here at all, since a monotone remap looks like a no-op before a
+   quantiser: it is not one, because the quantiser's thresholds are fixed at
+   43/128/213. Lifting the shadows is exactly equivalent to lowering those
+   thresholds, and lowering the first one is what stops a dark-but-coloured
+   background collapsing to solid black. MEASURED over 38 gameplay frames from
+   19 titles across NES/WonderSwan Color/Neo Geo Pocket Color: pixels that
+   carry visible colour (max channel >= 24) yet quantise to level 0 fall from
+   6.7% of all pixels to 2.5%. Kirby's Adventure's brick wall rgb(99,20,0)
+   goes 41 -> 48, i.e. off level 0 and onto level 1, which is the difference
+   between a solid black slab and a wall with a pattern in it.
+
+   K = 1000 is not a tuned-to-death number: 700 and 1400 were measured too and
+   move the same statistic by fractions of a percent. It is the value whose
+   curve sits closest to gamma 0.85 (83 -> 96 against 98, 169 -> 181 against
+   180) while keeping the Game Boy's two mid greys comfortably inside their
+   original levels. */
+#define KOBOY_GRAY_LIFT 1000u
+
+static inline unsigned gray_lift(unsigned v)
 {
-    return (uint8_t)((77u * r + 150u * g + 29u * b) >> 8);
+    return (v * (255u + KOBOY_GRAY_LIFT)) / (v + KOBOY_GRAY_LIFT);
 }
 
-uint8_t video_rgb565_to_gray(uint16_t px)
+/* One row per koboy_gray_map, in the same order. The weights of every
+   non-VALUE row sum to EXACTLY 256, which is what makes (w.r*255 + w.g*255 +
+   w.b*255) >> 8 come out at exactly 255 -- white must stay white, or the
+   quantiser's top level stops being reachable from white.
+
+   KOBOY_GRAY_VALUE has no weights: it is max(R,G,B), which no weighted sum
+   can express. Its row is present so the table stays indexable by the enum,
+   and gray_of branches on the enum rather than on a sentinel weight. */
+static const struct { uint16_t wr, wg, wb; uint8_t lift; } GRAY_MAPS[KOBOY_GRAY_COUNT] = {
+    /* LUMA     */ {  77, 150,  29, 0 },
+    /* BRIGHT   */ {  77, 150,  29, 1 },
+    /* BALANCED */ {  81, 118,  57, 1 },
+    /* EQUAL    */ {  85,  85,  86, 1 },
+    /* VALUE    */ {   0,   0,   0, 0 },
+};
+
+static const char *const GRAY_NAMES[KOBOY_GRAY_COUNT] = {
+    "luma", "bright", "balanced", "equal", "value"
+};
+
+/* Contract, and why this is a separate exported function rather than an `if`
+   inside gray_of, in video.h. */
+koboy_gray_map video_gray_map_clamp(int m)
+{
+    if (m < 0 || m >= KOBOY_GRAY_COUNT) return KOBOY_GRAY_DEFAULT;
+    return (koboy_gray_map)m;
+}
+
+/* 8-bit channels in, one grey out. Callers expand 5/6-bit RGB565 channels by
+   bit replication first, so 0x1F -> 0xFF exactly and the two entry points
+   below cannot disagree about what a saturated channel means. */
+static uint8_t gray_of(koboy_gray_map m_in, unsigned r, unsigned g, unsigned b)
+{
+    koboy_gray_map m = video_gray_map_clamp((int)m_in);
+    if (m == KOBOY_GRAY_VALUE) {
+        unsigned v = r > g ? r : g;
+        if (b > v) v = b;
+        return (uint8_t)v;
+    }
+    {
+        unsigned v = (GRAY_MAPS[m].wr * r + GRAY_MAPS[m].wg * g +
+                      GRAY_MAPS[m].wb * b) >> 8;
+        return (uint8_t)(GRAY_MAPS[m].lift ? gray_lift(v) : v);
+    }
+}
+
+const char *video_gray_map_name(koboy_gray_map m)
+{
+    return GRAY_NAMES[video_gray_map_clamp((int)m)];
+}
+
+bool video_gray_map_parse(const char *s, koboy_gray_map *out)
+{
+    if (!s || !out) return false;
+    for (int i = 0; i < KOBOY_GRAY_COUNT; i++)
+        if (!strcmp(s, GRAY_NAMES[i])) { *out = (koboy_gray_map)i; return true; }
+    return false;
+}
+
+uint8_t video_rgb565_to_gray(uint16_t px, koboy_gray_map m)
 {
     unsigned r5 = (px >> 11) & 0x1Fu, g6 = (px >> 5) & 0x3Fu, b5 = px & 0x1Fu;
     unsigned r = (r5 << 3) | (r5 >> 2);
     unsigned g = (g6 << 2) | (g6 >> 4);
     unsigned b = (b5 << 3) | (b5 >> 2);
-    return luma(r, g, b);
+    return gray_of(m, r, g, b);
 }
 
-uint8_t video_xrgb8888_to_gray(uint32_t px)
+uint8_t video_xrgb8888_to_gray(uint32_t px, koboy_gray_map m)
 {
-    return luma((px >> 16) & 0xFFu, (px >> 8) & 0xFFu, px & 0xFFu);
+    return gray_of(m, (px >> 16) & 0xFFu, (px >> 8) & 0xFFu, px & 0xFFu);
 }
 
-void video_gray_lut_build(uint8_t lut[65536])
+void video_gray_lut_build(uint8_t lut[65536], koboy_gray_map m)
 {
-    for (int i = 0; i < 65536; i++) lut[i] = video_rgb565_to_gray((uint16_t)i);
+    for (int i = 0; i < 65536; i++) lut[i] = video_rgb565_to_gray((uint16_t)i, m);
 }
 
 /* Nearest-neighbour integer upscale. Each source pixel becomes a solid run of
@@ -427,6 +511,12 @@ struct koboy_video {
        pixels. */
     koboy_rect fit_rect;
     uint8_t  lut[65536];
+    /* Which mapping `lut` was built with. Stored, not just applied, because
+       the XRGB8888 path below does not go through the LUT at all -- it calls
+       video_xrgb8888_to_gray per pixel and needs the same map, or a core that
+       chose the other pixel format would render differently from one that
+       chose RGB565. */
+    koboy_gray_map map;
 };
 
 /* Largest integer scale at which a src_w x src_h frame fits the reserved rect,
@@ -530,12 +620,14 @@ void video_frame_rect(const koboy_video *v, koboy_rect *out)
     *out = v->fit_rect;
 }
 
-koboy_video *video_create(const koboy_profile *p, bool force_dither)
+koboy_video *video_create(const koboy_profile *p, bool force_dither,
+                          koboy_gray_map map)
 {
     koboy_video *v = calloc(1, sizeof *v);
     if (!v) return NULL;
     v->p = *p;
     v->dither = force_dither;
+    v->map = map;
     v->stride = p->game_w;
     size_t n = (size_t)v->stride * (size_t)p->game_h;
     v->cur  = calloc(1, n);
@@ -548,10 +640,22 @@ koboy_video *video_create(const koboy_profile *p, bool force_dither)
        exactly what the old KOBOY_GB_W*KOBOY_GB_H constant did. */
     v->gray = calloc(1, (size_t)p->max_w * (size_t)p->max_h);
     if (!v->cur || !v->prev || !v->gray) { video_destroy(v); return NULL; }
-    video_gray_lut_build(v->lut);
+    video_gray_lut_build(v->lut, v->map);
     /* prev starts as an impossible value so the first frame is fully dirty */
     memset(v->prev, 0x01, n);
     return v;
+}
+
+void video_set_gray_map(koboy_video *v, koboy_gray_map map)
+{
+    if (!v || v->map == map) return;     /* rebuilding an identical LUT is pure cost */
+    v->map = map;
+    video_gray_lut_build(v->lut, v->map);
+}
+
+koboy_gray_map video_get_gray_map(const koboy_video *v)
+{
+    return v ? v->map : (koboy_gray_map)KOBOY_GRAY_DEFAULT;
 }
 
 void video_destroy(koboy_video *v)
@@ -603,7 +707,7 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
             for (int x = 0; x < src_w; x++) d[x] = v->lut[s[x]];
         } else {
             const uint32_t *s = (const uint32_t *)((const uint8_t *)src + (size_t)y * src_pitch);
-            for (int x = 0; x < src_w; x++) d[x] = video_xrgb8888_to_gray(s[x]);
+            for (int x = 0; x < src_w; x++) d[x] = video_xrgb8888_to_gray(s[x], v->map);
         }
     }
 

@@ -278,21 +278,29 @@ static bool load_rom_into(koboy_core *core, koboy_config *cfg,
 }
 
 enum {
-    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
+    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_CHOOSE_ROM,
+    MENU_RESUME, MENU_QUIT,
     MENU_COUNT
 };
 
 /* Returns the chosen MENU_* action, or MENU_RESUME if the user backed out.
    `has_states` greys nothing out visually -- the label says so instead, which
-   is cheaper on a panel with no colour and no hover. */
+   is cheaper on a panel with no colour and no hover. `map` is likewise shown
+   in the row rather than behind it: on a panel with no hover and no second
+   screen, a setting you cannot read without opening something is a setting
+   nobody knows the value of. */
 static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                     int stride, int pw, int ph, bool has_states,
+                    koboy_gray_map map,
                     const koboy_input_state *script, int script_n)
 {
     const char *items[MENU_COUNT];
+    static char gray_label[48];
+    ui_gray_label(gray_label, sizeof gray_label, map);
     items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
     items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
     items[MENU_RESET]       = "RESET GAME";
+    items[MENU_GRAY]        = gray_label;
     items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
     items[MENU_RESUME]      = "RESUME";
     items[MENU_QUIT]        = "QUIT";
@@ -1031,7 +1039,17 @@ int main(int argc, char **argv)
     }
 
     /* ------------------------------------------------------- video, input */
-    koboy_video *vid = video_create(&prof, cfg.force_dither);
+    /* Logged, not merely applied. This is the setting that changes the most
+       of what a colour system looks like, it is reachable from two places
+       (koboy.ini and the in-game MENU), and the panel itself cannot tell you
+       which mapping produced the frame you are looking at -- so koboy.log has
+       to. Read back off the LIVE koboy_video rather than off cfg, which is
+       what makes tests/smoke_host.sh's assertion end-to-end: it fails if
+       main.c hands video_create the wrong value, not merely if config.c
+       parses the wrong one. */
+    koboy_video *vid = video_create(&prof, cfg.force_dither,
+                                    (koboy_gray_map)cfg.gray_map);
+    if (vid) say("koboy: gray_map %s\n", video_gray_map_name(video_get_gray_map(vid)));
     koboy_input *in  = input_create(&cfg, &prof);
     if (!vid || !in) {
         fatal("out of memory");
@@ -1114,7 +1132,8 @@ int main(int argc, char **argv)
 
         if (input_take_menu_request(in)) {
             size_t ssz = core_state_size(core);
-            int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0, NULL, 0);
+            int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
+                               (koboy_gray_map)cfg.gray_map, NULL, 0);
 
             if (act == MENU_SAVE || act == MENU_LOAD) {
                 int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
@@ -1154,6 +1173,34 @@ int main(int argc, char **argv)
                 }
             } else if (act == MENU_RESET) {
                 core_reset(core);
+            } else if (act == MENU_GRAY) {
+                /* Cycles, and returns to the GAME rather than reopening the
+                   menu. That is the point: this is a subjective judgement
+                   about how a reflective panel looks, and it can only be made
+                   while looking at the game. Two taps to advance one step is
+                   the price of seeing the step.
+
+                   It takes effect on the very next presented frame, not next
+                   launch: video_set_gray_map rebuilds the LUT here, and the
+                   return-from-menu path below already does redraw_chrome +
+                   video_invalidate unconditionally. Without that invalidate
+                   the dirty diff would leave every unchanged tile carrying
+                   pixels from the OLD mapping -- half-old, half-new, and on
+                   e-ink it persists until something else happens to touch
+                   those tiles. */
+                cfg.gray_map = (cfg.gray_map + 1) % KOBOY_GRAY_COUNT;
+                video_set_gray_map(vid, (koboy_gray_map)cfg.gray_map);
+                /* The ini key and this menu are ONE setting. A failure here
+                   is not fatal and must not be silent: the mapping is live
+                   for this session either way, it just will not survive a
+                   relaunch (a read-only .adds, most likely). */
+                if (config_save_gray_map(ini_path, (koboy_gray_map)cfg.gray_map))
+                    say("koboy: gray_map = %s\n",
+                        video_gray_map_name((koboy_gray_map)cfg.gray_map));
+                else
+                    say("koboy: gray_map = %s (this session only -- "
+                        "could not write %s)\n",
+                        video_gray_map_name((koboy_gray_map)cfg.gray_map), ini_path);
             } else if (act == MENU_QUIT) {
                 mode = MODE_QUIT;
             } else if (act == MENU_CHOOSE_ROM) {
@@ -1389,7 +1436,8 @@ int main(int argc, char **argv)
                    submit), and the panel does not yet show anything from it
                    either way. */
                 video_destroy(vid);
-                vid = video_create(&prof, cfg.force_dither);
+                vid = video_create(&prof, cfg.force_dither,
+                                   (koboy_gray_map)cfg.gray_map);
                 if (!vid) {
                     fatal("out of memory");
                     mode = MODE_QUIT;

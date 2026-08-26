@@ -896,4 +896,104 @@ TEST_MAIN({
         CHECK_EQ_INT(ep.scale, 3);
         CHECK_EQ_INT(ep.game_w, 288);
     }
+
+    /* ---- gray_map: one setting, reachable from the ini AND the menu ------ */
+    {
+        char dir[] = "/tmp/koboy_gray_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        char path[512];
+        snprintf(path, sizeof path, "%s/koboy.ini", dir);
+
+        koboy_config c; config_defaults(&c);
+        CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_DEFAULT);
+
+        /* Every shipped name parses, and to a DIFFERENT value each time --
+           asserting only that "equal" parses would pass with the parser
+           hard-wired to return the default. */
+        static const char *const names[] = { "luma", "bright", "balanced",
+                                             "equal", "value" };
+        for (int i = 0; i < 5; i++) {
+            FILE *f = fopen(path, "w");
+            CHECK(f != NULL);
+            fprintf(f, "gray_map = %s\n", names[i]);
+            fclose(f);
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.gray_map, i);
+        }
+
+        /* An unrecognised name KEEPS the previous value. It must not fall to
+           entry 0, which is exactly the Rec.601 mapping this key exists to
+           move away from -- a typo would silently reinstate the rendering the
+           user was trying to change. Driven from a NON-default prior value so
+           the check can tell "kept" from "reset to the default". */
+        {
+            FILE *f = fopen(path, "w");
+            CHECK(f != NULL);
+            fputs("gray_map = value\ngray_map = nonsense\n", f);
+            fclose(f);
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_VALUE);
+        }
+
+        /* config_save_gray_map: writes the key, and PRESERVES everything else
+           in the file -- the whole reason it shares config_save_keys'
+           implementation instead of rewriting the ini from defaults. */
+        {
+            FILE *f = fopen(path, "w");
+            CHECK(f != NULL);
+            fputs("# a comment\nscale = 4\ngray_map = luma\ngrab_input = false\n", f);
+            fclose(f);
+            CHECK(config_save_gray_map(path, KOBOY_GRAY_EQUAL));
+
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_EQUAL);
+            CHECK_EQ_INT(c.scale, 4);          /* the other keys survived */
+            CHECK_EQ_INT(c.grab_input, 0);
+
+            /* Exactly ONE gray_map line, so repeated menu presses cannot grow
+               the file without bound -- the same idempotence config_save_keys
+               was written for. The comment is still there too. */
+            f = fopen(path, "r");
+            CHECK(f != NULL);
+            char line[1024]; int nkey = 0, ncomment = 0;
+            while (fgets(line, sizeof line, f))
+                { if (strstr(line, "gray_map")) nkey++;
+                  if (strstr(line, "a comment")) ncomment++; }
+            fclose(f);
+            CHECK_EQ_INT(nkey, 1);
+            CHECK_EQ_INT(ncomment, 1);
+
+            /* And a second save replaces rather than appends. */
+            CHECK(config_save_gray_map(path, KOBOY_GRAY_BRIGHT));
+            f = fopen(path, "r");
+            CHECK(f != NULL);
+            nkey = 0;
+            while (fgets(line, sizeof line, f)) if (strstr(line, "gray_map")) nkey++;
+            fclose(f);
+            CHECK_EQ_INT(nkey, 1);
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_BRIGHT);
+        }
+
+        /* config_save_keys still works, and the two writers do not clobber
+           each other's key -- they share one implementation, so a regression
+           in the shared filter would show up as one erasing the other. */
+        CHECK(config_save_keys(path, 193, 194));
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_BRIGHT);
+        CHECK_EQ_INT(c.key_a, 193);
+        CHECK(config_save_gray_map(path, KOBOY_GRAY_LUMA));
+        config_defaults(&c);
+        CHECK(config_load(&c, path));
+        CHECK_EQ_INT(c.key_a, 193);
+        CHECK_EQ_INT(c.key_b, 194);
+        CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_LUMA);
+
+        remove(path); remove(dir);
+    }
 })

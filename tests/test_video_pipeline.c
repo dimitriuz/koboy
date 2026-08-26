@@ -23,7 +23,7 @@ TEST_MAIN({
     koboy_profile p;
     CHECK(config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
 
-    koboy_video *v = video_create(&p, false);
+    koboy_video *v = video_create(&p, false, KOBOY_GRAY_DEFAULT);
     CHECK(v != NULL);
 
     static uint16_t fb[KOBOY_GB_W * KOBOY_GB_H];
@@ -72,7 +72,7 @@ TEST_MAIN({
        anything else surviving into the buffer is a real regression, not a
        rounding difference. */
     {
-        koboy_video *dv = video_create(&p, true);
+        koboy_video *dv = video_create(&p, true, KOBOY_GRAY_DEFAULT);
         CHECK(dv != NULL);
 
         fill565(fb, KOBOY_GB_W, KOBOY_GB_H, 0);
@@ -119,7 +119,7 @@ TEST_MAIN({
         CHECK_EQ_INT(gp.game_w, 1000);   /* 200 * 5, from max -- not 100 * 5 */
         CHECK_EQ_INT(gp.game_h, 750);
 
-        koboy_video *gv = video_create(&gp, false);
+        koboy_video *gv = video_create(&gp, false, KOBOY_GRAY_DEFAULT);
         CHECK(gv != NULL);
 
         /* Sized for the 201-wide "oversized" fill below, not just the
@@ -277,7 +277,7 @@ TEST_MAIN({
            as it stays outside the quantised one. Asserted over the whole top
            band rather than at one probe, because a Bayer pattern is only
            visible if you look at more than one pixel. */
-        koboy_video *dv2 = video_create(&gp, true);
+        koboy_video *dv2 = video_create(&gp, true, KOBOY_GRAY_DEFAULT);
         CHECK(dv2 != NULL);
         fill_solid565(gfb, 90, 70, 200, 0xFFFF);
         koboy_rect dr2 = video_submit(dv2, gfb, 90, 70,
@@ -497,7 +497,7 @@ TEST_MAIN({
         CHECK_EQ_INT(lp.game_w, 1264);
         CHECK_EQ_INT(lp.game_h, 765);
 
-        koboy_video *lv = video_create(&lp, false);
+        koboy_video *lv = video_create(&lp, false, KOBOY_GRAY_DEFAULT);
         CHECK(lv != NULL);
 
         static uint16_t lfb[654 * 396];
@@ -547,6 +547,96 @@ TEST_MAIN({
         CHECK_EQ_INT(video_buffer(lv)[0], 0xFF);   /* margin, cleared to white */
 
         video_destroy(lv);
+    }
+
+    /* ---- the greyscale mapping, through the real pipeline ---------------- */
+    {
+        koboy_config gc; config_defaults(&gc);
+        koboy_profile gp2;
+        CHECK(config_resolve_profile(&gp2, &gc, 1264, 1680,
+                                     KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
+
+        /* A colour picture, not the DMG greys: every mapping is the identity
+           on neutral grey, so a grey test frame could not tell two mappings
+           apart and would assert nothing. These four are the measured
+           problem colours -- Sonic's sky and body, Castlevania's sky, Kirby's
+           wall -- so the frame exercises exactly the range that moves. */
+        static const uint32_t colours[4] = {
+            0x009AFFu,   /* rgb(0,154,255)  Sonic Pocket Adventure sky */
+            0x0055FFu,   /* rgb(0,85,255)   Sonic himself */
+            0x00248Cu,   /* rgb(0,36,140)   Castlevania sky */
+            0x631400u    /* rgb(99,20,0)    Kirby's Adventure brick */
+        };
+        static uint32_t fb32[KOBOY_GB_W * KOBOY_GB_H];
+        static uint16_t fb16[KOBOY_GB_W * KOBOY_GB_H];
+        for (int y = 0; y < KOBOY_GB_H; y++)
+            for (int x = 0; x < KOBOY_GB_W; x++) {
+                uint32_t c = colours[((x / 8) + (y / 8)) % 4];
+                fb32[y * KOBOY_GB_W + x] = c;
+                /* The same colour as RGB565. Chosen so the 5/6-bit truncation
+                   round-trips exactly (each channel is already representable),
+                   which is what makes the two submissions below comparable at
+                   all rather than differing by quantisation. */
+                fb16[y * KOBOY_GB_W + x] =
+                    (uint16_t)(((c >> 19) & 0x1Fu) << 11 |
+                               ((c >> 10) & 0x3Fu) << 5  |
+                               ((c >>  3) & 0x1Fu));
+            }
+
+        /* A CORE'S CHOICE OF PIXEL FORMAT MUST NOT CHANGE WHAT IS DRAWN.
+           The RGB565 path reads the LUT; the XRGB8888 path calls
+           video_xrgb8888_to_gray per pixel and never touches it. Asserted
+           under a NON-DEFAULT map, because that is what distinguishes "the
+           XRGB path uses v->map" from "the XRGB path hardcodes something that
+           happens to be the default". */
+        for (int m = 0; m < KOBOY_GRAY_COUNT; m++) {
+            koboy_video *a = video_create(&gp2, false, (koboy_gray_map)m);
+            koboy_video *b = video_create(&gp2, false, (koboy_gray_map)m);
+            CHECK(a && b);
+            video_submit(a, fb16, KOBOY_GB_W, KOBOY_GB_H,
+                         KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            video_submit(b, fb32, KOBOY_GB_W, KOBOY_GB_H,
+                         KOBOY_GB_W * sizeof(uint32_t), KOBOY_PIXFMT_XRGB8888);
+            CHECK_EQ_INT(video_stride(a), video_stride(b));
+            CHECK_EQ_INT(memcmp(video_buffer(a), video_buffer(b),
+                                (size_t)video_stride(a) * (size_t)gp2.game_h), 0);
+            video_destroy(a); video_destroy(b);
+        }
+
+        /* video_set_gray_map has to actually change the pixels. Same frame,
+           same koboy_video, different map: the buffer must differ afterwards,
+           and match what a video CREATED with that map produces. The second
+           half is what rules out "it changed to something", which a
+           corrupted LUT would also satisfy. */
+        {
+            koboy_video *v2 = video_create(&gp2, false, KOBOY_GRAY_LUMA);
+            koboy_video *ref = video_create(&gp2, false, KOBOY_GRAY_VALUE);
+            CHECK(v2 && ref);
+            size_t n = (size_t)video_stride(v2) * (size_t)gp2.game_h;
+            video_submit(v2, fb16, KOBOY_GB_W, KOBOY_GB_H,
+                         KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            static uint8_t before[1264 * 1680];
+            CHECK(n <= sizeof before);
+            memcpy(before, video_buffer(v2), n);
+
+            video_set_gray_map(v2, KOBOY_GRAY_VALUE);
+            CHECK_EQ_INT((int)video_get_gray_map(v2), (int)KOBOY_GRAY_VALUE);
+            /* The diff is against `prev`, which still holds the OLD mapping's
+               pixels -- so this resubmission is exactly the half-old-half-new
+               hazard video_set_gray_map's comment warns about, and the reason
+               main.c pairs it with video_invalidate. Invalidating here makes
+               the comparison total rather than only over the dirty rect. */
+            video_invalidate(v2);
+            video_submit(v2, fb16, KOBOY_GB_W, KOBOY_GB_H,
+                         KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            CHECK(memcmp(before, video_buffer(v2), n) != 0);
+
+            video_submit(ref, fb16, KOBOY_GB_W, KOBOY_GB_H,
+                         KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+            CHECK_EQ_INT(memcmp(video_buffer(ref), video_buffer(v2), n), 0);
+
+            video_destroy(v2); video_destroy(ref);
+        }
     }
 })
 

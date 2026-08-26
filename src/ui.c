@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "video.h"          /* video_gray_map_name: ui_gray_label spells the
+                              current mapping into the MENU row */
 #include "text.h"
 #include <limits.h>
 #include <stdio.h>
@@ -145,6 +147,22 @@ static int item_at_row(const koboy_ui_list *u, int r)
    was measured on. */
 static int strip_w(const koboy_ui_list *u) { return u->row_h; }
 
+
+/* Contract, and why it is not in main.c, in ui.h. */
+void ui_gray_label(char *out, size_t outsz, koboy_gray_map map)
+{
+    static const char PREFIX[] = "GREYSCALE: ";
+    /* video_gray_map_name never returns NULL -- an out-of-range map names the
+       default -- so there is no null branch here to leave untested. */
+    const char *n = video_gray_map_name(map);
+    size_t i = 0;
+
+    if (!out || outsz == 0) return;
+    while (i + 1 < outsz && PREFIX[i]) { out[i] = PREFIX[i]; i++; }
+    for (size_t j = 0; n[j] && i + 1 < outsz; j++, i++)
+        out[i] = (n[j] >= 'a' && n[j] <= 'z') ? (char)(n[j] - 'a' + 'A') : n[j];
+    out[i] = '\0';
+}
 
 void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
 {

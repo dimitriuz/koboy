@@ -562,3 +562,47 @@ echo "$out" | grep -q "geometry settled" \
 echo "ok: a max change does re-fit"
 
 rm -rf "$d"
+
+# ------------------------------------------------- the greyscale mapping
+#
+# END TO END, because every other check on gray_map stops at config.c. This
+# one asserts the ini key reaches the LIVE koboy_video: main.c logs the map
+# read back OFF video_get_gray_map(vid), not off cfg, so a main.c that parsed
+# the key and then handed video_create something else fails here.
+#
+# Three cases, and the third is the one that matters. Asserting only that
+# "gray_map = value" logs "value" would pass against a binary that echoed the
+# ini string without plumbing it anywhere; asserting only the DEFAULT would
+# pass against a binary that ignored the key entirely. Both directions, plus
+# a bad name, are needed for the pair to distinguish anything.
+gd="$(mktemp -d)"
+: > "$gd/GAME.gb"
+
+printf 'rom_dir = %s\ngray_map = value\n' "$gd" > "$gd/koboy.ini"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --config "$gd/koboy.ini" \
+        --core build/stub_core.so --rom "$ROM" --frames 30 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: gray_map run exited $rc"; echo "$out"; exit 1; }
+echo "$out" | grep -q "gray_map value" \
+    || { echo "FAIL: gray_map = value did not reach video_create"; echo "$out"; exit 1; }
+
+printf 'rom_dir = %s\n' "$gd" > "$gd/koboy.ini"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --config "$gd/koboy.ini" \
+        --core build/stub_core.so --rom "$ROM" --frames 30 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: default gray_map run exited $rc"; exit 1; }
+echo "$out" | grep -q "gray_map balanced" \
+    || { echo "FAIL: the shipped default is not balanced"; echo "$out"; exit 1; }
+
+# A name nobody recognises must keep the value already set, NOT fall back to
+# entry 0 (luma) -- which is the exact mapping this setting exists to move
+# away from, so a typo must never silently reinstate it.
+printf 'rom_dir = %s\ngray_map = equal\ngray_map = nonsense\n' "$gd" > "$gd/koboy.ini"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --config "$gd/koboy.ini" \
+        --core build/stub_core.so --rom "$ROM" --frames 30 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: bad gray_map run exited $rc"; exit 1; }
+echo "$out" | grep -q "gray_map equal" \
+    || { echo "FAIL: an unknown gray_map name did not keep the previous value"; echo "$out"; exit 1; }
+rm -rf "$gd"
+echo "ok: gray_map reaches the video pipeline, defaults to balanced, survives a typo"

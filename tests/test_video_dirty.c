@@ -48,7 +48,7 @@ TEST_MAIN({
         koboy_profile p; koboy_config c;
         config_defaults(&c);
         config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
-        koboy_video *v = video_create(&p, false);
+        koboy_video *v = video_create(&p, false, KOBOY_GRAY_DEFAULT);
         CHECK(v != NULL);
 
         static uint16_t frame[KOBOY_GB_W * KOBOY_GB_H];

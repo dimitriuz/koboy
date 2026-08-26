@@ -14,6 +14,40 @@ typedef enum { KOBOY_REFRESH_FAST = 0, KOBOY_REFRESH_GRAY, KOBOY_REFRESH_FULL } 
 typedef enum { KOBOY_PIXFMT_RGB565 = 0, KOBOY_PIXFMT_XRGB8888 } koboy_pixfmt;
 typedef enum { KOBOY_DPAD_RELATIVE = 0, KOBOY_DPAD_CROSS } koboy_dpad_mode;
 
+/* How a colour frame is reduced to the one grey value the four-level panel
+   will quantise. Four of the six systems koboy runs are colour, and colour is
+   the overwhelming majority of the shipped library, so this is not a detail --
+   it is most of what the device shows. Rec.601 luma (KOBOY_GRAY_LUMA) is
+   correct for an emissive display and wrong for this one: it weights blue at
+   29/256, so a bright blue sky lands under video_quantise4's first threshold
+   and renders BLACK. Measured examples, straight from the cores:
+   Sonic Pocket Adventure's sky rgb(0,154,255) -> 119 -> level 1, and
+   Castlevania's sky rgb(0,36,140) -> 36 -> level 0.
+
+   The order is darkest-rendering to lightest, which is also the order the
+   in-game MENU cycles them in, so "next" always means "brighter".
+
+   Every one of these is identity on a neutral grey and none of them moves the
+   Game Boy's four shades off the four levels they have always landed on --
+   verified against the real gambatte palette, see tests/test_video_gray.c.
+   That is why there is no per-system exemption here: an exemption keyed on
+   160x144 geometry would also have caught the Game Gear, which is a COLOUR
+   system and exactly the case this exists to fix. */
+typedef enum {
+    KOBOY_GRAY_LUMA = 0,   /* Rec.601 (77,150,29), no lift -- v1, byte for byte */
+    KOBOY_GRAY_BRIGHT,     /* Rec.601 weights, shadow lift on */
+    KOBOY_GRAY_BALANCED,   /* (81,118,57) + lift -- the shipped default */
+    KOBOY_GRAY_EQUAL,      /* (85,85,86) + lift -- maximum blue lift */
+    KOBOY_GRAY_VALUE,      /* max(R,G,B) -- "as bright as it reads", no lift */
+    KOBOY_GRAY_COUNT
+} koboy_gray_map;
+
+/* Named once so config_defaults, the out-of-range fallback in video.c and the
+   ini comment cannot drift apart. Chosen by measurement over 38 gameplay
+   frames from 19 colour titles, not by taste -- see the report and the
+   comment on KOBOY_GRAY_LIFT in src/video.c. */
+#define KOBOY_GRAY_DEFAULT KOBOY_GRAY_BALANCED
+
 /* Which waveform KOBOY_REFRESH_FAST asks for.
    AUTO delegates the choice to the EPDC driver, which inspects the actual pixel
    transitions in the update region -- including whether anything is being

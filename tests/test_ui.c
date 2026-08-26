@@ -4,6 +4,7 @@
 #include "input.h"
 #include "text.h"
 #include "ui.h"
+#include "video.h"
 #include <string.h>
 
 /* ui.c's own UI_TEXT_PX is private to that file; the value here only needs
@@ -652,4 +653,49 @@ TEST_MAIN({
     int painted = 0;
     for (size_t i = 0; i < sizeof fb; i++) if (fb[i] != 0xFF) painted++;
     CHECK(painted > 0);
+
+    /* ---- the in-game MENU's GREYSCALE row ------------------------------- */
+    /* The label must actually TRACK the mapping. A row that always read
+       "GREYSCALE" would look right on the panel and tell the owner nothing,
+       and this project has shipped exactly that kind of decorative control
+       before -- so the assertion is that all five labels are DISTINCT and
+       each names its own mapping, not merely that the function returns a
+       string. */
+    {
+        char lab[KOBOY_GRAY_COUNT][48];
+        for (int m = 0; m < KOBOY_GRAY_COUNT; m++) {
+            ui_gray_label(lab[m], sizeof lab[m], (koboy_gray_map)m);
+            CHECK(strncmp(lab[m], "GREYSCALE: ", 11) == 0);
+            /* The suffix is the map's own name, uppercased -- so the ini and
+               the panel spell the same setting the same way. */
+            const char *n = video_gray_map_name((koboy_gray_map)m);
+            CHECK_EQ_INT((int)strlen(lab[m]), 11 + (int)strlen(n));
+            int same = 1;
+            for (size_t j = 0; n[j]; j++) {
+                char up = (n[j] >= 'a' && n[j] <= 'z') ? (char)(n[j] - 'a' + 'A') : n[j];
+                if (lab[m][11 + j] != up) same = 0;
+            }
+            CHECK(same);
+        }
+        for (int a = 0; a < KOBOY_GRAY_COUNT; a++)
+            for (int b = a + 1; b < KOBOY_GRAY_COUNT; b++)
+                CHECK(strcmp(lab[a], lab[b]) != 0);
+
+        /* It fits a MENU row on the narrowest supported panel, so the entry
+           the owner is meant to read is not the one that ellipsises. */
+        for (int m = 0; m < KOBOY_GRAY_COUNT; m++)
+            CHECK((int)strlen(lab[m]) <= UI_TITLE_CHARS);
+
+        /* Truncates rather than overruns, and always terminates. */
+        char tiny[6];
+        memset(tiny, 'Z', sizeof tiny);
+        ui_gray_label(tiny, sizeof tiny, KOBOY_GRAY_DEFAULT);
+        CHECK_EQ_INT((int)strlen(tiny), 5);
+        CHECK(strcmp(tiny, "GREYS") == 0);
+
+        /* A zero-size buffer writes nothing at all. */
+        char guard[2] = { 'Q', 'Q' };
+        ui_gray_label(guard, 0, KOBOY_GRAY_DEFAULT);
+        CHECK_EQ_INT(guard[0], 'Q');
+    }
 })

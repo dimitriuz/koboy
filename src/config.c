@@ -92,6 +92,7 @@ void config_defaults(koboy_config *c)
        device is available, and record the result in TESTED.md. */
     c->refresh_fixed_tiles = 40;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
+    c->gray_map = KOBOY_GRAY_DEFAULT;
     c->grab_input = true;
     /* CROSS, because the faceplate chrome draws an absolute four-way cross and
        the drawn UI has to agree with the input model -- the drawing is the part
@@ -484,6 +485,16 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "dpad_deadzone"))    c->dpad_deadzone = atoi(v);
         else if (!strcmp(k, "dpad_hysteresis"))  c->dpad_hysteresis = atoi(v);
         else if (!strcmp(k, "dpad_mode"))        c->dpad_mode = strcmp(v,"cross") ? KOBOY_DPAD_RELATIVE : KOBOY_DPAD_CROSS;
+        /* Unlike dpad_mode above, an unrecognised name KEEPS the current
+           value instead of falling to entry 0. dpad_mode has two settings and
+           either is usable; gray_map has five, and entry 0 is the Rec.601
+           mapping this key exists to move away from -- so a typo'd or
+           truncated name must not silently reinstate exactly the rendering
+           the user was trying to change. */
+        else if (!strcmp(k, "gray_map")) {
+            koboy_gray_map gm;
+            if (video_gray_map_parse(v, &gm)) c->gray_map = (int)gm;
+        }
         else if (!strcmp(k, "key_a"))            c->key_a = (uint16_t)atoi(v);
         else if (!strcmp(k, "key_b"))            c->key_b = (uint16_t)atoi(v);
         else if (!strcmp(k, "key_start"))        c->key_start = (uint16_t)atoi(v);
@@ -686,13 +697,18 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
     return true;
 }
 
-bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
-{
-    /* Read existing file, filtering out old key_a/key_b lines, then write
-       atomically with new keys. This makes calibration idempotent: whether
-       called for the first time or recalibration, the file ends with exactly
-       one key_a line and one key_b line. */
+/* Rewrites `path`, dropping every assignment whose key is in `drop` and
+   appending `block` verbatim. Everything else -- comments, blanks, other keys,
+   even the file's ordering -- comes through untouched.
 
+   ONE implementation for both writers. config_save_keys (first-run
+   calibration) and config_save_gray_map (the in-game GREYSCALE entry) want
+   exactly the same read-filter-append-rename discipline over the same file,
+   and two copies of it would be two places to get the temp-file, the trailing
+   newline or the atomic rename wrong. */
+static bool rewrite_ini(const char *path, const char *const *drop, int ndrop,
+                        const char *block)
+{
     /* Create temp file in same directory as target to ensure same filesystem
        (so rename succeeds atomically, and so writes fail fast if disk full) */
     char temp_path[512];
@@ -701,14 +717,13 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
     FILE *out = fopen(temp_path, "w");
     if (!out) return false;
 
-    /* Read existing file if it exists, filtering out key_a/key_b lines */
     FILE *in = fopen(path, "r");
     int last_char_written = 0;
     if (in) {
         char line[1024];
         while (fgets(line, sizeof line, in)) {
             /* Check if this is an assignment (has '=' before any '#').
-               If so, check if it's key_a or key_b and skip if so.
+               If so, check if its key is one of `drop` and skip it if so.
                Pure comment lines (# ...) or blank lines pass through unchanged. */
             char *eq = strchr(line, '=');
             char *hash = strchr(line, '#');
@@ -717,13 +732,12 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
             if (eq && (!hash || eq < hash)) {
                 /* Extract key name (everything before '=', trimmed) */
                 char k[1024];
+                int  skip = 0;
                 snprintf(k, sizeof k, "%.*s", (int)(eq - line), line);
                 trim(k);
-
-                /* Skip old key_a and key_b lines */
-                if (!strcmp(k, "key_a") || !strcmp(k, "key_b")) {
-                    continue;
-                }
+                for (int i = 0; i < ndrop; i++)
+                    if (!strcmp(k, drop[i])) { skip = 1; break; }
+                if (skip) continue;
             }
 
             /* Preserve this line (comments, blanks, other keys) */
@@ -734,16 +748,14 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
         fclose(in);
     }
 
-    /* A source ini with no trailing newline would otherwise have the
-       calibration block concatenated onto its final line. Harmless today only
-       because config_load truncates at the resulting '#', but it silently
-       rewrites an unrelated line -- against the "preserve everything else"
-       intent this function exists to honour. */
+    /* A source ini with no trailing newline would otherwise have the appended
+       block concatenated onto its final line. Harmless today only because
+       config_load truncates at the resulting '#', but it silently rewrites an
+       unrelated line -- against the "preserve everything else" intent this
+       function exists to honour. */
     if (last_char_written && last_char_written != '\n') fputc('\n', out);
 
-    /* Write the new calibration */
-    fprintf(out, "# written by first-run calibration\nkey_a = %u\nkey_b = %u\n",
-            (unsigned)key_a, (unsigned)key_b);
+    fputs(block, out);
 
     if (fclose(out) != 0) {
         /* fclose failed; temp file is left but out of sync, remove it */
@@ -758,4 +770,31 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
     }
 
     return true;
+}
+
+bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
+{
+    /* Filtering out the old key_a/key_b lines first is what makes calibration
+       idempotent: whether called for the first time or on recalibration, the
+       file ends with exactly one key_a line and one key_b line. */
+    static const char *const drop[] = { "key_a", "key_b" };
+    char block[128];
+    snprintf(block, sizeof block,
+             "# written by first-run calibration\nkey_a = %u\nkey_b = %u\n",
+             (unsigned)key_a, (unsigned)key_b);
+    return rewrite_ini(path, drop, 2, block);
+}
+
+bool config_save_gray_map(const char *path, koboy_gray_map map)
+{
+    /* video_gray_map_name never returns NULL, and for an out-of-range map it
+       names the default -- so what lands in the file is always a name
+       config_load will parse back to a real mapping, never a number or an
+       empty value. */
+    static const char *const drop[] = { "gray_map" };
+    char block[128];
+    snprintf(block, sizeof block,
+             "# written by the in-game GREYSCALE menu entry\ngray_map = %s\n",
+             video_gray_map_name(map));
+    return rewrite_ini(path, drop, 1, block);
 }

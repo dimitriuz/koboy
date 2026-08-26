@@ -74,6 +74,19 @@ void      ui_fit_label(const char *s, int avail_px, int px,
    fits ~51 characters on the shipped 1264-wide panel and ~42 on the 1072-wide
    Clara. 40 stays inside both, and a title that overran would not ellipsise
    -- it would just run off the edge, or under the letter strip. */
+/* The in-game MENU's GREYSCALE row, e.g. "GREYSCALE: BALANCED".
+
+   Lives here rather than in main.c for one reason: main.c is not linked into
+   the test binaries (see the Makefile's SRC filter), so a label built inline
+   there could not be asserted against anything. A row that always read
+   "GREYSCALE" would look identical on the panel and prove nothing -- which is
+   exactly the failure this project keeps having to fix -- so the label has to
+   be a function a test can call with each koboy_gray_map in turn.
+
+   Uppercased because every other row is and the 5x7 font's lower case is not
+   worth reading. Always NUL-terminated; truncates rather than overruns. */
+void      ui_gray_label(char *out, size_t outsz, koboy_gray_map map);
+
 #define UI_TITLE_CHARS 40
 
 /* Builds a breadcrumb title -- `head` alone when `sub` is empty, otherwise
