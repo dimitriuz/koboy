@@ -215,6 +215,45 @@ int config_layout_for_rom(const char *rom_path)
     return ends_with_ext(rom_path, ".mgw") ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
 }
 
+void config_face_c_for_rom(koboy_layout *l, const char *rom_path)
+{
+    if (!l) return;
+    /* Cleared, not left alone, on every call: this runs once per ROM load and
+       the config it edits outlives a single game (MENU -> CHOOSE ROM reuses
+       it), so "set it for .min" without "clear it for everything else" would
+       leave a C button drawn and live on the next Game Boy. */
+    l->c_cx = l->c_cy = l->c_r = 0;
+    if (!rom_path || !*rom_path) return;
+    if (!ends_with_ext(rom_path, ".min")) return;
+
+    /* The one position on the DMG faceplate that fits a third disc, and it is
+       tight enough to be worth writing down. A and B are fixed (they are the
+       Game Boy's, and this must not move them), the Start/Select/MENU row owns
+       everything from 892 permille down, and the panel needs
+       KOBOY_CHROME_MARGIN clear on the right. That leaves the pocket below A
+       and right of B, and only at a smaller radius than A/B's 85.
+
+       Checked on all four supported panels at once -- gap to the A disc, gap
+       to the MENU pill above the row, and the right margin:
+         Clara  1072x1448  A-gap 25px  MENU-gap 75px  right margin 27px
+         Libra2 1264x1680  A-gap 28    MENU-gap 84    right margin 33
+         Elipsa 1404x1872  A-gap 30    MENU-gap 95    right margin 36
+         Sage   1440x1920  A-gap 32    MENU-gap 98    right margin 37
+       It also leaves chrome_controls_top exactly where it was on all four
+       (879 / 1018 / 1135 / 1164), so a Pokemon Mini gets the same game rect
+       and the same resolved scale it would have got without a C button,
+       and tests/test_chrome.c re-derives those clearances rather than
+       trusting this comment.
+
+       The label goes INSIDE this disc, not below it like A and B: at 790
+       permille there is no case band under it to put one in -- the MENU row
+       starts 30 permille further down. chrome.c reuses the LCD strip's
+       draw_face_button for exactly that reason. */
+    l->c_cx = 905;
+    l->c_cy = 790;
+    l->c_r  = 70;
+}
+
 /* ------------------------------------------------- install-relative paths
  *
  * Why this exists, in full, because it cost a device round-trip to find.

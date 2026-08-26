@@ -320,6 +320,8 @@ echo "$out"
 [ "$rc" -eq 0 ] || { echo "FAIL: .gb run exited $rc"; rm -rf "$d"; exit 1; }
 echo "$out" | grep -qx "koboy: core $d/gambatte_libretro.so" \
     || { echo "FAIL: .gb no longer selects gambatte"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "with a C button" \
+    && { echo "FAIL: a .gb grew a third face button"; rm -rf "$d"; exit 1; }
 echo "ok: .gb still selects gambatte_libretro.so"
 
 # .nes and .min, the two systems added after the .mgw pair above. Same shape,
@@ -335,6 +337,8 @@ echo "$out" | grep -qx "koboy: core $d/fceumm_libretro.so" \
     || { echo "FAIL: .nes did not select the NES core"; rm -rf "$d"; exit 1; }
 echo "$out" | grep -q "LCD layout" \
     && { echo "FAIL: a .nes was given the LCD layout"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "with a C button" \
+    && { echo "FAIL: a .nes grew a third face button"; rm -rf "$d"; exit 1; }
 echo "ok: .nes selects fceumm_libretro.so and keeps the DMG faceplate"
 
 rc=0
@@ -346,6 +350,12 @@ echo "$out" | grep -qx "koboy: core $d/pokemini_libretro.so" \
     || { echo "FAIL: .min did not select the Pokemon Mini core"; rm -rf "$d"; exit 1; }
 echo "$out" | grep -q "LCD layout" \
     && { echo "FAIL: a .min was given the LCD layout"; rm -rf "$d"; exit 1; }
+# THE THIRD FACE BUTTON, end to end. config.c decides it and chrome.c draws
+# it, both unit tested -- but main.c has to ASK, and a missed call there is
+# invisible to every unit test and shows up on the device as a Pokemon Mini
+# with no C button. The .gb and .nes runs either side are the control.
+echo "$out" | grep -qx "koboy: faceplate DMG, with a C button" \
+    || { echo "FAIL: a .min did not get the C button"; rm -rf "$d"; exit 1; }
 echo "ok: .min selects pokemini_libretro.so and keeps the DMG faceplate"
 
 # ------------------------------------------- battery saves, for a NES cart

@@ -926,6 +926,11 @@ int main(int argc, char **argv)
        quits with the message). Re-deriving the layout there would dress up a
        path that fails one step later as if it were supported. */
     cfg.layout_mode = config_layout_for_rom(cfg.rom_path);
+    /* And the button complement, from the same extension and for the same
+       reasons -- see config.h. Must come before config_resolve_profile too:
+       chrome_controls_top counts a C button when there is one, and the
+       profile is resolved against what that returns. */
+    config_face_c_for_rom(&cfg.layout, cfg.rom_path);
 
     if (!cfg.core_explicit) {
         const char *want = config_core_for_rom(cfg.rom_path);
@@ -941,6 +946,13 @@ int main(int argc, char **argv)
        otherwise unanswerable on a device with no terminal, where the only
        symptom of a wrong pick is a core that rejects the ROM. */
     say("koboy: core %s\n", cfg.core_path);
+    /* And the faceplate, for the same reason and in the same breath. The
+       button complement is decided a few lines above and drawn hundreds of
+       lines later; the only symptom of this file forgetting to ask for it is
+       a button that quietly is not there, which is indistinguishable from a
+       system that never had one. tests/smoke_host.sh reads this line. */
+    say("koboy: faceplate %s%s\n", layout_name(cfg.layout_mode),
+        cfg.layout.c_r > 0 ? ", with a C button" : "");
 
     char err[512];
     koboy_core *core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);

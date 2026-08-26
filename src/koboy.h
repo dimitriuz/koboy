@@ -145,11 +145,23 @@ typedef struct {
     uint32_t wfm_fast, wfm_gray, wfm_full;
 } koboy_profile;
 
-/* Control geometry in permille of the panel, so one layout fits every device. */
+/* Control geometry in permille of the panel, so one layout fits every device.
+
+   c_* is the THIRD face button, and c_r == 0 means the loaded system does not
+   have one -- which is every system but the Pokemon Mini, so the DMG
+   faceplate a Game Boy sees is unchanged pixel for pixel. It is set from the
+   ROM's extension by config_face_c_for_rom, the same way the core and the
+   layout mode are, and it exists because the Pokemon Mini genuinely has an A,
+   a B and a C: the core binds C to RETRO_DEVICE_ID_JOYPAD_R, and a hardware
+   button koboy cannot reach is the exact bug the Game & Watch layout was just
+   fixed for. Every consumer -- chrome_controls_top, the DMG renderer, input.c's
+   hit test -- is guarded on c_r > 0, so a zero here is "absent", never a
+   degenerate zero-radius control. */
 typedef struct {
     int dpad_cx, dpad_cy, dpad_r;
     int a_cx, a_cy, a_r;
     int b_cx, b_cy, b_r;
+    int c_cx, c_cy, c_r;
     int start_cx, start_cy, start_w, start_h;
     int select_cx, select_cy, select_w, select_h;
     int menu_cx, menu_cy, menu_w, menu_h;

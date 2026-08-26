@@ -306,6 +306,16 @@ static void recompute(koboy_input *in)
         int x = in->st.touch[s].x, y = in->st.touch[s].y;
         if (in_circle(x, y, perm(l->a_cx, W), perm(l->a_cy, H), perm(l->a_r, W))) b |= KOBOY_BTN_A;
         if (in_circle(x, y, perm(l->b_cx, W), perm(l->b_cy, H), perm(l->b_r, W))) b |= KOBOY_BTN_B;
+        /* C -> R1, and the mapping is the CORE's, not a choice made here:
+           third_party/pokemini/libretro/libretro.c binds PM_BUTTON_C to
+           RETRO_DEVICE_ID_JOYPAD_R (and advertises it as "C" in its own input
+           descriptors), which is bit 11, KOBOY_BTN_R1. Guarded on c_r the same
+           way chrome.c's draw is: with no C button the zone would be a
+           zero-radius circle at (0,0), and in_circle's <= would then report a
+           hit for a touch at exactly the panel origin. */
+        if (l->c_r > 0 &&
+            in_circle(x, y, perm(l->c_cx, W), perm(l->c_cy, H), perm(l->c_r, W)))
+            b |= KOBOY_BTN_R1;
         if (in_rect(x, y, perm(l->start_cx, W), perm(l->start_cy, H),
                     perm(l->start_w, W), perm(l->start_h, H))) b |= KOBOY_BTN_START;
         if (in_rect(x, y, perm(l->select_cx, W), perm(l->select_cy, H),
