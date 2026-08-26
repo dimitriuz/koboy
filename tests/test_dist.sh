@@ -82,24 +82,35 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
              .adds/koboy/pokemini_libretro.so \
              .adds/koboy/mednafen_wswan_libretro.so \
              .adds/koboy/race_libretro.so \
+             .adds/koboy/stella2014_libretro.so \
+             .adds/koboy/gearcoleco_libretro.so \
+             .adds/koboy/freeintv_libretro.so \
+             .adds/koboy/genesis_plus_gx_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
              .adds/koboy/README.md .adds/koboy/TESTED.md \
              .adds/koboy/roms/README.txt; do
         unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
     done
 
-    # NO BIOS AND NO ROM, ever. Every core koboy ships either needs no BIOS or
-    # links its own free one (PokeMini's freebios/, RACE's ngpBios.c) -- but a
-    # dumped "[BIOS] Nintendo Pokemon Mini (World).min", or the boot.rom /
-    # boot1.rom that sit beside a real WonderSwan or Neo Geo Pocket
-    # collection, or an .nes that wandered in from a test directory, is not
-    # ours to distribute, and a packaging step that copied one would look
-    # exactly like a working build. `.rom` covers the two boot files by
-    # extension. Checked on the zip's own listing, which is the artefact that
-    # actually ships.
-    if unzip -Z1 "$Z" | grep -qiE '\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|srm|ngf|flash|rom)$'; then
+    # NO BIOS AND NO ROM, ever, and this assertion stopped being hypothetical
+    # with this batch. Most cores koboy ships need no BIOS or link their own
+    # free one (PokeMini's freebios/, RACE's ngpBios.c) -- but TWO NOW
+    # GENUINELY REQUIRE A COPYRIGHTED ONE that lives on the author's own disk
+    # while these scripts run: Gearcoleco will not draw a single game frame
+    # without colecovision.rom, and FreeIntv halts without exec.bin and
+    # grom.bin. They are not ours to distribute; the owner installs them by
+    # hand (see roms/README.txt, which the package DOES carry) and the build
+    # must never quietly pick one up. `.rom` and `.bin` cover all three by
+    # extension, alongside the content extensions -- a dumped "[BIOS]
+    # Nintendo Pokemon Mini (World).min", the boot.rom / boot1.rom that sit
+    # beside a real WonderSwan, Neo Geo Pocket or Intellivision collection, or
+    # an .nes that wandered in from a test directory. A packaging step that
+    # copied any of them would look exactly like a working build. Checked on
+    # the zip's own listing, which is the artefact that actually ships.
+    BAD='\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|a26|col|int|sms|gg|srm|ngf|flash|rom|bin)$'
+    if unzip -Z1 "$Z" | grep -qiE "$BAD"; then
         echo "FAIL: the package contains content or a BIOS:"
-        unzip -Z1 "$Z" | grep -iE '\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|srm|ngf|flash|rom)$'
+        unzip -Z1 "$Z" | grep -iE "$BAD"
         exit 1
     fi
 
@@ -109,9 +120,17 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # to copy anything for. Extracted and read, not assumed from the Makefile.
     rd=$(mktemp -d)
     unzip -qo "$Z" .adds/koboy/roms/README.txt -d "$rd"
-    for ext in .gb .gbc .mgw .nes .min .ws .wsc .ngp .ngc; do
+    for ext in .gb .gbc .mgw .nes .min .ws .wsc .ngp .ngc .a26 .col .int .sms .gg; do
         grep -qF -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not mention $ext"; rm -rf "$rd"; exit 1; }
+    done
+    # The BIOS instruction is the only thing standing between a user and a
+    # ColecoVision that shows NO BIOS or an Intellivision that shows nothing,
+    # so it is asserted by NAME. A README that lists the extensions but not
+    # the files is a README that makes two of the ten systems look broken.
+    for f in colecovision.rom exec.bin grom.bin; do
+        grep -qF -- "$f" "$rd/.adds/koboy/roms/README.txt" \
+            || { echo "FAIL: roms/README.txt does not name $f"; rm -rf "$rd"; exit 1; }
     done
     rm -rf "$rd"
     echo "ok: packaging"

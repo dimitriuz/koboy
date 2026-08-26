@@ -1,5 +1,6 @@
 #include "test.h"
 #include "video.h"
+#include "config.h"
 #include <string.h>
 
 /* The quantiser's answer for one grey, as a level index 0..3. Goes through
@@ -191,6 +192,84 @@ TEST_MAIN({
         CHECK(!video_gray_map_parse("BALANCED", &g));    /* case matters */
         CHECK(!video_gray_map_parse(NULL, &g));
         CHECK_EQ_INT((int)g, (int)KOBOY_GRAY_VALUE);
+    }
+
+    /* THE GAME GEAR IS A COLOUR SYSTEM AND MUST NOT BE GIVEN THE GAME BOY'S
+       TREATMENT, and this is the check that says so.
+
+       The trap is specific and it is already half-sprung elsewhere in this
+       codebase: a Game Gear frame is 160x144, EXACTLY the Game Boy's
+       geometry, and config_resolve_profile really does key its scale default
+       on that geometry (`is_game_boy`). For SCALE that is right -- 5 was
+       measured for 160x144 and a Game Gear looks good at it. For COLOUR it
+       would be a disaster: the whole point of the gray_map work is that the
+       DMG's four fixed shades need no mapping and a colour system does, so an
+       exemption keyed on 160x144 would silently route every Game Gear title
+       through the Game Boy's identity path and render Sonic's sky black.
+
+       Two assertions, both of which a future exemption would have to break:
+
+       1. Geometry does not reach the reduction at all. The same colour
+          reduces to the same grey through a Game-Boy-shaped pipeline
+          (max 160x144) and a Game-Gear-shaped one (base 160x144, max
+          284x240 -- the numbers Genesis Plus GX actually reports, measured).
+          Read out of the rendered buffer, not from the scalar helper, so an
+          exemption applied anywhere in video_create/video_submit is caught
+          and not just one in video_rgb565_to_gray.
+
+       2. The presentation the Game Gear ends up with, stated as a number:
+          its 160x144 frame is fitted to 800x720 -- pixel for pixel the
+          Game Boy's scale-5 picture, reached by auto-fitting a rect sized
+          from a 284x240 max rather than by any Game-Boy special case. That
+          is the claim worth pinning, because it is what makes leaving
+          config_resolve_profile alone the right call: a Game Gear needs no
+          exemption to look right.
+
+       MUTANT-VERIFIED: adding `if (p->max_w == KOBOY_GB_W && p->max_h ==
+       KOBOY_GB_H) map = KOBOY_GRAY_LUMA;` to video_create makes the first
+       block fail (level 0 against level 1) on Sonic's sky. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile gb, gg;
+        CHECK(config_resolve_profile(&gb, &c, 1264, 1680, 160, 144, 160, 144));
+        CHECK(config_resolve_profile(&gg, &c, 1264, 1680, 160, 144, 284, 240));
+
+        /* The Game Boy keeps its measured 5 (auto-fitting it lands on 6 --
+           mutate the is_game_boy branch off and this goes red). */
+        CHECK_EQ_INT(gb.scale, 5);
+
+        /* rgb(0,154,255) -- Sonic Pocket Adventure's sky, the measured colour
+           that renders BLACK under Rec.601 luma and correctly under the
+           shipped default. A whole 160x144 frame of it. */
+        static uint16_t sky[160 * 144];
+        const uint16_t px = (uint16_t)(((0u >> 3) << 11) | ((154u >> 2) << 5) | (255u >> 3));
+        for (size_t i = 0; i < sizeof sky / sizeof sky[0]; i++) sky[i] = px;
+
+        uint8_t out[2];
+        koboy_profile *profs[2] = { &gb, &gg };
+        for (int i = 0; i < 2; i++) {
+            koboy_video *v = video_create(profs[i], false, KOBOY_GRAY_DEFAULT);
+            CHECK(v != NULL);
+            video_submit(v, sky, 160, 144, 160 * sizeof(uint16_t),
+                         KOBOY_PIXFMT_RGB565);
+            koboy_rect fr; video_frame_rect(v, &fr);
+            /* One pixel from the middle of the fitted picture, so the
+               size-change margin (which is deliberately paper-white) cannot
+               be what is being read. */
+            out[i] = video_buffer(v)[(size_t)(fr.y + fr.h / 2) * video_stride(v)
+                                     + fr.x + fr.w / 2];
+            /* Claim 2: both end up as the SAME 800x720 picture. The Game Boy
+               gets there at its configured scale 5 with the rect exactly the
+               frame's size; the Game Gear gets there by fitting 160x144 into
+               a rect sized from 284x240. */
+            CHECK_EQ_INT(fr.w, 800);
+            CHECK_EQ_INT(fr.h, 720);
+            video_destroy(v);
+        }
+        CHECK_EQ_INT(out[0], out[1]);
+        /* And it is not black -- otherwise "both the same" would also pass
+           against a pipeline that gave BOTH of them the Rec.601 treatment. */
+        CHECK(out[0] != KOBOY_DU4_LEVELS[0]);
     }
 
     /* An out-of-range map arrives from an int field in koboy_config and must

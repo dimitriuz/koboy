@@ -295,6 +295,10 @@ cp build/stub_core.so "$d/fceumm_libretro.so"
 cp build/stub_core.so "$d/pokemini_libretro.so"
 cp build/stub_core.so "$d/mednafen_wswan_libretro.so"
 cp build/stub_core.so "$d/race_libretro.so"
+cp build/stub_core.so "$d/stella2014_libretro.so"
+cp build/stub_core.so "$d/gearcoleco_libretro.so"
+cp build/stub_core.so "$d/freeintv_libretro.so"
+cp build/stub_core.so "$d/genesis_plus_gx_libretro.so"
 printf '\0' > "$d/GAME.mgw"
 printf '\0' > "$d/GAME.gb"
 printf '\0' > "$d/GAME.nes"
@@ -307,6 +311,14 @@ printf '\0' > "$d/GAME.ws"
 printf '\0' > "$d/GAME.WSC"
 printf '\0' > "$d/GAME.ngp"
 printf '\0' > "$d/GAME.NGC"
+printf '\0' > "$d/GAME.a26"
+printf '\0' > "$d/GAME.col"
+printf '\0' > "$d/GAME.int"
+printf '\0' > "$d/GAME.sms"
+# UPPERCASE again, and this one is the case the whole rule was written for:
+# the author's Game Gear directory holds 38 files ending .gg and 15 ending
+# .GG, side by side in one folder.
+printf '\0' > "$d/GAME.GG"
 
 # .mgw with no --core: the Game & Watch core, resolved beside the binary.
 rc=0
@@ -408,6 +420,58 @@ out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.ngp" \
 echo "$out" | grep -q "extra buttons" \
     && { echo "FAIL: a .ngp grew extra face buttons"; rm -rf "$d"; exit 1; }
 echo "ok: .ws gets L1/R1 and .ngp gets neither"
+
+# .a26, .col, .int, .sms and .gg -- four more systems, five more extensions,
+# same shape and the same reason. .GG is uppercase because that is what half
+# of a real Game Gear folder looks like.
+for pair in "GAME.a26 stella2014_libretro.so" \
+            "GAME.col gearcoleco_libretro.so" \
+            "GAME.int freeintv_libretro.so" \
+            "GAME.sms genesis_plus_gx_libretro.so" \
+            "GAME.GG genesis_plus_gx_libretro.so"; do
+    rom=${pair%% *}; want=${pair##* }
+    rc=0
+    out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/$rom" \
+            --panel 1264x1680 --frames 10 2>&1) || rc=$?
+    echo "$out"
+    [ "$rc" -eq 0 ] || { echo "FAIL: $rom run exited $rc"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -qx "koboy: core $d/$want" \
+        || { echo "FAIL: $rom did not select $want"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -q "LCD layout" \
+        && { echo "FAIL: $rom was given the LCD layout"; rm -rf "$d"; exit 1; }
+    echo "ok: $rom selects $want and keeps the DMG faceplate"
+done
+
+# THE INTELLIVISION'S AND COLECOVISION'S DISCS, end to end, with .a26/.sms as
+# the controls. Both of these systems have a TWELVE-KEY KEYPAD that the
+# faceplate cannot draw, and in both cases titles refuse to start without it:
+# an Intellivision reaches the keypad by HOLDING the KEY disc (FreeIntv's
+# JOYPAD_L modifier, which draws a mini keypad the d-pad steers), a
+# ColecoVision by pressing K1/K2 (Gearcoleco puts keypad 1 and 2 on
+# JOYPAD_Y/JOYPAD_X, and the console BIOS asks for one before any cartridge
+# starts). The LABELS are asserted, not just the count, because two discs
+# reporting the wrong bits look exactly like two working discs.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.int" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: .int faceplate run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: faceplate DMG, extra buttons: KEY TOP" \
+    || { echo "FAIL: a .int did not get the KEY/TOP pair"; rm -rf "$d"; exit 1; }
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.col" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: .col faceplate run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: faceplate DMG, extra buttons: K1 K2" \
+    || { echo "FAIL: a .col did not get the K1/K2 pair"; rm -rf "$d"; exit 1; }
+for rom in GAME.a26 GAME.sms GAME.GG; do
+    rc=0
+    out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/$rom" \
+            --panel 1264x1680 --frames 10 2>&1) || rc=$?
+    [ "$rc" -eq 0 ] || { echo "FAIL: $rom faceplate run exited $rc"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -q "extra buttons" \
+        && { echo "FAIL: $rom grew extra face buttons"; rm -rf "$d"; exit 1; }
+done
+echo "ok: .int gets KEY/TOP, .col gets K1/K2, .a26 and the Sega pair get neither"
 
 # ------------------------------------------- battery saves, for a NES cart
 #

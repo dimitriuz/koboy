@@ -140,7 +140,42 @@ $(CORE_NGP_SO):
 	CROSS=$(CROSS) OUT=$@ sh scripts/build-race-core.sh kobo
 
 core-ngp: $(CORE_NGP_SO)
-.PHONY: kobo fbink core core-gw core-nes core-pm core-ws core-ngp
+
+# The Atari 2600, ColecoVision, Intellivision and Master System / Game Gear
+# cores. Same non-phony reasoning as every core rule above: a cross-build is
+# minutes of work and `make dist` must not repeat it. Each is named for the
+# .so its own upstream Makefile produces, so a file in dist/ can be traced
+# back to the project that built it. Delete the .so to force a rebuild.
+#
+# TWO OF THESE FOUR NEED A BIOS THE PACKAGE DOES NOT AND MUST NOT CARRY --
+# gearcoleco wants colecovision.rom, freeintv wants exec.bin and grom.bin.
+# The build scripts say which files and where they go; tests/test_dist.sh
+# asserts none of them ever reaches the zip.
+CORE_A26_SO := dist/stella2014_libretro.so
+$(CORE_A26_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-stella-core.sh kobo
+
+core-a26: $(CORE_A26_SO)
+
+CORE_COL_SO := dist/gearcoleco_libretro.so
+$(CORE_COL_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-gearcoleco-core.sh kobo
+
+core-col: $(CORE_COL_SO)
+
+CORE_INT_SO := dist/freeintv_libretro.so
+$(CORE_INT_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-freeintv-core.sh kobo
+
+core-int: $(CORE_INT_SO)
+
+CORE_SMS_SO := dist/genesis_plus_gx_libretro.so
+$(CORE_SMS_SO):
+	CROSS=$(CROSS) OUT=$@ sh scripts/build-gpgx-core.sh kobo
+
+core-sms: $(CORE_SMS_SO)
+.PHONY: kobo fbink core core-gw core-nes core-pm core-ws core-ngp \
+        core-a26 core-col core-int core-sms
 
 # ------------------------------------------------------------------ packaging
 # The archive unzips onto the device's user partition and touches nothing else:
@@ -149,7 +184,8 @@ core-ngp: $(CORE_NGP_SO)
 # directory and a bad build cannot brick anything.
 VERSION := 0.1.0
 
-dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $(CORE_NGP_SO) | build
+dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $(CORE_NGP_SO) \
+      $(CORE_A26_SO) $(CORE_COL_SO) $(CORE_INT_SO) $(CORE_SMS_SO) | build
 	rm -rf build/pkg && mkdir -p build/pkg/.adds/koboy
 	cp build/koboy-arm           build/pkg/.adds/koboy/koboy
 	cp scripts/koboy.sh          build/pkg/.adds/koboy/
@@ -163,6 +199,10 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $
 	cp $(CORE_PM_SO)             build/pkg/.adds/koboy/
 	cp $(CORE_WS_SO)             build/pkg/.adds/koboy/
 	cp $(CORE_NGP_SO)            build/pkg/.adds/koboy/
+	cp $(CORE_A26_SO)            build/pkg/.adds/koboy/
+	cp $(CORE_COL_SO)            build/pkg/.adds/koboy/
+	cp $(CORE_INT_SO)            build/pkg/.adds/koboy/
+	cp $(CORE_SMS_SO)            build/pkg/.adds/koboy/
 	# `kobo` (a prerequisite above) now always produces build/koboy-probe-arm
 	# too, so this branch is normally taken -- kept as a guard rather than an
 	# unconditional cp so a partial/manual build still packages the emulator
@@ -180,7 +220,7 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $
 	# the browser's first run would report a missing directory -- the
 	# README.txt is what actually makes the directory exist in the zip.
 	mkdir -p build/pkg/.adds/koboy/roms
-	printf 'Put .gb, .gbc, .mgw, .nes, .min, .ws, .wsc, .ngp and .ngc files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini),\n.ws/.wsc use wswan (WonderSwan, WonderSwan Color),\n.ngp/.ngc use race (Neo Geo Pocket, Neo Geo Pocket Color).\nNo BIOS file is needed for any of them.\n' \
+	printf 'Put .gb, .gbc, .mgw, .nes, .min, .ws, .wsc, .ngp, .ngc, .a26, .col,\n.int, .sms and .gg files in this directory.\nSubdirectories work; the browser walks them one level at a time.\nkoboy lists them at startup and picks the core from the extension:\n.gb/.gbc use gambatte, .mgw uses gw (Game & Watch),\n.nes uses fceumm (NES), .min uses PokeMini (Pokemon Mini),\n.ws/.wsc use wswan (WonderSwan, WonderSwan Color),\n.ngp/.ngc use race (Neo Geo Pocket, Neo Geo Pocket Color),\n.a26 uses stella2014 (Atari 2600),\n.col uses gearcoleco (ColecoVision),\n.int uses freeintv (Intellivision),\n.sms/.gg use genesis_plus_gx (Master System, Game Gear).\n\nTWO SYSTEMS NEED A BIOS THAT IS NOT OURS TO SHIP. Put these files in\nthe koboy directory itself (the one above this one, beside koboy):\n  ColecoVision   colecovision.rom   8192 bytes\n  Intellivision  exec.bin           8192 bytes\n  Intellivision  grom.bin           2048 bytes\nWithout them a .col shows a NO BIOS screen and a .int does not run.\nEvery other system here needs no BIOS file at all.\n' \
 	    > build/pkg/.adds/koboy/roms/README.txt
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from

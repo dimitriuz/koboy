@@ -147,12 +147,13 @@ void config_defaults(koboy_config *c)
 
 /* ------------------------------------------------------ core by extension
  *
- * koboy ships six cores now, and which one a file needs is knowable from its
+ * koboy ships ten cores now, and which one a file needs is knowable from its
  * name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats .min,
- * beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, and gambatte eats
- * everything else this project lists. The browser hands main.c a path long
- * after the config was read, so this cannot live in config_load -- it is a
- * pure function of the ROM name, called at load time.
+ * beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, stella2014 eats .a26,
+ * Gearcoleco eats .col, FreeIntv eats .int, Genesis Plus GX eats .sms/.gg,
+ * and gambatte eats everything else this project lists. The browser hands
+ * main.c a path long after the config was read, so this cannot live in
+ * config_load -- it is a pure function of the ROM name, called at load time.
  *
  * Its own case-insensitive suffix match rather than strcasecmp, and rather
  * than borrowing romlist.c's: config is the lower layer of the two (romlist
@@ -196,6 +197,20 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
     { ".wsc", "mednafen_wswan_libretro.so" }, /* WonderSwan Color         */
     { ".ngp", "race_libretro.so"       },  /* Neo Geo Pocket, libretro/RACE */
     { ".ngc", "race_libretro.so"       },  /* Neo Geo Pocket Color        */
+    { ".a26", "stella2014_libretro.so" },  /* Atari 2600, stella2014      */
+    { ".col", "gearcoleco_libretro.so" },  /* ColecoVision, drhelius/Gearcoleco */
+    { ".int", "freeintv_libretro.so"   },  /* Intellivision, libretro/FreeIntv */
+    /* The second family after WonderSwan and Neo Geo Pocket where one .so
+       covers two systems, and the first where the two are not a mono/colour
+       pair: a Master System and a Game Gear are the same VDP behind a
+       different viewport, so Genesis Plus GX runs both from one binary. Two
+       rows, not a wildcard, for the reason above. .sg (SG-1000, which this
+       core also accepts) and the whole Mega Drive list it advertises are
+       deliberately absent: nobody's collection here has them, and an
+       extension the browser lists but nobody has loaded is an untested
+       claim. */
+    { ".sms", "genesis_plus_gx_libretro.so" }, /* Master System, GPGX     */
+    { ".gg",  "genesis_plus_gx_libretro.so" }, /* Game Gear, same core    */
 };
 
 const char *config_core_for_rom(const char *rom_path)
@@ -220,12 +235,25 @@ int config_layout_for_rom(const char *rom_path)
        MENU, RECENT, ALL GAMES) is drawn over.
 
        .mgw is still the ONLY LCD extension, and none of the systems added
-       since is in that company: a NES pad, a Pokemon Mini, a WonderSwan and
-       a Neo Geo Pocket are all d-pad + face buttons + START/SELECT machines
-       whose buttons are physical, not drawn into the artwork, which is
-       exactly what the DMG faceplate already draws and hit-tests. LCD exists
-       because a Game & Watch unit draws its own controls; none of these
-       does. */
+       since is in that company: a NES pad, a Pokemon Mini, a WonderSwan, a
+       Neo Geo Pocket, an Atari 2600 joystick, a ColecoVision controller, an
+       Intellivision hand controller and a Master System / Game Gear pad are
+       all stick-or-pad plus physical buttons, not buttons drawn into the
+       artwork, which is exactly what the DMG faceplate already draws and
+       hit-tests. LCD exists because a Game & Watch unit draws its own
+       controls; none of these does.
+
+       The Intellivision came CLOSEST to earning it and still does not.
+       FreeIntv has an optional `freeintv_multiscreen_overlay` mode that
+       widens the frame to 1074x600 and paints a photographic 12-key keypad
+       beside the game, driven by RETRO_DEVICE_POINTER -- which is the Game &
+       Watch situation exactly, and koboy's LCD layout already forwards
+       touches as a pointer. It is not used, for two measured reasons: the
+       composite costs 1.335 ms/frame against 0.106 without it (12x, on the
+       host, before the Cortex-A9 multiplier), and the same 12 keys are
+       already reachable on the DMG faceplate through the core's own mini
+       keypad -- see the .int case in config_extra_buttons_for_rom. Paying
+       12x for a second way to press the same keys is not a trade. */
     if (!rom_path || !*rom_path) return KOBOY_LAYOUT_DMG;
     return ends_with_ext(rom_path, ".mgw") ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
 }
@@ -310,6 +338,104 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
         l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_R1, "R1" };
         return;
     }
+
+    /* An Intellivision hand controller is the hardest control set this
+       project has met and the two discs make ALL OF IT reachable, which was
+       not obvious and is the whole reason this case is long.
+
+       The hardware: a 16-direction disc, three action buttons (top,
+       lower-left, lower-right -- the two upper side buttons are one signal),
+       and a TWELVE-KEY TELEPHONE KEYPAD. FreeIntv gives the disc's four
+       cardinals to the retropad d-pad, the lower two action buttons to
+       JOYPAD_A / JOYPAD_B, and the top one to JOYPAD_Y (src/controller.c's
+       getControllerState -- read off the code, not the input descriptors,
+       which contradict the core's own on-screen help about which of A/B is
+       which side). So the top button needs a disc: that is extra[1].
+
+       THE KEYPAD, which no faceplate can draw and which several titles
+       cannot be started without -- BurgerTime and Bump 'n' Jump both stop at
+       "Select 1 or 2 Players", Diner says "then press enter". FreeIntv puts
+       keypad 0 and 5 on the thumbsticks and Clear/Enter on the triggers,
+       and 1-9 only on the RIGHT ANALOG STICK, which koboy has no source for
+       (src/core.c answers RETRO_DEVICE_JOYPAD alone). That would have left
+       nine keys dead.
+
+       It does not, because the core has a second way in that its input
+       descriptors call "Show Keypad": HOLD JOYPAD_L, and a 4x3 keypad is
+       drawn into the corner of the frame, the D-PAD moves a cursor over it,
+       and any face button presses the selected key (src/controller.c,
+       getKeypadState + drawMiniKeypad; libretro.c:1267 makes it modal, so
+       the disc is not steering the game while it is held). MEASURED, not
+       read: holding L1 and tapping A on BurgerTime's player-count prompt put
+       a "1" on the screen, and the mini keypad appeared in both bottom
+       corners. Three simultaneous touches -- disc, d-pad, A -- and koboy
+       tracks ten.
+
+       So extra[0] is JOYPAD_L, labelled KEY rather than L1 because what it
+       does is open the keypad and nothing on the hardware is called L1.
+
+       What is still NOT reachable: the disc's twelve DIAGONAL positions.
+       koboy's touch d-pad reports the four cardinals and their four
+       diagonals; the 16-way disc has eight more between those, and
+       FreeIntv only offers them on the left analog stick. Titles that steer
+       finely (Astrosmash's ship, Auto Racing) are coarser here than on real
+       hardware. JOYPAD_X ("last selected keypad button") and the L2/R2/L3/R3
+       keypad shortcuts are also unreachable, and all six are redundant with
+       the mini keypad above rather than lost. */
+    if (ends_with_ext(rom_path, ".int")) {
+        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_L1, "KEY" };
+        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_Y,  "TOP" };
+        return;
+    }
+
+    /* A ColecoVision controller ALSO has a twelve-key keypad, and unlike the
+       Intellivision this core offers no on-screen way to reach it: Gearcoleco
+       spreads the keys across the whole retropad (keypad 1 on JOYPAD_Y, 2 on
+       X, 3-8 on the shoulders and sticks, * and # on START/SELECT, 9 and 0 on
+       an analog axis -- platforms/libretro/libretro.cpp's descriptors). Only
+       two of those can have a disc.
+
+       1 and 2 are the two, because that is what the CONSOLE'S OWN BIOS asks
+       for: every cartridge boots into an option screen whose first two lines
+       are "1 = SKILL 1/ONE PLAYER" and "2 = SKILL 2/ONE PLAYER" -- rendered
+       and read, not assumed. Without keypad 1 a ColecoVision title cannot be
+       started at all, which is the same bug the Game & Watch layout, the
+       Pokemon Mini and the WonderSwan each spent a round on.
+
+       Labelled K1/K2 rather than 1/2 so a finger looking for "the keypad"
+       finds them; the faceplate has no other numbers on it.
+
+       Two things a reader should know rather than discover: koboy's START and
+       SELECT are keypad * and # on this system (the core binds them there,
+       and the faceplate's moulded labels lie about it), and keypad 3-9 and 0
+       are unreachable. The games that need those are the ones with in-play
+       menus -- Fortune Builder, the Super Action titles -- not the ones with
+       a start screen. */
+    if (ends_with_ext(rom_path, ".col")) {
+        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "K1" };
+        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "K2" };
+        return;
+    }
+
+    /* An Atari 2600 joystick is four directions and ONE button, and the
+       console adds Reset and Select. stella2014 binds fire to JOYPAD_B,
+       Reset to JOYPAD_START and Select to JOYPAD_SELECT, so the DMG
+       faceplate already carries every control a 2600 game has and NO extra
+       disc is needed -- recorded as a deliberate empty case for the reason
+       the Neo Geo Pocket one below is.
+
+       Worth knowing anyway: the A DISC IS DEAD for this system. Fire is B,
+       and JOYPAD_A only does anything for a Genesis pad or paddles, neither
+       of which koboy can present (libretro.cxx's event mapping). The two
+       difficulty switches and the colour/black-and-white switch are
+       unreachable; they are set-once console switches, not controls, and no
+       title in the author's 82 needs one to start. Paddle titles (Breakout,
+       Warlords) play on the d-pad rather than by feel, because a paddle is
+       an analog axis and koboy has none.
+
+       A Master System and a Game Gear are likewise fully covered: two
+       buttons on JOYPAD_B and JOYPAD_A, and PAUSE/START on JOYPAD_START
+       (third_party/gpgx's DEVICE_PAD2B branch). Nothing left over. */
 
     /* A Neo Geo Pocket has a stick, A, B and OPTION and nothing else, so it
        needs NO extra disc -- recorded here as a deliberate empty case rather

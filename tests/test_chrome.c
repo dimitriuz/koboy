@@ -684,6 +684,16 @@ TEST_MAIN({
         static const struct { const char *rom; int n, gw, gh; } sys[] = {
             { "/roms/Pokemon Tetris.min", 1,  96,  64 },
             { "/roms/GunPey.ws",          2, 224, 224 },
+            /* The two systems added with this batch, at the MAX geometry
+               their cores really report (measured through probe_core):
+               FreeIntv is a fixed 352x224 with base == max, Gearcoleco
+               declares 512x288 for its F18A modes while drawing 256x192.
+               Both are much bigger rects than the Pokemon Mini's or the
+               WonderSwan's, which is the point of listing them here -- a
+               disc that clears the game rect at 96x64 can still be underneath
+               it at 512x288. */
+            { "/roms/Atlantis.int",       2, 352, 224 },
+            { "/roms/BurgerTime.col",     2, 512, 288 },
         };
         static uint8_t fbc[1440 * 1920], fbn[1440 * 1920];
 
@@ -853,10 +863,71 @@ TEST_MAIN({
             CHECK(!strcmp(c.layout.extra[1].label, "R1"));
         }
 
+        /* AN INTELLIVISION GETS TWO, and the bits matter more here than
+           anywhere else in this function: extra[0] is JOYPAD_L, which is not
+           a button on the hardware at all -- it is FreeIntv's "hold to show
+           the mini keypad" modifier, and it is the ONLY route to the
+           console's twelve keypad keys, several of which titles cannot be
+           started without. A disc in the right place carrying the wrong bit
+           would look identical and lock the user out of BurgerTime's player
+           prompt. extra[1] is the hardware's third action button. */
+        static const char *intv[] = {
+            "Atlantis.int", "/roms/BURGERTIME.INT", "/roms/Bump 'n' Jump.Int",
+        };
+        for (size_t i = 0; i < sizeof intv / sizeof intv[0]; i++) {
+            config_extra_buttons_for_rom(&c.layout, intv[i]);
+            CHECK(c.layout.extra[0].r > 0);
+            CHECK(c.layout.extra[1].r > 0);
+            CHECK_EQ_INT(c.layout.extra[0].bit, KOBOY_BTN_L1);
+            CHECK_EQ_INT(c.layout.extra[1].bit, KOBOY_BTN_Y);
+            CHECK(!strcmp(c.layout.extra[0].label, "KEY"));
+            CHECK(!strcmp(c.layout.extra[1].label, "TOP"));
+        }
+
+        /* A COLECOVISION GETS TWO, and they are keypad 1 and keypad 2 --
+           JOYPAD_Y and JOYPAD_X, which is where Gearcoleco puts them. Same
+           reasoning as the Intellivision above: the console's own BIOS asks
+           for a keypad digit before any cartridge starts, so a wrong bit
+           here is not a missing convenience, it is a system that cannot be
+           played. */
+        static const char *col[] = {
+            "BurgerTime.col", "/roms/DONKEY KONG.COL", "/roms/Zaxxon.Col",
+        };
+        for (size_t i = 0; i < sizeof col / sizeof col[0]; i++) {
+            config_extra_buttons_for_rom(&c.layout, col[i]);
+            CHECK(c.layout.extra[0].r > 0);
+            CHECK(c.layout.extra[1].r > 0);
+            CHECK_EQ_INT(c.layout.extra[0].bit, KOBOY_BTN_Y);
+            CHECK_EQ_INT(c.layout.extra[1].bit, KOBOY_BTN_X);
+            CHECK(!strcmp(c.layout.extra[0].label, "K1"));
+            CHECK(!strcmp(c.layout.extra[1].label, "K2"));
+        }
+
+        /* The two two-disc systems added together must not have been given
+           the SAME two bits: a copy-pasted case that kept the WonderSwan's
+           L1/R1 would satisfy every "extra[0].r > 0" above and quietly make
+           an Intellivision keypad unreachable. */
+        {
+            koboy_layout a, b;
+            memset(&a, 0, sizeof a); memset(&b, 0, sizeof b);
+            config_extra_buttons_for_rom(&a, "Atlantis.int");
+            config_extra_buttons_for_rom(&b, "BurgerTime.col");
+            CHECK(a.extra[0].bit != b.extra[0].bit ||
+                  a.extra[1].bit != b.extra[1].bit);
+        }
+
         /* A NEO GEO POCKET gets NONE -- its stick, A, B and OPTION are exactly
-           what the DMG faceplate already draws. Checked from a SET state, so
-           this is the clearing path too. */
-        static const char *ngp[] = { "Sonic.ngp", "/roms/METAL SLUG.NGC" };
+           what the DMG faceplate already draws. An ATARI 2600 and a MASTER
+           SYSTEM / GAME GEAR likewise: one fire button plus Reset/Select, and
+           two buttons plus Start/Pause, both of which the faceplate already
+           carries. Checked from a SET state, so this is the clearing path
+           too. */
+        static const char *ngp[] = {
+            "Sonic.ngp", "/roms/METAL SLUG.NGC",
+            "Adventure.a26", "/roms/YARS' REVENGE.A26",
+            "Alex Kidd.sms", "/roms/SONIC.SMS",
+            "Crystal Warriors.gg", "/roms/BATTLETOADS.GG",
+        };
         for (size_t i = 0; i < sizeof ngp / sizeof ngp[0]; i++) {
             config_extra_buttons_for_rom(&c.layout, "GunPey.ws");
             CHECK(c.layout.extra[0].r > 0);
@@ -872,6 +943,9 @@ TEST_MAIN({
             "Metroid.nes", "Tetris.gb", "Zelda.gbc", "BALL.mgw",
             "no-extension", "Tetris.minx", "Tetris.mi", "",
             "GunPey.wsx", "GunPey.w", "Sonic.ngpx",
+            "Atlantis.intx", "Atlantis.in", "BurgerTime.colx",
+            "BurgerTime.co", "Adventure.a26x", "Alex Kidd.smsx",
+            "Crystal Warriors.ggx", "Crystal Warriors.g",
         };
         for (size_t i = 0; i < sizeof others / sizeof others[0]; i++) {
             config_extra_buttons_for_rom(&c.layout, "GunPey.ws");

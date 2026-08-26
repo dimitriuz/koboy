@@ -742,11 +742,76 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("A.ngpc"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.npc"),  "gambatte_libretro.so") == 0);
 
-        /* The six cores are six DISTINCT files. A table whose entries had
+        /* .a26 -> stella2014, .col -> Gearcoleco, .int -> FreeIntv, and
+           .sms/.gg -> Genesis Plus GX. The Sega pair is the second family
+           where one .so answers two extensions, and the first where the two
+           are not a mono/colour pair, so the same "both rows point at the
+           same file" check applies. Uppercase is not decoration here either:
+           the author's Game Gear directory really does carry 38 .gg and 15
+           .GG side by side. */
+        CHECK(strcmp(config_core_for_rom("ADVENTURE.a26"),
+                     "stella2014_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("ADVENTURE.A26"),
+                     "stella2014_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/atari2600/Yars' Revenge (USA).a26"),
+                     "stella2014_libretro.so") == 0);
+
+        CHECK(strcmp(config_core_for_rom("BURGERTIME.col"),
+                     "gearcoleco_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("BURGERTIME.COL"),
+                     "gearcoleco_libretro.so") == 0);
+
+        CHECK(strcmp(config_core_for_rom("ATLANTIS.int"),
+                     "freeintv_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("ATLANTIS.INT"),
+                     "freeintv_libretro.so") == 0);
+
+        CHECK(strcmp(config_core_for_rom("ALEXKIDD.sms"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("ALEXKIDD.SMS"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/gamegear/Crystal Warriors (USA, Europe).gg"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("Battletoads (USA).GG"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.sms"), config_core_for_rom("A.gg")) == 0);
+
+        /* Superstring and prefix for the five new extensions. `.gg` is the
+           dangerous one: it is two characters, it is a strict SUFFIX of
+           nothing here but a strict PREFIX of nothing either -- which is
+           exactly why a matcher that compared too few bytes would route
+           "A.g" or "A.ggx" to Genesis Plus GX and nobody would notice until
+           a Game Boy title landed on a Sega core. */
+        CHECK(strcmp(config_core_for_rom("A.a26x"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.a2"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.colx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.co"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.intx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.in"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.smsx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.sm"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ggx"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.g"),    "gambatte_libretro.so") == 0);
+        /* Not the Sega core's other extensions. Genesis Plus GX advertises
+           the whole Mega Drive list plus .sg, and stella2014 advertises .bin
+           and .mvc -- none is listed, for the same reason .pc2 and .ngpc are
+           not: no collection here has them, and an extension the browser
+           lists but nobody has loaded is an untested claim. `.bin` in
+           particular must NOT be claimed, because a .bin next to a ROM is
+           far more often a BIOS than a game -- exec.bin and grom.bin are
+           literally two of them. */
+        CHECK(strcmp(config_core_for_rom("A.md"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.gen"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.sg"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("exec.bin"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.mvc"), "gambatte_libretro.so") == 0);
+
+        /* The ten cores are ten DISTINCT files. A table whose entries had
            been copy-pasted with one name left unchanged would satisfy every
            individual assertion above and still ship a .min to fceumm. */
         static const char *distinct[] = { "A.gb", "A.mgw", "A.nes", "A.min",
-                                          "A.ws", "A.ngp" };
+                                          "A.ws", "A.ngp", "A.a26", "A.col",
+                                          "A.int", "A.sms" };
         for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
             for (size_t j = i + 1; j < sizeof distinct / sizeof distinct[0]; j++)
                 CHECK(strcmp(config_core_for_rom(distinct[i]),

@@ -138,6 +138,62 @@ TEST_MAIN({
     CHECK_EQ_INT(romlist_is_rom("Samurai Shodown!.ngf"), 0);
     CHECK_EQ_INT(romlist_is_rom("Samurai Shodown!.flash"), 0);
 
+    /* .a26, .col, .int, .sms and .gg. The mixed case here is documented
+       fact, not caution: the author's Game Gear folder holds 38 files ending
+       .gg and 15 ending .GG, in one directory, and the device partition is
+       FAT32 on top of that. */
+    CHECK_EQ_INT(romlist_is_rom("Adventure (Europe).a26"), 1);
+    CHECK_EQ_INT(romlist_is_rom("ADVENTURE (EUROPE).A26"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Adventure (Europe).A26"), 1);
+    CHECK_EQ_INT(romlist_is_rom("BurgerTime (USA, Europe).col"), 1);
+    CHECK_EQ_INT(romlist_is_rom("BURGERTIME (USA, EUROPE).COL"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Atlantis (USA, Europe).int"), 1);
+    CHECK_EQ_INT(romlist_is_rom("ATLANTIS (USA, EUROPE).INT"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Alex Kidd in Miracle World (USA, Europe).sms"), 1);
+    CHECK_EQ_INT(romlist_is_rom("ALEX KIDD IN MIRACLE WORLD.SMS"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Crystal Warriors (USA, Europe).gg"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Battletoads (USA).GG"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Chakan (USA, Europe).Gg"), 1);
+
+    /* THE THREE BIOS FILES THIS PROJECT NOW ASKS THE OWNER TO INSTALL must
+       never list as games, and they are not hypothetical files: exec.bin and
+       grom.bin go beside the koboy binary, which on a default install is the
+       same directory the browser can be pointed at, and boot0.rom through
+       boot3.rom sit in the author's own Intellivision folder next to the
+       .int files. `.bin` is the dangerous one -- it is a legitimate ROM
+       extension on several of these systems and koboy deliberately does not
+       claim it, for exactly this reason. */
+    CHECK_EQ_INT(romlist_is_rom("exec.bin"), 0);
+    CHECK_EQ_INT(romlist_is_rom("grom.bin"), 0);
+    CHECK_EQ_INT(romlist_is_rom("EXEC.BIN"), 0);
+    CHECK_EQ_INT(romlist_is_rom("colecovision.rom"), 0);
+    CHECK_EQ_INT(romlist_is_rom("boot0.rom"), 0);
+    CHECK_EQ_INT(romlist_is_rom("boot3.rom"), 0);
+
+    /* Superstring and prefix for all five, plus the extensions these cores
+       accept and koboy deliberately does not list. `.gg` is the tightest:
+       two characters, so a matcher comparing one would accept every file
+       ending in a `g`. And Genesis Plus GX advertising `md|gen|smd|sg|bin`
+       is not an invitation -- no collection here has them. */
+    CHECK_EQ_INT(romlist_is_rom("Adventure.a26x"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Adventure.a2"), 0);
+    CHECK_EQ_INT(romlist_is_rom("BurgerTime.colx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("BurgerTime.co"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Atlantis.intx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Atlantis.in"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Alex Kidd.smsx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Alex Kidd.sm"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Crystal Warriors.ggx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Crystal Warriors.g"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.md"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.gen"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.smd"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Choplifter.sg"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Adventure.mvc"), 0);
+    /* The Intellivision collection's own index files, which sit in the same
+       directory as the .int content. */
+    CHECK_EQ_INT(romlist_is_rom("gamegear.txt"), 0);
+
     /* The short-name guard's failure mode, made deterministic instead of
        ASan-only: if ends_with_ci's `if (lx > ls) return false;` is removed,
        the backward read for suffix ".gb" walks off the front of "b" -- but
