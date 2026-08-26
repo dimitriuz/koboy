@@ -541,6 +541,22 @@ TEST_MAIN({
            state: the ROM that lives there is right where it should be. */
         CHECK(has_name(&dp, "DEEP.gb"));
 
+        /* Up from depth N lands on depth N-1, not back at the root. Asserted
+           from a NESTED directory on purpose: at depth 1 those two answers
+           are the same string, so a "go up" that always jumped to the root
+           would pass every other check in this file. */
+        char deepest[512];
+        snprintf(deepest, sizeof deepest, "%s", romlist_subpath(&dp));
+        CHECK(romlist_up(&dp) >= 0);
+        {
+            const char *now = romlist_subpath(&dp);
+            CHECK((int)strlen(now) == (int)strlen(deepest) - 2);   /* one "/d" less */
+            CHECK(now[0] != 0);                                    /* not the root */
+            CHECK(strncmp(now, deepest, strlen(now)) == 0);
+            CHECK(has_name(&dp, "DEEP.gb"));       /* every level holds one */
+            CHECK(has_name(&dp, "d/"));            /* and the child we came from */
+        }
+
         romlist_free(&dp);
         char cmd[1024];
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
