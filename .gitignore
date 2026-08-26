@@ -2,6 +2,10 @@ build/
 dist/
 *.o
 *.so
+# *.zip was here for the dist archives long before arcade existed; with
+# FinalBurn Neo it is ALSO the content extension for a whole system, so it is
+# now doing the same job for arcade that *.nes and *.gb do for theirs. Both
+# meanings want the same rule.
 *.zip
 third_party/fbink/
 third_party/gambatte-libretro/
@@ -15,6 +19,7 @@ third_party/stella2014/
 third_party/gearcoleco/
 third_party/freeintv/
 third_party/gpgx/
+third_party/fbneo/
 *.srm
 *.ngf
 *.flash
