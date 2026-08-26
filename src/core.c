@@ -18,6 +18,10 @@ struct koboy_core {
     uint16_t (*input_fn)(void *);
     void *input_ud;
     uint16_t latched;
+    void (*pointer_fn)(void *, int16_t *, int16_t *, bool *);
+    void *pointer_ud;
+    int16_t ptr_x, ptr_y;
+    bool    ptr_pressed;
     /* bound symbols */
     unsigned (*api_version)(void);
     void (*set_environment)(retro_environment_t);
@@ -152,9 +156,39 @@ static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch)
 static void poll_cb(void)
 {
     g_active->latched = g_active->input_fn ? g_active->input_fn(g_active->input_ud) : 0;
+    /* Latched at poll time, exactly like the joypad bits, so every
+       input_state_cb call within one retro_run() sees one coherent snapshot.
+       The gw core makes three separate POINTER queries per frame (X, Y, then
+       PRESSED); reading live state on each would let a finger lift between
+       the coordinate reads and the press read. */
+    if (g_active->pointer_fn) {
+        g_active->pointer_fn(g_active->pointer_ud, &g_active->ptr_x,
+                             &g_active->ptr_y, &g_active->ptr_pressed);
+    } else {
+        g_active->ptr_x = g_active->ptr_y = 0;
+        g_active->ptr_pressed = false;
+    }
 }
 static int16_t state_cb(unsigned port, unsigned dev, unsigned idx, unsigned id)
 {
+    if (dev == RETRO_DEVICE_POINTER) {
+        /* PORT IS DELIBERATELY NOT CHECKED. The Game & Watch core asks on
+           port 2 (third_party/gw/src/libretro.c) where the libretro
+           convention is port 0, and koboy has exactly ONE pointer to report
+           regardless -- a single touchscreen. Hard-coding 2 would answer the
+           one core measured here and silently return 0 for any other core
+           that follows the convention; hard-coding 0 would break the one core
+           that actually exists. `idx` IS checked: it is the touch INDEX, and
+           only the first touch becomes a pointer (see recompute_lcd). */
+        if (idx != 0) return 0;
+        switch (id) {
+        case RETRO_DEVICE_ID_POINTER_X:       return g_active->ptr_x;
+        case RETRO_DEVICE_ID_POINTER_Y:       return g_active->ptr_y;
+        case RETRO_DEVICE_ID_POINTER_PRESSED: return g_active->ptr_pressed ? 1 : 0;
+        case RETRO_DEVICE_ID_POINTER_COUNT:   return g_active->ptr_pressed ? 1 : 0;
+        default: return 0;
+        }
+    }
     (void)idx;
     if (port != 0 || dev != RETRO_DEVICE_JOYPAD || id > 15) return 0;
     return (g_active->latched >> id) & 1u;
@@ -394,6 +428,14 @@ void core_set_input_fn(koboy_core *c, uint16_t (*fn)(void *ud), void *ud)
 {
     c->input_fn = fn;
     c->input_ud = ud;
+}
+
+void core_set_pointer_fn(koboy_core *c,
+                         void (*fn)(void *ud, int16_t *x, int16_t *y, bool *pressed),
+                         void *ud)
+{
+    c->pointer_fn = fn;
+    c->pointer_ud = ud;
 }
 
 void core_run_frame(koboy_core *c)

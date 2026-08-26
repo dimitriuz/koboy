@@ -10,6 +10,9 @@ static void on_frame(void *ud, const void *d, unsigned w, unsigned h, size_t pit
 }
 static uint16_t g_buttons;
 static uint16_t get_buttons(void *ud) { (void)ud; return g_buttons; }
+static int16_t g_ptr_x, g_ptr_y; static bool g_ptr_down;
+static void get_pointer(void *ud, int16_t *x, int16_t *y, bool *pressed)
+{ (void)ud; *x = g_ptr_x; *y = g_ptr_y; *pressed = g_ptr_down; }
 
 TEST_MAIN({
     char err[256] = {0};
@@ -62,6 +65,88 @@ TEST_MAIN({
     g_buttons = KOBOY_BTN_A | KOBOY_BTN_RIGHT;
     core_run_frame(c);
     CHECK_EQ_INT(((const uint16_t *)last_data)[0], KOBOY_BTN_A | KOBOY_BTN_RIGHT);
+
+    /* ------------------------------------------------------- the POINTER
+     *
+     * A Game & Watch title draws its own buttons into its artwork and reads
+     * them as a POINTER, on port 2. The stub now polls that every retro_run
+     * and records what came back (tests/stub_core.c), so what is asserted
+     * here is what a core SEES -- not what koboy believes it sent.
+     *
+     * Read through dlsym on the same handle the observation flags below use.
+     */
+    {
+        void *pso = dlopen("build/stub_core.so", RTLD_NOW);
+        CHECK(pso != NULL);
+        int *px  = (int *)dlsym(pso, "stub_ptr_x");
+        int *py  = (int *)dlsym(pso, "stub_ptr_y");
+        int *pp  = (int *)dlsym(pso, "stub_ptr_pressed");
+        int *pc  = (int *)dlsym(pso, "stub_ptr_count");
+        int *p0x = (int *)dlsym(pso, "stub_ptr_port0_x");
+        int *p0p = (int *)dlsym(pso, "stub_ptr_port0_pressed");
+        int *pi1 = (int *)dlsym(pso, "stub_ptr_idx1_x");
+        CHECK(px && py && pp && pc && p0x && p0p && pi1);
+
+        if (px && py && pp && pc && p0x && p0p && pi1) {
+            /* ADDITIVE: with no pointer function installed -- which is every
+               Game Boy session -- a POINTER query answers 0. That is exactly
+               what gambatte already saw, so this path cannot disturb it. */
+            core_run_frame(c);
+            CHECK_EQ_INT(*px, 0);
+            CHECK_EQ_INT(*py, 0);
+            CHECK_EQ_INT(*pp, 0);
+
+            /* Installed: the values arrive, on port 2. */
+            g_ptr_x = -12345; g_ptr_y = 6789; g_ptr_down = true;
+            core_set_pointer_fn(c, get_pointer, NULL);
+            core_run_frame(c);
+            CHECK_EQ_INT(*px, -12345);
+            CHECK_EQ_INT(*py, 6789);
+            CHECK_EQ_INT(*pp, 1);
+            CHECK_EQ_INT(*pc, 1);
+
+            /* PORT IS NOT CHECKED, on purpose: the gw core asks on port 2
+               and the libretro convention is port 0, and koboy has one
+               touchscreen either way. Asserting port 0 answers too is what
+               keeps a future "if (port != 2) return 0" from shipping. */
+            CHECK_EQ_INT(*p0x, -12345);
+            CHECK_EQ_INT(*p0p, 1);
+
+            /* INDEX IS checked: only the first touch becomes a pointer, so a
+               query for touch index 1 answers 0 even while index 0 is
+               pressed. Without this, `idx` could be ignored entirely and a
+               multi-touch core would see the same finger several times. */
+            CHECK_EQ_INT(*pi1, 0);
+
+            /* Release really reaches the core. A core that never sees
+               PRESSED go false holds the artwork's button down forever. */
+            g_ptr_down = false;
+            core_run_frame(c);
+            CHECK_EQ_INT(*pp, 0);
+            CHECK_EQ_INT(*pc, 0);
+            /* ...and the coordinates still come through, unchanged: a real
+               pointer device reports where it was. */
+            CHECK_EQ_INT(*px, -12345);
+
+            /* THE JOYPAD PATH IS UNDISTURBED, checked in the same frame as a
+               live pointer -- the whole point of "additive". */
+            g_buttons = KOBOY_BTN_B | KOBOY_BTN_UP;
+            g_ptr_down = true;
+            core_run_frame(c);
+            CHECK_EQ_INT(((const uint16_t *)last_data)[0], KOBOY_BTN_B | KOBOY_BTN_UP);
+            CHECK_EQ_INT(*pp, 1);
+
+            /* Uninstalling goes back to zeros, so the rest of this file runs
+               against the same core state it always did. */
+            core_set_pointer_fn(c, NULL, NULL);
+            core_run_frame(c);
+            CHECK_EQ_INT(*px, 0);
+            CHECK_EQ_INT(*pp, 0);
+            g_buttons = KOBOY_BTN_A | KOBOY_BTN_RIGHT;
+            core_run_frame(c);
+        }
+        if (pso) dlclose(pso);
+    }
 
     /* #7: the stub's observation flags were only readable under gdb, so the
        assertions they were written for were never actually made. Exported as

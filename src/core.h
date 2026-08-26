@@ -27,6 +27,19 @@ void core_set_frame_cb(koboy_core *c,
    (KOBOY_BTN_* bits, matching libretro's RETRO_DEVICE_ID_JOYPAD_* by bit position). */
 void core_set_input_fn(koboy_core *c, uint16_t (*fn)(void *ud), void *ud);
 
+/* Installs the function polled once per frame, alongside the joypad one
+   above, to obtain the libretro POINTER state a Game & Watch title needs: it
+   draws its own buttons into its artwork, so a touch has to reach the core as
+   a position rather than as a button. x/y are libretro-normalised (-0x7fff at
+   the left/top edge of the displayed frame, +0x7fff at the right/bottom).
+
+   Optional and additive: leave it unset and every POINTER query answers 0,
+   which is exactly what a core that never asks (gambatte) already saw. It
+   does not touch the joypad path in either direction. */
+void core_set_pointer_fn(koboy_core *c,
+                         void (*fn)(void *ud, int16_t *x, int16_t *y, bool *pressed),
+                         void *ud);
+
 /* Runs exactly one emulated frame (retro_run()). */
 void core_run_frame(koboy_core *c);
 

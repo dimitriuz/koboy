@@ -32,6 +32,22 @@ typedef struct koboy_input koboy_input;
 
 koboy_input *input_create(const koboy_config *c, const koboy_profile *p);
 void         input_destroy(koboy_input *in);
+
+/* The PANEL rect a touch is normalised against to become a libretro pointer,
+   in the LCD layout. Seeded from the profile's reserved game rect at
+   input_create, and refined by main.c once per presented frame to the rect the
+   frame ACTUALLY occupies inside it (video_frame_rect) -- which is smaller
+   whenever the core is rendering below its max geometry, as a Game & Watch
+   title does several times a second when it zooms to the LCD alone.
+
+   A setter rather than input.c reading the video object: input.c has no
+   video.h dependency and should not grow one for a rect, and the profile it
+   copied at create time goes stale on a mid-session geometry re-fit anyway
+   (main.c rebuilds video, not input). Ignored entirely in the DMG layout,
+   where no pointer is ever reported. A degenerate rect (w or h < 1) is
+   rejected rather than stored: it would make the normalisation divide by
+   zero, and "no pointer" is a better answer than a crash. */
+void         input_set_pointer_rect(koboy_input *in, int x, int y, int w, int h);
 void         input_set_touch_transform(koboy_input *in, int raw_max_x, int raw_max_y,
                                        bool transpose, bool flip_x, bool flip_y);
 void         input_feed(koboy_input *in, const koboy_ev *evs, size_t n);

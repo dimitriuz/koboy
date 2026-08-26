@@ -70,6 +70,15 @@
 #define RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE  (47 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 
 #define RETRO_DEVICE_JOYPAD    1
+/* The Game & Watch core polls this, on PORT 2, to let the player press the
+   buttons its own artwork draws (third_party/gw/src/libretro.c). Coordinates
+   are normalised across the displayed frame: -0x7fff at the left/top edge,
+   +0x7fff at the right/bottom. */
+#define RETRO_DEVICE_POINTER   6
+#define RETRO_DEVICE_ID_POINTER_X        0
+#define RETRO_DEVICE_ID_POINTER_Y        1
+#define RETRO_DEVICE_ID_POINTER_PRESSED  2
+#define RETRO_DEVICE_ID_POINTER_COUNT    3
 #define RETRO_MEMORY_SAVE_RAM  0
 
 enum retro_pixel_format

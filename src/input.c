@@ -1,4 +1,10 @@
 #include "input.h"
+#include "chrome.h"    /* chrome_lcd_menu_rect: the MENU zone in the LCD
+                          layout is a drawn box, and chrome.c owns where the
+                          drawn controls are -- see chrome.h. Hit-testing it
+                          from a second, independently derived copy of that
+                          arithmetic is precisely how a control and its touch
+                          zone drift apart. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -19,6 +25,8 @@ struct koboy_input {
 
     bool menu_latched;      /* set on a MENU tap, cleared by the taker */
     bool menu_touching;     /* edge state, so a held finger latches once */
+
+    koboy_rect ptr_rect;    /* see input_set_pointer_rect */
 };
 
 koboy_input *input_create(const koboy_config *c, const koboy_profile *p)
@@ -27,7 +35,20 @@ koboy_input *input_create(const koboy_config *c, const koboy_profile *p)
     if (!in) return NULL;
     in->cfg = *c; in->prof = *p;
     in->raw_max_x = p->panel_w; in->raw_max_y = p->panel_h;
+    /* The reserved game rect is the honest starting answer: it is where a
+       frame will land, and until one has actually been submitted nobody knows
+       any better. main.c narrows it per frame -- see input_set_pointer_rect. */
+    in->ptr_rect.x = p->game_x; in->ptr_rect.y = p->game_y;
+    in->ptr_rect.w = p->game_w; in->ptr_rect.h = p->game_h;
     return in;
+}
+
+void input_set_pointer_rect(koboy_input *in, int x, int y, int w, int h)
+{
+    if (!in) return;
+    if (w < 1 || h < 1) return;   /* LIVE GUARD -- see input.h */
+    in->ptr_rect.x = x; in->ptr_rect.y = y;
+    in->ptr_rect.w = w; in->ptr_rect.h = h;
 }
 
 void input_destroy(koboy_input *in) { free(in); }
@@ -101,6 +122,73 @@ static uint16_t axis_bits(int delta, int dz, int hys, uint16_t neg, uint16_t pos
     return 0;
 }
 
+static bool in_rect_xywh(int x, int y, const koboy_rect *r)
+{
+    return x >= r->x && x < r->x + r->w && y >= r->y && y < r->y + r->h;
+}
+
+/* One axis of the libretro pointer: a panel offset `d` inside a `span`-wide
+   rect becomes -0x7fff at the first pixel and +0x7fff at the last.
+
+   65534, not 65536, and (span - 1), not span, so BOTH ends are exact: the
+   core divides straight back by 65534 (third_party/gw/gwlua/functions.c), so
+   a mapping that only got the left edge right would leave the rightmost
+   column of artwork -- where several titles put a button -- permanently
+   unreachable. */
+static int16_t pointer_axis(int d, int span)
+{
+    if (span < 2) return 0;      /* LIVE GUARD: a 1px rect has no gradient */
+    if (d < 0) d = 0;
+    if (d > span - 1) d = span - 1;
+    return (int16_t)((long)d * 65534 / (span - 1) - 32767);
+}
+
+/* The LCD layout's input model, in full: hardware keys, one MENU zone, and
+   the pointer. No d-pad, no A/B, no Start/Select -- chrome_render_lcd draws
+   none of them, and a live zone under nothing drawn is worse than useless
+   (it eats touches meant for the artwork).
+
+   MENU is tested FIRST and its slot is excluded from the pointer scan below.
+   The two zones cannot overlap at the shipped geometry -- MENU is in the
+   bottom strip and the game rect stops above it -- but "cannot overlap today"
+   is a property of two numbers in two files, and the consequence of it
+   lapsing is a MENU tap that also presses whatever the artwork draws under
+   it. Ordering makes it structural instead. */
+static void recompute_lcd(koboy_input *in, uint16_t b)
+{
+    koboy_rect m;
+    chrome_lcd_menu_rect(&in->prof, &m);
+
+    int menu_slot = -1;
+    for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
+        if (!in->st.touch[s].down) continue;
+        if (in_rect_xywh(in->st.touch[s].x, in->st.touch[s].y, &m)) { menu_slot = s; break; }
+    }
+    /* Edge triggered, exactly as the DMG path: a held finger latches once. */
+    if (menu_slot >= 0 && !in->menu_touching) in->menu_latched = true;
+    in->menu_touching = (menu_slot >= 0);
+
+    bool pressed = false;
+    for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
+        if (!in->st.touch[s].down) continue;
+        if (s == menu_slot) continue;                      /* MENU wins */
+        int x = in->st.touch[s].x, y = in->st.touch[s].y;
+        if (!in_rect_xywh(x, y, &in->ptr_rect)) continue;  /* case, not artwork */
+        in->st.pointer.x = pointer_axis(x - in->ptr_rect.x, in->ptr_rect.w);
+        in->st.pointer.y = pointer_axis(y - in->ptr_rect.y, in->ptr_rect.h);
+        pressed = true;
+        break;                     /* one pointer; the first live touch owns it */
+    }
+    /* MUST be assigned every pass, not only when something is down: a core
+       that never sees PRESSED go false holds the artwork's button forever.
+       The COORDINATES are deliberately left where they were -- that is what a
+       real pointer device reports on release, and the core reads PRESSED to
+       decide a press, not the position. */
+    in->st.pointer.pressed = pressed;
+
+    in->st.buttons = b;
+}
+
 static void recompute(koboy_input *in)
 {
     const koboy_layout *l = &in->cfg.layout;
@@ -110,6 +198,13 @@ static void recompute(koboy_input *in)
        have a pad connected and still tap the drawn cross, or press a
        page-turn button, and none of those sources should shadow another. */
     uint16_t b = in->key_bits | in->hat_bits;
+
+    /* The page-turn keys and a gamepad keep working in BOTH layouts -- they
+       are folded in above the split, not inside the DMG branch. Several Game
+       & Watch titles bind ordinary retropad buttons as well as their drawn
+       ones, and a device with hardware buttons should not lose them just
+       because the faceplate stopped drawing any. */
+    if (in->prof.layout_mode == KOBOY_LAYOUT_LCD) { recompute_lcd(in, b); return; }
 
     int dcx = perm(l->dpad_cx, W), dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
 

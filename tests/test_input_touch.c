@@ -1,5 +1,6 @@
 #include "test.h"
 #include "input.h"
+#include "chrome.h"   /* chrome_lcd_menu_rect: the MENU zone under test */
 #include "config.h"
 
 /* Protocol B, as the Elan panel reports it: slot, tracking id, x, y, syn. */
@@ -241,5 +242,268 @@ TEST_MAIN({
         CHECK_EQ_INT(input_take_menu_request(in3), 0); /* lift alone latches nothing */
 
         input_destroy(in3);
+    }
+
+    /* ================================ the LCD layout: touch becomes a pointer
+     *
+     * A Game & Watch unit draws its OWN buttons into its artwork, at
+     * different positions per title, so koboy forwards the touch position
+     * instead of synthesising joypad bits from a faceplate that is not there.
+     * Everything below drives input_feed -- the real event stream -- rather
+     * than poking koboy_input_state, so what is asserted is the chain the
+     * device runs.
+     */
+    {
+        koboy_config lc; config_defaults(&lc);
+        lc.layout_mode = KOBOY_LAYOUT_LCD;
+        koboy_profile lp;
+        /* Mickey Mouse's measured 654x396 on the verified panel: a
+           1264x765 rect at (0,397). */
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
+        CHECK_EQ_INT(lp.game_w, 1264);
+        CHECK_EQ_INT(lp.game_h, 765);
+
+        koboy_input *li = input_create(&lc, &lp);
+        CHECK(li != NULL);
+        input_set_touch_transform(li, 1263, 1679, false, false, false);
+
+        /* Nothing touched yet: not pressed. */
+        CHECK(!input_state(li)->pointer.pressed);
+
+        koboy_ev up[2] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+            { KOBOY_EV_SYN, 0, 0 },
+        };
+
+        /* THE EDGES, exactly. -0x7fff at the first pixel and +0x7fff at the
+           last, because the core divides straight back by 65534 over the
+           frame's own width (third_party/gw/gwlua/functions.c) -- a mapping
+           that only got the left edge right would make the rightmost column
+           of artwork, where several titles put a button, unreachable. */
+        koboy_ev tl[5] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  lp.game_x },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  lp.game_y },
+            { KOBOY_EV_SYN, 0, 0 },
+        };
+        input_feed(li, tl, 5);
+        CHECK(input_state(li)->pointer.pressed);
+        CHECK_EQ_INT(input_state(li)->pointer.x, -32767);
+        CHECK_EQ_INT(input_state(li)->pointer.y, -32767);
+        /* And no joypad bit was synthesised from it -- the faceplate's zones
+           are dead in this layout. */
+        CHECK_EQ_INT(input_state(li)->buttons, 0);
+        input_feed(li, up, 2);
+
+        koboy_ev br[5] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  lp.game_x + lp.game_w - 1 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  lp.game_y + lp.game_h - 1 },
+            { KOBOY_EV_SYN, 0, 0 },
+        };
+        input_feed(li, br, 5);
+        CHECK(input_state(li)->pointer.pressed);
+        CHECK_EQ_INT(input_state(li)->pointer.x, 32767);
+        CHECK_EQ_INT(input_state(li)->pointer.y, 32767);
+
+        /* RELEASE MUST CLEAR PRESSED, or the core holds the artwork's button
+           down forever. The coordinates deliberately do NOT reset -- that is
+           what a real pointer device reports, and the core reads PRESSED. */
+        input_feed(li, up, 2);
+        CHECK(!input_state(li)->pointer.pressed);
+        CHECK_EQ_INT(input_state(li)->pointer.x, 32767);
+        CHECK_EQ_INT(input_state(li)->pointer.y, 32767);
+
+        /* The centre, to within the rounding of one 65534-step. This is the
+           check that would catch an axis swap or a half-scale error that the
+           two corners above cannot: they are symmetric. */
+        {
+            int cx = lp.game_x + lp.game_w / 4;         /* a quarter across... */
+            int cy = lp.game_y + lp.game_h * 3 / 4;     /* ...three quarters down */
+            koboy_ev q[5] = {
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  cx },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  cy },
+                { KOBOY_EV_SYN, 0, 0 },
+            };
+            input_feed(li, q, 5);
+            int wantx = (int)((long)(lp.game_w / 4) * 65534 / (lp.game_w - 1)) - 32767;
+            int wanty = (int)((long)(lp.game_h * 3 / 4) * 65534 / (lp.game_h - 1)) - 32767;
+            CHECK_EQ_INT(input_state(li)->pointer.x, wantx);
+            CHECK_EQ_INT(input_state(li)->pointer.y, wanty);
+            /* Not symmetric, so an x/y swap really is visible here. */
+            CHECK(wantx < 0 && wanty > 0);
+            input_feed(li, up, 2);
+        }
+
+        /* A touch on the CASE -- above the artwork, inside the panel -- is
+           not a pointer press at all. The core would otherwise see a click
+           on artwork the user never touched. */
+        {
+            koboy_ev off[5] = {
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  600 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  lp.game_y - 20 },
+                { KOBOY_EV_SYN, 0, 0 },
+            };
+            input_feed(li, off, 5);
+            CHECK(!input_state(li)->pointer.pressed);
+            input_feed(li, up, 2);
+        }
+
+        /* MENU WINS. A tap on the MENU zone opens koboy's menu and must NOT
+           also reach the core as a pointer press -- the two would otherwise
+           fire together on any layout where they overlap, and "MENU also
+           pressed something in the game" is invisible until it corrupts a
+           run. Asserted through the SAME zone chrome.c draws. */
+        {
+            koboy_rect m;
+            chrome_lcd_menu_rect(&lp, &m);
+            koboy_ev mt[5] = {
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  m.x + m.w / 2 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  m.y + m.h / 2 },
+                { KOBOY_EV_SYN, 0, 0 },
+            };
+            CHECK_EQ_INT(input_take_menu_request(li), 0);
+            input_feed(li, mt, 5);
+            CHECK_EQ_INT(input_take_menu_request(li), 1);
+            CHECK(!input_state(li)->pointer.pressed);
+            CHECK_EQ_INT(input_state(li)->buttons, 0);
+            /* Held: latches exactly once, same edge contract as the DMG
+               layout's MENU. */
+            koboy_ev syn1[1] = { { KOBOY_EV_SYN, 0, 0 } };
+            input_feed(li, syn1, 1);
+            CHECK_EQ_INT(input_take_menu_request(li), 0);
+            input_feed(li, up, 2);
+
+            /* AND WITH THE TWO ZONES OVERLAPPING. At the shipped geometry
+               they cannot: MENU is in the bottom strip and the pointer rect
+               is the artwork above it, so the containment test alone already
+               rejects a MENU tap and the "MENU wins" ordering is unreachable
+               -- confirmed by mutating that ordering away and watching this
+               file stay green. Overlapping them here (through
+               input_set_pointer_rect, the same public setter main.c drives
+               every frame) is what makes the ordering an assertion instead of
+               a comment. Restored immediately afterwards. */
+            input_set_pointer_rect(li, m.x, m.y, m.w, m.h);
+            input_feed(li, mt, 5);
+            CHECK_EQ_INT(input_take_menu_request(li), 1);
+            CHECK(!input_state(li)->pointer.pressed);
+            input_feed(li, up, 2);
+            input_set_pointer_rect(li, lp.game_x, lp.game_y, lp.game_w, lp.game_h);
+        }
+
+        /* THE DRAWN DMG CONTROLS ARE DEAD. Their permille zones do not stop
+           existing just because nothing draws them, and a live d-pad under a
+           full-width Game & Watch unit would eat exactly the touches meant
+           for the artwork's own buttons. Probed at the d-pad centre and at
+           the A and B discs, all three of which fall inside this layout's
+           game rect on this panel. */
+        {
+            const int W = 1264, H = 1680;
+            int dcx = lc.layout.dpad_cx * W / 1000, dcy = lc.layout.dpad_cy * H / 1000;
+            int dr  = lc.layout.dpad_r  * W / 1000;
+            int acx = lc.layout.a_cx * W / 1000,    acy = lc.layout.a_cy * H / 1000;
+            int bcx = lc.layout.b_cx * W / 1000,    bcy = lc.layout.b_cy * H / 1000;
+            /* Offset from the d-pad's centre, not on it: under CROSS the
+               centre itself is the neutral position and reports no direction
+               in EITHER layout, which would make this pair of checks pass
+               without proving anything. */
+            int dux = dcx, duy = dcy - dr / 2;
+            CHECK_EQ_INT(touch_probe(li, dux, duy), 0);
+            CHECK_EQ_INT(touch_probe(li, acx, acy), 0);
+            CHECK_EQ_INT(touch_probe(li, bcx, bcy), 0);
+            /* Control: the SAME coordinates in the DMG layout DO press
+               something. Without this the three checks above would pass just
+               as well against a probe that missed every zone. */
+            koboy_config dc2; config_defaults(&dc2);
+            koboy_profile dp2;
+            config_resolve_profile(&dp2, &dc2, W, H, KOBOY_GB_W, KOBOY_GB_H,
+                                   KOBOY_GB_W, KOBOY_GB_H);
+            koboy_input *di = input_create(&dc2, &dp2);
+            CHECK(di != NULL);
+            input_set_touch_transform(di, W - 1, H - 1, false, false, false);
+            CHECK_EQ_INT(touch_probe(di, dux, duy) & KOBOY_BTN_UP, KOBOY_BTN_UP);
+            CHECK_EQ_INT(touch_probe(di, acx, acy) & KOBOY_BTN_A, KOBOY_BTN_A);
+            CHECK_EQ_INT(touch_probe(di, bcx, bcy) & KOBOY_BTN_B, KOBOY_BTN_B);
+            /* ...and the DMG layout NEVER produces a pointer press, however
+               it is touched: gambatte does not read one, and forwarding one
+               would be state nobody clears. */
+            touch_probe(di, dp2.game_x + 10, dp2.game_y + 10);
+            CHECK(!input_state(di)->pointer.pressed);
+            input_destroy(di);
+        }
+
+        /* THE PAGE-TURN KEYS KEEP WORKING. A hardware button is the only
+           control a Game & Watch unit's compat keymap can reach on a device
+           with no touch, and dropping the faceplate must not drop them. */
+        input_feed_key(li, KOBOY_KEY_PAGE_F23, true);
+        CHECK_EQ_INT(input_state(li)->buttons & KOBOY_BTN_A, KOBOY_BTN_A);
+        input_feed_key(li, KOBOY_KEY_PAGE_F23, false);
+        CHECK_EQ_INT(input_state(li)->buttons & KOBOY_BTN_A, 0);
+        input_feed_key(li, KOBOY_KEY_PAGE_F24, true);
+        CHECK_EQ_INT(input_state(li)->buttons & KOBOY_BTN_B, KOBOY_BTN_B);
+        input_feed_key(li, KOBOY_KEY_PAGE_F24, false);
+
+        /* THE POINTER RECT FOLLOWS THE FRAME. main.c narrows it every
+           presented frame to what video_frame_rect reports, because a Game &
+           Watch title renders BELOW its max geometry -- the zoomed LCD-only
+           view -- several times a second, and the core normalises the pointer
+           it receives against whatever it is currently showing. Normalising
+           against the reserved rect instead leaves every touch offset by the
+           centring margin.
+
+           305x191 fitted into the 1264x765 rect is 1221x765 at x = 21, which
+           is the rect video_frame_rect reports for that frame. */
+        {
+            int fw = 305 * 765 / 191, fh = 765;
+            int fx = lp.game_x + (lp.game_w - fw) / 2, fy = lp.game_y;
+            input_set_pointer_rect(li, fx, fy, fw, fh);
+
+            koboy_ev le[5] = {
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  fx },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  fy },
+                { KOBOY_EV_SYN, 0, 0 },
+            };
+            input_feed(li, le, 5);
+            CHECK(input_state(li)->pointer.pressed);
+            CHECK_EQ_INT(input_state(li)->pointer.x, -32767);
+            input_feed(li, up, 2);
+
+            /* The left edge of the RESERVED rect is now outside the frame,
+               so it is no longer a press at all -- it is bezel. This is the
+               half that distinguishes "the rect narrowed" from "the rect was
+               ignored": against the reserved rect this coordinate would
+               still read -32767 and press. */
+            koboy_ev out[5] = {
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  lp.game_x },
+                { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  lp.game_y + 10 },
+                { KOBOY_EV_SYN, 0, 0 },
+            };
+            input_feed(li, out, 5);
+            CHECK(!input_state(li)->pointer.pressed);
+            input_feed(li, up, 2);
+
+            /* LIVE GUARD: a degenerate rect is refused, leaving the previous
+               one in force rather than dividing by zero on the next touch. */
+            input_set_pointer_rect(li, 0, 0, 0, 10);
+            input_set_pointer_rect(li, 0, 0, 10, 0);
+            input_feed(li, le, 5);
+            CHECK(input_state(li)->pointer.pressed);
+            CHECK_EQ_INT(input_state(li)->pointer.x, -32767);
+            input_feed(li, up, 2);
+        }
+
+        input_destroy(li);
     }
 })

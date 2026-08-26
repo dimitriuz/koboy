@@ -85,9 +85,17 @@ typedef enum { KOBOY_LAYOUT_DMG = 0, KOBOY_LAYOUT_LCD } koboy_layout_mode;
 typedef struct { int x, y, w, h; } koboy_rect;   /* w == 0 means "empty" */
 typedef struct { int x, y; bool down; } koboy_touch;
 
+/* libretro-normalised pointer, as RETRO_DEVICE_POINTER reports it: -0x7fff at
+   the left/top edge of the displayed frame, +0x7fff at the right/bottom.
+   x/y deliberately KEEP their last value when pressed goes false -- that is
+   what a real pointer device does, and the core reads PRESSED to decide
+   whether a button is being held, not the coordinates. */
+typedef struct { int16_t x, y; bool pressed; } koboy_pointer;
+
 typedef struct {
-    uint16_t    buttons;
-    koboy_touch touch[KOBOY_MAX_TOUCH];
+    uint16_t     buttons;
+    koboy_touch  touch[KOBOY_MAX_TOUCH];
+    koboy_pointer pointer;
 } koboy_input_state;
 
 typedef struct {

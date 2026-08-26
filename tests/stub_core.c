@@ -24,6 +24,19 @@ int stub_observed_unload = 0;
 int stub_observed_reset  = 0;
 int stub_serialize_calls = 0;
 
+/* What retro_run() got back when it asked for a POINTER, so test_core.c can
+   assert what a core actually SEES rather than what koboy believes it sent.
+   The Game & Watch core queries port 2 (third_party/gw/src/libretro.c) where
+   the libretro convention is port 0, so both are polled here and recorded
+   separately -- a core.c that hard-coded either port would answer one and
+   return 0 for the other, and only a stub that asks both can tell.
+   stub_ptr_idx1_x polls touch index 1, which koboy never reports: it must
+   come back 0 however the pointer is placed. */
+int stub_ptr_x = -1, stub_ptr_y = -1, stub_ptr_pressed = -1;
+int stub_ptr_port0_x = -1, stub_ptr_port0_pressed = -1;
+int stub_ptr_idx1_x = -1;
+int stub_ptr_count = -1;
+
 /* Geometry retro_get_system_av_info reports, dlsym-poked by test_core.c
    BEFORE a load so it can exercise core_get_geometry against something other
    than the Game Boy's fixed 160x144 -- including the max_width == 0
@@ -138,6 +151,15 @@ void retro_run(void)
     for (unsigned id = 0; id < 16; id++)
         if (state_cb && state_cb(0, RETRO_DEVICE_JOYPAD, 0, id)) bits |= (uint16_t)(1u << id);
     fb[0] = bits;
+    if (state_cb) {
+        stub_ptr_x       = state_cb(2, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+        stub_ptr_y       = state_cb(2, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);
+        stub_ptr_pressed = state_cb(2, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
+        stub_ptr_count   = state_cb(2, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_COUNT);
+        stub_ptr_port0_x       = state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
+        stub_ptr_port0_pressed = state_cb(0, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_PRESSED);
+        stub_ptr_idx1_x  = state_cb(2, RETRO_DEVICE_POINTER, 1, RETRO_DEVICE_ID_POINTER_X);
+    }
     int16_t silence[64] = {0};
     if (batch_cb) batch_cb(silence, 32);
 

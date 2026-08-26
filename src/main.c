@@ -69,6 +69,17 @@ static const char *layout_name(int mode)
     return mode == KOBOY_LAYOUT_LCD ? "LCD" : "DMG";
 }
 
+/* The other half of the input surface, for a core that reads a pointer rather
+   than (only) buttons -- see core_set_pointer_fn. input.c fills this in
+   whenever the LCD layout is live and leaves pressed false otherwise, so
+   installing it unconditionally costs a Game Boy session three stores per
+   frame and changes nothing it sees. */
+static void on_pointer(void *ud, int16_t *x, int16_t *y, bool *pressed)
+{
+    const koboy_input_state *st = input_state((koboy_input *)ud);
+    *x = st->pointer.x; *y = st->pointer.y; *pressed = st->pointer.pressed;
+}
+
 static bool g_quiet;
 static void say(const char *fmt, ...)
 {
@@ -938,6 +949,11 @@ int main(int argc, char **argv)
 #endif
     core_set_frame_cb(core, on_frame, NULL);
     core_set_input_fn(core, on_input, in);
+    /* Additive: gambatte never issues a POINTER query, so this is inert for
+       the Game Boy. It is installed unconditionally rather than only for the
+       LCD layout because the state it forwards is already gated in input.c,
+       and one install site is one fewer place for the two to disagree. */
+    core_set_pointer_fn(core, on_pointer, in);
 
     /* Tetris is cartridge type 0x00: no battery-backed SRAM at all, so this is
        NULL/0 on the development ROM and must not be dereferenced. */
@@ -1321,6 +1337,26 @@ int main(int argc, char **argv)
                                         cfg.refresh_fixed_tiles,
                                         rects, KOBOY_MAX_RECTS);
         stats_add(&stats, KOBOY_STAGE_SUBMIT, pf->now_us(pf->ctx) - t0);
+
+        /* Keep the LCD layout's touch->pointer normalisation pointed at the
+           pixels the artwork is actually on. video_frame_rect reports where
+           the frame just submitted landed inside the reserved rect, which is
+           SMALLER than that rect whenever the core renders below its max
+           geometry -- a Game & Watch title zooming to the LCD alone does
+           exactly that, several times a second, and the core normalises the
+           pointer it receives against what it is currently showing. Done here
+           rather than in input.c because input.c has no video dependency, and
+           unconditionally rather than only for the LCD layout because
+           input.c ignores the rect entirely in the other one.
+           Before nrects is tested: an unchanged frame still occupies the same
+           rect, and skipping the update on a duplicate would leave the
+           pointer mapped to whatever the last CHANGED frame's size was. */
+        {
+            koboy_rect fr;
+            video_frame_rect(vid, &fr);
+            input_set_pointer_rect(in, prof.game_x + fr.x, prof.game_y + fr.y,
+                                   fr.w, fr.h);
+        }
 
         if (nrects == 0) goto sram_check;       /* nothing changed: skip the panel */
 
