@@ -476,7 +476,31 @@ No title measured so far needs them -- GunPey's portrait mode answers
 fixed. If a report arrives, the options are a third and fourth slot (needing
 somewhere to put them) or a MENU toggle that remaps the two drawn face discs.
 
-### 43. Colour on four greys: blue skies go black, and no core option fixes it
+### 43. ~~Colour on four greys: blue skies go black~~ -- CLOSED 2026-08-26
+
+Fixed in `src/video.c`: the greyscale mapping is now selectable
+(`koboy_gray_map`, five entries), the default is no longer Rec.601, and it is
+reachable from `koboy.ini` (`gray_map`) and from the in-game MENU
+(`MENU -> GREYSCALE`, which cycles and writes the key back).
+
+Two things the diagnosis below got wrong, both found by measuring rather than
+reasoning, and both worth keeping:
+
+- **Equal weights `(R+G+B)/3` are not the fix.** Over 38 gameplay frames from
+  19 colour titles they crush MORE pixels to black than Rec.601 does (8.9%
+  against 6.7%), because what they hand back to blue they take from green. On
+  Kirby's Adventure they turn the floor solid black, which Rec.601 did not.
+- **What removes the crushing is a shadow LIFT**, which is exactly equivalent
+  to lowering `video_quantise4`'s first threshold. With it, "carries visible
+  colour yet renders black" falls from 6.7% of pixels to 2.5%.
+
+The shipped default needs both: weights `(81,118,57)` (blue at roughly twice
+Rec.601's, which is what raises the skies) plus the lift. Green stays high
+enough that Sonic's own blue body remains a level BELOW the sky he is drawn
+against -- the failure `equal` gets close to.
+
+The original finding, for the record:
+
 
 The owner's Neo Geo Pocket library is 250 `.ngc` against 27 `.ngp`, and the
 WonderSwan one 175 `.wsc` against 163 `.ws`, so both systems are in practice
@@ -524,3 +548,46 @@ moving a Game Boy control or pushing `chrome_controls_top` up into the game
 rect. A seventh system needing three would need somewhere to put the third,
 not just a bigger number. Recorded so nobody raises the constant and
 discovers that at render time.
+
+## The greyscale mapping (added 2026-08-26)
+
+### 46. The default was chosen on a host monitor, not on the panel it is for
+
+Every frame that decided `gray_map = balanced` was rendered through the real
+`video.c` and looked at **on a backlit sRGB display**. An e-ink panel's four
+DU4 levels are not 0x00/0x55/0xAA/0xFF as reflectance -- the spacing is the
+controller's, the white point is paper, and CLAUDE.md's own history is a list
+of decisions the device overruled. The in-game MENU entry exists precisely
+because this call cannot honestly be made from a host render, but nobody has
+yet cycled it on the Libra 2 and said which one is right.
+
+Cheapest resolution: load a `.nes` or `.ngc`, open MENU, and step through the
+five. `koboy.log` names the active mapping on every launch, so whatever the
+owner settles on is recoverable from the log.
+
+### 47. The MENU handler for GREYSCALE has no automated coverage
+
+`MENU_GRAY`'s branch in `src/main.c` -- cycle, `video_set_gray_map`,
+`config_save_gray_map` -- is not reachable from any test, for the same reason
+`MENU_SAVE`, `MENU_LOAD` and `MENU_RESET` are not: `--ui-script` drives the
+ROM BROWSER only, and `MODE_MENU` has no script hook. Every PART of the branch
+is tested (`video_set_gray_map` through the pipeline, `config_save_gray_map`
+through `test_config`, the row's label through `test_ui`, and the ini ->
+`video_create` plumbing through `smoke_host`), but the three-line branch that
+wires them together is verified by reading only.
+
+This is the existing `MODE_MENU` coverage gap (the v2 section above), now with
+one more inhabitant. A `--ui-script` hook into `MODE_MENU` would close it for
+all of them at once, which is the argument for doing that rather than
+special-casing this entry.
+
+### 48. `value` can make a HUD disappear, and the menu offers it anyway
+
+`gray_map = value` (`max(R,G,B)`) puts Super Mario Bros.' white HUD text on a
+white sky: the text is gone, not merely low-contrast. It is shipped as a menu
+option regardless, because it is genuinely the best of the five for line art
+and text-heavy screens and the owner is entitled to see it -- but if a
+"cannot render nothing" rule is ever wanted, this is the entry that breaks it.
+`koboy.ini`'s comment says so in as many words. Recorded so the day someone
+reports "the score vanished", the answer is one line away.
+

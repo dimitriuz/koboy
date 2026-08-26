@@ -68,8 +68,9 @@ src/platform_if.h     the portability seam: init, shutdown, screen_info,
                       blit_gray8, refresh, poll_input, now_us, should_quit
 src/platform_kobo.c   FBInk + evdev. Device quirks live here and nowhere else.
 src/platform_sdl.c    host equivalent, so the whole pipeline is testable
-src/video.c           RGB565->gray LUT, integer upscale, 4-level quantise,
-                      Bayer dither, 8x8-tile dirty rects
+src/video.c           RGB565->gray LUT (five selectable mappings, koboy_gray_map),
+                      integer upscale, 4-level quantise, Bayer dither,
+                      8x8-tile dirty rects
 src/input.c           protocol-B multitouch decode, axis transpose, d-pad modes
 src/chrome.c          the procedural faceplate drawn around the game rect
 src/config.c          ini load/save, profile resolution, path resolution
@@ -163,7 +164,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 45 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 is the live one: neither WonderSwan nor Neo Geo Pocket has run on hardware at all.** |
+| `docs/FOLLOWUPS.md` | 48 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 is the live one: neither WonderSwan nor Neo Geo Pocket has run on hardware at all**, and #46 is its twin for the new greyscale default. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -183,6 +184,24 @@ spec's appendices are the record; the short version:
 - **16-level GBC rendering is impossible here.** GL16 measured 321.7 ms and
   GC16 393.3 ms — 3.1 and 2.5 fps. Four levels is not a simplification, it is
   the only option.
+- **Rec.601 luma is the wrong RGB→grey reduction for this panel, and equal
+  weights are not the fix either.** Luma weights blue 29/256, so a bright blue
+  sky quantises to the *darkest* level (Sonic Pocket Adventure rgb(0,154,255)
+  → 119 → level 1; Castlevania rgb(0,36,140) → 36 → level 0). But `(R+G+B)/3`
+  crushes *more* pixels to black than luma does — 8.9% vs 6.7% over 38
+  gameplay frames from 19 titles — because what it returns to blue it takes
+  from green. What removes the crushing is a **shadow lift**, equivalent to
+  lowering `video_quantise4`'s first threshold: 6.7% → 2.5%. The shipped
+  default (`gray_map = balanced`) needs both — weights (81,118,57) *and* the
+  lift. Selectable, because this is a judgement about a reflective panel and
+  cannot honestly be made from a host render: `MENU → GREYSCALE` cycles it
+  in-game and writes the ini key back.
+- **The Game Boy's palette is neutral, so none of that touches it.** gambatte
+  emits exactly rgb(0,0,0)/(82,85,82)/(173,170,173)/(255,255,255); every
+  mapping is the identity on neutral grey and the lift keeps both mid greys
+  inside their existing levels, so the DMG golden is byte-identical and **no
+  per-system exemption exists**. Do not add one keyed on 160x144 — Game Gear
+  is also 160x144 and is a colour system.
 - **Refresh cost scales with area**, so dirty rectangles pay for themselves, and
   non-blocking submission beats blocking by ~2.6x. The main loop never waits for
   completion.
