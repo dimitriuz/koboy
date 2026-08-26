@@ -291,6 +291,205 @@ TEST_MAIN({
     CHECK_EQ_INT(oy, 0);
 }
 
+    /* ------------------------------- video_fit_frac: the LCD aspect fit ---- */
+    {
+        int dw, dh;
+
+        /* THE BINDING AXIS IS EXACT. This is the property the whole LCD
+           layout rests on -- config_resolve_profile sizes the reserved rect
+           with this function and video_fit_rect then fits frames INTO that
+           result, so an approximate answer compounds into stray pixels of
+           margin down one side. Mickey Mouse's measured 654x396 into the
+           1264x1560 a 1264x1680 panel leaves above the bottom strip is
+           WIDTH-bound: 1264 exactly, and 396*1264/654 = 765 rows. */
+        dw = dh = -1;
+        video_fit_frac(654, 396, 1264, 1560, &dw, &dh);
+        CHECK_EQ_INT(dw, 1264);
+        CHECK_EQ_INT(dh, 765);
+
+        /* Donkey Kong's measured 606x748 is the case that proves BOTH axes
+           are fitted. Width alone would give 606 -> 1264 and 748 -> 1560.2,
+           i.e. 1560 rows -- which is exactly the height available, so this
+           title lands on the boundary and comes out HEIGHT-bound by a
+           hair. A fit that only ever looked at width would overflow the
+           strip for any title even slightly taller. */
+        dw = dh = -1;
+        video_fit_frac(606, 748, 1264, 1560, &dw, &dh);
+        CHECK_EQ_INT(dh, 1560);
+        CHECK(dw <= 1264);
+        CHECK_EQ_INT(dw, 606 * 1560 / 748);
+
+        /* A deliberately tall source: height must bind and the result must
+           NOT exceed the available width. */
+        dw = dh = -1;
+        video_fit_frac(100, 1000, 1264, 500, &dw, &dh);
+        CHECK_EQ_INT(dh, 500);
+        CHECK_EQ_INT(dw, 50);
+
+        /* ASPECT, asserted as a relation rather than as two numbers, so a
+           fit that happened to produce the right width for the wrong reason
+           still fails. The error is at most one pixel on the non-binding
+           axis (one truncated division), which is what this bounds. */
+        static const struct { int sw, sh, aw, ah; } cases[] = {
+            { 654, 396, 1264, 1560 },
+            { 606, 748, 1264, 1560 },
+            { 973, 532, 1264, 1560 },
+            { 305, 191, 1264,  765 },
+            { 128, 128, 1264, 1560 },
+        };
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            int w = -1, h = -1;
+            video_fit_frac(cases[i].sw, cases[i].sh, cases[i].aw, cases[i].ah, &w, &h);
+            CHECK(w >= 1 && h >= 1);
+            CHECK(w <= cases[i].aw);
+            CHECK(h <= cases[i].ah);
+            /* |w*sh - h*sw| <= max(sw, sh): one pixel of truncation on the
+               non-binding axis, scaled by the other side of the cross
+               product. */
+            long lhs = (long)w * cases[i].sh - (long)h * cases[i].sw;
+            long tol = cases[i].sw > cases[i].sh ? cases[i].sw : cases[i].sh;
+            if (lhs > tol || lhs < -tol)
+                fprintf(stderr, "  %dx%d into %dx%d -> %dx%d: aspect error %ld > %ld\n",
+                        cases[i].sw, cases[i].sh, cases[i].aw, cases[i].ah, w, h, lhs, tol);
+            CHECK(lhs <= tol && lhs >= -tol);
+            /* And the binding axis is filled EXACTLY -- one of the two, never
+               neither. */
+            CHECK(w == cases[i].aw || h == cases[i].ah);
+        }
+
+        /* LIVE GUARD: a degenerate extent writes nothing at all, so a caller
+           that ignored the guard sees its own initialisation rather than a
+           divide-by-zero or a garbage rect. */
+        dw = dh = -7;
+        video_fit_frac(0, 396, 1264, 1560, &dw, &dh);
+        video_fit_frac(654, 0, 1264, 1560, &dw, &dh);
+        video_fit_frac(654, 396, 0, 1560, &dw, &dh);
+        video_fit_frac(654, 396, 1264, 0, &dw, &dh);
+        CHECK_EQ_INT(dw, -7);
+        CHECK_EQ_INT(dh, -7);
+    }
+
+    /* ------------------------- video_fit_rect: both layouts, one function -- */
+    {
+        koboy_profile p;
+        memset(&p, 0, sizeof p);
+        int dw, dh, ox, oy;
+
+        /* DMG, at max: 160x144 at scale 5 is 800x720 with no offset. Spelled
+           out here as well as in the video_fit block above because
+           video_pipeline_run now calls THIS function, not video_fit, and a
+           DMG branch that lost the integer scale would still pass every
+           video_fit assertion in this file. */
+        p.layout_mode = KOBOY_LAYOUT_DMG;
+        p.max_w = 160; p.max_h = 144; p.scale = 5;
+        p.game_w = 800; p.game_h = 720;
+        video_fit_rect(&p, 160, 144, &dw, &dh, &ox, &oy);
+        CHECK_EQ_INT(dw, 800);
+        CHECK_EQ_INT(dh, 720);
+        CHECK_EQ_INT(ox, 0);
+        CHECK_EQ_INT(oy, 0);
+        /* Below max, still an INTEGER multiple -- the DMG branch must not
+           quietly acquire the fractional fit. 90x70 is chosen because the two
+           fits DISAGREE there: integer takes min(800/90, 720/70) = 8, giving
+           720x560, while a fractional fit would be width-bound at 800x622.
+           A size where they agree (any exact divisor) would pass either way. */
+        video_fit_rect(&p, 90, 70, &dw, &dh, &ox, &oy);
+        CHECK_EQ_INT(dw, 720);            /* 90 * 8, not 800 */
+        CHECK_EQ_INT(dh, 560);            /* 70 * 8, not 622 */
+        CHECK_EQ_INT(ox, (800 - 720) / 2);
+        CHECK_EQ_INT(oy, (720 - 560) / 2);
+
+        /* LCD, at max: fills the reserved rect EXACTLY and sits at (0,0).
+           Re-deriving the ratio from an already-floored game_w/game_h can
+           only lose, so the invariant is stated outright in video_fit_rect --
+           and pinned here, because a one-pixel shortfall is invisible by eye
+           and shifts every pointer coordinate. */
+        p.layout_mode = KOBOY_LAYOUT_LCD;
+        p.max_w = 654; p.max_h = 396; p.scale = 1;
+        p.game_w = 1264; p.game_h = 765;
+        video_fit_rect(&p, 654, 396, &dw, &dh, &ox, &oy);
+        CHECK_EQ_INT(dw, 1264);
+        CHECK_EQ_INT(dh, 765);
+        CHECK_EQ_INT(ox, 0);
+        CHECK_EQ_INT(oy, 0);
+
+        /* LCD, below max: the zoomed LCD-only view a Game & Watch title
+           alternates to. Fractional and centred, and -- unlike the DMG
+           branch -- NOT rounded down to an integer multiple: 305x191 at
+           integer scale would be 4x = 1220x764, and the fractional fit is
+           height-bound at 765 rows. */
+        video_fit_rect(&p, 305, 191, &dw, &dh, &ox, &oy);
+        CHECK_EQ_INT(dh, 765);
+        CHECK_EQ_INT(dw, 305 * 765 / 191);
+        CHECK(dw > 1220);                 /* strictly better than integer 4x */
+        CHECK_EQ_INT(ox, (1264 - dw) / 2);
+        CHECK_EQ_INT(oy, 0);
+        /* Containment, the property video_pipeline_run's writes depend on. */
+        CHECK(ox >= 0 && oy >= 0);
+        CHECK(ox + dw <= p.game_w);
+        CHECK(oy + dh <= p.game_h);
+    }
+
+    /* ------------- the LCD layout end to end through video_submit ---------- */
+    {
+        /* A real .mgw geometry (Mickey Mouse, 654x396) resolved by the real
+           resolver, so this exercises the same rect the device would get.
+           Nothing else in this file runs a frame through the FRACTIONAL
+           scaler; the pipeline could pick the integer path for the LCD
+           layout and every assertion above would still pass. */
+        koboy_config lc; config_defaults(&lc);
+        lc.layout_mode = KOBOY_LAYOUT_LCD;
+        koboy_profile lp;
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
+        CHECK_EQ_INT(lp.game_w, 1264);
+        CHECK_EQ_INT(lp.game_h, 765);
+
+        koboy_video *lv = video_create(&lp, false);
+        CHECK(lv != NULL);
+
+        static uint16_t lfb[654 * 396];
+        fill_solid565(lfb, 654, 396, 654, 0xFFFF);
+        koboy_rect lr = video_submit(lv, lfb, 654, 396,
+                                     654 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        /* The WHOLE reserved rect is dirty and white: a frame at max fills
+           it. An integer-scale fit would have covered 654x396 of a 1264x765
+           rect -- a quarter of it -- and left the far corner black. */
+        CHECK_EQ_INT(lr.w, 1264);
+        CHECK_EQ_INT(lr.h, 765);
+        CHECK_EQ_INT(video_buffer(lv)[0], 0xFF);
+        CHECK_EQ_INT(video_buffer(lv)[1263 + (size_t)764 * video_stride(lv)], 0xFF);
+        CHECK_EQ_INT(video_buffer(lv)[700 + (size_t)400 * video_stride(lv)], 0xFF);
+
+        /* video_frame_rect reports where that frame landed -- the input the
+           LCD layout's touch-to-pointer normalisation is built on. */
+        koboy_rect fr;
+        memset(&fr, 0, sizeof fr);
+        video_frame_rect(lv, &fr);
+        CHECK_EQ_INT(fr.x, 0);
+        CHECK_EQ_INT(fr.y, 0);
+        CHECK_EQ_INT(fr.w, 1264);
+        CHECK_EQ_INT(fr.h, 765);
+
+        /* The zoomed view: smaller than max, so it is fitted and centred --
+           and video_frame_rect must follow it, or every touch would be
+           normalised against a rect the artwork no longer fills. */
+        static uint16_t zfb[305 * 191];
+        fill_solid565(zfb, 305, 191, 305, 0x0000);
+        lr = video_submit(lv, zfb, 305, 191,
+                          305 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(lr.w > 0);
+        video_frame_rect(lv, &fr);
+        CHECK_EQ_INT(fr.h, 765);
+        CHECK_EQ_INT(fr.w, 305 * 765 / 191);
+        CHECK_EQ_INT(fr.x, (1264 - fr.w) / 2);
+        CHECK_EQ_INT(fr.y, 0);
+        /* Drawn where it says it is: black inside the reported rect, and the
+           margin outside it cleared (the size changed, so the clear fires). */
+        CHECK_EQ_INT(video_buffer(lv)[fr.x + 4 + (size_t)400 * video_stride(lv)], 0x00);
+        CHECK_EQ_INT(video_buffer(lv)[0], 0x00);   /* margin, cleared to black */
+
+        video_destroy(lv);
+    }
 })
 
 

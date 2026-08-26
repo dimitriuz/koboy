@@ -286,6 +286,43 @@ echo "$out" | grep -qx "koboy: core $d/gw_libretro.so" \
     || { echo "FAIL: a stale 'core = gambatte_libretro.so' pinned the core"; rm -rf "$d"; exit 1; }
 echo "ok: a legacy ini core= does not pin the core"
 
+# WHICH PRESENTATION, end to end. The layout is chosen in src/main.c from the
+# ROM's extension (config_layout_for_rom), and nothing else in this file or in
+# the unit suite proves main.c actually SETS it -- config.c could get the
+# predicate right and main.c never read it. Reusing the same $d directory and
+# the same two stand-in ROMs as the core-selection runs above.
+#
+# The stub core reports 160x144, so the numbers here are not a Game & Watch
+# geometry; what is being asserted is which BRANCH ran, which the log names.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.mgw" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .mgw layout run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "LCD layout" \
+    || { echo "FAIL: a .mgw did not get the LCD layout"; rm -rf "$d"; exit 1; }
+# Full panel width, which is the visible half of the fix ("too small" was the
+# report). 1264 is the --panel width above.
+echo "$out" | grep -q "game 1264x" \
+    || { echo "FAIL: the LCD layout did not fill the panel width"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q '^presented=' \
+    || { echo "FAIL: the .mgw layout run never reached the emulator loop"; rm -rf "$d"; exit 1; }
+echo "ok: .mgw gets the full-width LCD layout"
+
+# The control. Without it, a main.c that set the LCD layout unconditionally
+# would pass the run above and quietly replace the Game Boy faceplate too.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.gb" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .gb layout run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "LCD layout" \
+    && { echo "FAIL: a .gb was given the LCD layout"; rm -rf "$d"; exit 1; }
+# And the Game Boy rect is exactly where it has always been.
+echo "$out" | grep -q "scale 5, game 800x720 at (232,84)" \
+    || { echo "FAIL: the Game Boy rect moved"; rm -rf "$d"; exit 1; }
+echo "ok: .gb keeps the DMG faceplate at scale 5"
+
 # GEOMETRY CHURN: base-only changes must not re-fit; a max change must.
 #
 # A Game & Watch title alternates between the whole unit and the LCD alone

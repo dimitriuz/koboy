@@ -60,6 +60,28 @@ typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
 #define KOBOY_BTN_RIGHT  (1u << 7)
 #define KOBOY_BTN_A      (1u << 8)
 
+/* Which presentation the LOADED SYSTEM gets. Not a user preference and not a
+   global: a .gb/.gbc gets DMG, a .mgw gets LCD, decided from the ROM's own
+   extension the same way the core is (config_core_for_rom).
+
+   DMG is the Game Boy faceplate v1 shipped: an INTEGER-scaled game rect
+   centred in a drawn plastic case, with a d-pad, A/B, Start/Select and MENU
+   drawn around it and hit-tested from the layout permille.
+
+   LCD is for Game & Watch. Those titles draw their OWN buttons -- the
+   direction pads, GAME A, GAME B, TIME, ACL -- into the artwork, at a
+   different set of positions per title (Mickey Mouse needs NW/SW/NE/SE;
+   Donkey Kong needs a full cross plus JUMP), so a fixed remap onto koboy's
+   two drawn buttons cannot work and DID not: NE on Mickey Mouse is
+   RETRO_DEVICE_ID_JOYPAD_X, which the DMG faceplate has no button for at
+   all, and the device report was "only b button works". The core accepts
+   pointer input on port 2 (third_party/gw/src/libretro.c), so LCD forwards
+   touches through as a pointer and lets the user press the drawn buttons
+   directly. That frees the whole panel: no d-pad, no A/B, a full-width
+   FRACTIONALLY scaled game rect, and one bottom strip carrying the battery
+   lamp and MENU. */
+typedef enum { KOBOY_LAYOUT_DMG = 0, KOBOY_LAYOUT_LCD } koboy_layout_mode;
+
 typedef struct { int x, y, w, h; } koboy_rect;   /* w == 0 means "empty" */
 typedef struct { int x, y; bool down; } koboy_touch;
 
@@ -83,6 +105,13 @@ typedef struct {
        always 160x144, which is why this generalisation changes nothing
        about existing Game Boy behaviour. */
     int      base_w, base_h, max_w, max_h;
+    /* koboy_layout_mode, resolved from koboy_config's own layout_mode by
+       config_resolve_profile. It travels in the PROFILE rather than being
+       read out of the config wherever it is needed because the profile is
+       what video.c, chrome.c and input.c already carry -- exactly like
+       scale/game_w/panel_w, which are resolved-once facts about this
+       session's presentation rather than settings. */
+    int      layout_mode;
     bool     has_hw_buttons;
     uint32_t wfm_fast, wfm_gray, wfm_full;
 } koboy_profile;

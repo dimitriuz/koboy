@@ -60,6 +60,15 @@ static void on_frame(void *ud, const void *d, unsigned w, unsigned h, size_t pit
 
 static uint16_t on_input(void *ud) { return input_state((koboy_input *)ud)->buttons; }
 
+/* Named in the log because "why are the controls gone?" is otherwise
+   unanswerable on a device with no terminal: the layout is chosen from the
+   ROM's extension, so a mis-named file is a plausible cause of a faceplate
+   nobody expected. */
+static const char *layout_name(int mode)
+{
+    return mode == KOBOY_LAYOUT_LCD ? "LCD" : "DMG";
+}
+
 static bool g_quiet;
 static void say(const char *fmt, ...)
 {
@@ -816,6 +825,20 @@ int main(int argc, char **argv)
        bare "gw_libretro.so" would be looked for everywhere except beside the
        binary. If the exe directory cannot be determined the bare name is
        kept, matching config_resolve_paths' own "leave paths as-is" fallback. */
+    /* WHICH PRESENTATION this ROM gets, decided here and nowhere else. Set
+       unconditionally, unlike the core just below, and config.h says why: an
+       explicit --core cannot make a Game Boy faceplate right for a Game &
+       Watch unit whose buttons are drawn into its own artwork.
+
+       It has to happen BEFORE the config_resolve_profile call further down
+       (that is what reads it) and it is deliberately NOT re-derived at the
+       mid-session MENU -> CHOOSE ROM reload: that path reuses the SAME core
+       handle without re-picking one, so switching systems mid-session already
+       cannot work (gambatte would be handed a .mgw and reject it, and koboy
+       quits with the message). Re-deriving the layout there would dress up a
+       path that fails one step later as if it were supported. */
+    cfg.layout_mode = config_layout_for_rom(cfg.rom_path);
+
     if (!cfg.core_explicit) {
         const char *want = config_core_for_rom(cfg.rom_path);
         char        dir[PATH_MAX], joined[512];
@@ -864,9 +887,16 @@ int main(int argc, char **argv)
        goldens byte-identical for the one core wired up today. */
     {
         int rbw, rbh, rmw, rmh;
+        /* The LAYOUT is part of what makes the placeholder profile stale, not
+           just the geometry: a .mgw whose core happened to report the same
+           numbers the Game Boy placeholder was seeded with would still need
+           the whole faceplate replaced. It cannot happen with the one core
+           wired up today (gw answers 128x128 here, never 160x144), which is
+           exactly why it is written down rather than relied on. */
         if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
             (rbw != prof.base_w || rbh != prof.base_h ||
-             rmw != prof.max_w  || rmh != prof.max_h)) {
+             rmw != prof.max_w  || rmh != prof.max_h ||
+             cfg.layout_mode != prof.layout_mode)) {
             koboy_profile real_prof;
             if (!config_resolve_profile(&real_prof, &cfg, pw, ph, rbw, rbh, rmw, rmh)) {
                 fatal("panel %dx%d is too small for this core's %dx%d game rect",
@@ -876,9 +906,10 @@ int main(int argc, char **argv)
                 pf->shutdown(pf->ctx); return 1;
             }
             prof = real_prof;
-            say("koboy: core geometry %dx%d (max %dx%d), rescaled to scale %d, "
+            say("koboy: core geometry %dx%d (max %dx%d), %s layout, "
                 "game %dx%d at (%d,%d)\n", rbw, rbh, rmw, rmh,
-                prof.scale, prof.game_w, prof.game_h, prof.game_x, prof.game_y);
+                layout_name(prof.layout_mode),
+                prof.game_w, prof.game_h, prof.game_x, prof.game_y);
             /* The rect chrome/calibration/the menu were drawn against just
                changed shape or position -- put the faceplate back before any
                game pixel lands on the panel. */
@@ -1239,9 +1270,9 @@ int main(int argc, char **argv)
                 }
                 prof = real_prof;
                 say("koboy: core geometry settled at %dx%d (max %dx%d), "
-                    "rescaled to scale %d, game %dx%d at (%d,%d)\n",
-                    rbw, rbh, rmw, rmh, prof.scale, prof.game_w, prof.game_h,
-                    prof.game_x, prof.game_y);
+                    "%s layout, game %dx%d at (%d,%d)\n",
+                    rbw, rbh, rmw, rmh, layout_name(prof.layout_mode),
+                    prof.game_w, prof.game_h, prof.game_x, prof.game_y);
                 /* The faceplate drawn against the old (possibly placeholder)
                    rect no longer matches -- redraw it before this frame's
                    pixels land on the panel. */
@@ -1290,6 +1321,7 @@ int main(int argc, char **argv)
                                         cfg.refresh_fixed_tiles,
                                         rects, KOBOY_MAX_RECTS);
         stats_add(&stats, KOBOY_STAGE_SUBMIT, pf->now_us(pf->ctx) - t0);
+
         if (nrects == 0) goto sram_check;       /* nothing changed: skip the panel */
 
         /* Waveform by TOTAL dirty area across every emitted rect, not one

@@ -462,7 +462,7 @@ TEST_MAIN({
             if (menu_top < expected) expected = menu_top;
             if (expected < 0) expected = 0;
 
-            int got = chrome_controls_top(l, W, H);
+            int got = chrome_controls_top(KOBOY_LAYOUT_DMG, l, W, H);
             if (got != expected)
                 fprintf(stderr, "  %dx%d: chrome_controls_top=%d, expected %d\n",
                         W, H, got, expected);
@@ -538,7 +538,7 @@ TEST_MAIN({
                 expected = l.menu_cy * H / 1000 - (l.menu_h * H / 1000) / 2;
             }
 
-            int got = chrome_controls_top(&l, W, H);
+            int got = chrome_controls_top(KOBOY_LAYOUT_DMG, &l, W, H);
             if (got != expected)
                 fprintf(stderr, "  isolated %s: chrome_controls_top=%d, expected %d\n",
                         cases[ci].name, got, expected);
@@ -859,5 +859,160 @@ TEST_MAIN({
                 CHECK(strcmp(strap, "DOT MATRIX ON ELECTRONIC PAPER") == 0);
             }
         }
+    }
+
+    /* ======================================================== the LCD layout
+     *
+     * A different faceplate for a different system: no d-pad, no A/B, a
+     * full-width fractionally-scaled game rect, and one bottom strip holding
+     * the battery lamp and MENU. Everything below is asserted against the
+     * MEASURED Mickey Mouse geometry (654x396) on the one verified panel,
+     * resolved by the real resolver -- not against a hand-built profile,
+     * because the resolver's answer is what the device will actually draw.
+     */
+    {
+        koboy_config lc; config_defaults(&lc);
+        lc.layout_mode = KOBOY_LAYOUT_LCD;
+        koboy_profile lp;
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
+
+        memset(fb, 0x7F, (size_t)1264 * 1680);
+        chrome_render(fb, 1264, &lp, &lc.layout);
+        chrome_render_battery(fb, 1264, &lp, &lc.layout, 62);
+
+        /* CRITICAL, and the same contract the DMG faceplate lives under: not
+           one byte inside the game rect. In this layout the rect touches both
+           panel edges, so every band around it is zero-width on two sides and
+           the clamped fills are the only thing keeping them out. */
+        int intruded = 0;
+        for (int y = lp.game_y; y < lp.game_y + lp.game_h; y++)
+            for (int x = lp.game_x; x < lp.game_x + lp.game_w; x++)
+                if (fb[y * 1264 + x] != 0x7F) intruded++;
+        if (intruded)
+            fprintf(stderr, "  LCD chrome wrote %d px inside the game rect\n", intruded);
+        CHECK_EQ_INT(intruded, 0);
+
+        /* ...and it drew SOMETHING. Without this, a chrome_render_lcd that
+           returned immediately would satisfy the check above perfectly. */
+        int painted = 0;
+        for (int y = 0; y < 1680; y++)
+            for (int x = 0; x < 1264; x++)
+                if (fb[y * 1264 + x] != 0x7F) painted++;
+        CHECK(painted > 10000);
+
+        /* Golden, so the whole faceplate is pinned and not just the three
+           elements named below. */
+        CHECK(pgm_compare_golden("chrome_lcd_1264x1680", fb, 1264, 1680, 1264) == 1);
+
+        int strip = chrome_lcd_strip_h(1680);
+        int sy    = 1680 - strip;
+        CHECK_EQ_INT(strip, 120);          /* 72 permille of 1680 */
+        CHECK_EQ_INT(sy, lp.game_y + lp.game_h + (1560 - lp.game_y - lp.game_h));
+
+        /* MENU is REACHABLE: it is the only way back to the ROM browser once
+           a game is running, so its zone must be inside the strip, clear of
+           the game rect, inside the panel -- and actually drawn, which is
+           checked as "the box is not all background". */
+        koboy_rect m;
+        memset(&m, 0, sizeof m);
+        chrome_lcd_menu_rect(&lp, &m);
+        CHECK(m.w > 0 && m.h > 0);
+        CHECK(m.x >= 0 && m.x + m.w <= 1264);
+        CHECK(m.y >= sy);
+        CHECK(m.y + m.h <= 1680);
+        CHECK(m.y >= lp.game_y + lp.game_h);          /* below the artwork */
+        int menu_ink = 0;
+        for (int y = m.y; y < m.y + m.h; y++)
+            for (int x = m.x; x < m.x + m.w; x++)
+                if (fb[y * 1264 + x] == 0x00) menu_ink++;   /* INK frame + label */
+        CHECK(menu_ink > 100);
+        /* ...and the BOX ITSELF is filled, not just its label drawn on bare
+           case. Sampled as a tone comparison rather than against a literal,
+           so it survives a palette retune: a point inside the box, clear of
+           the frame and above the label, must differ from the strip
+           background beside it. Without this, deleting the fill and the
+           frame left menu_ink satisfied by the label alone and only the
+           golden caught it -- a real mutant, confirmed. */
+        {
+            int inside_v  = fb[(m.y + 6) * 1264 + m.x + 6];
+            int outside_v = fb[(m.y + 6) * 1264 + m.x - 20];
+            CHECK(inside_v != outside_v);
+        }
+
+        /* THE BATTERY MOVED UNDER THE SCREEN -- the user's explicit request.
+           Two halves, and both are needed: it is drawn in the strip, and it
+           is NOT drawn where the DMG layout puts it (left of the game rect),
+           which in this layout is inside the artwork and would violate the
+           no-writes-in-the-rect contract above. */
+        int bcx, bcy, br;
+        bcx = bcy = br = 0;
+        chrome_lcd_battery(&lp, &bcx, &bcy, &br);
+        CHECK(br >= 4);
+        CHECK(bcy - br >= sy);
+        CHECK(bcy + br < 1680);
+        CHECK(bcx - br >= 0);
+        CHECK(bcy - br > lp.game_y + lp.game_h);
+        int lamp_ink = 0;
+        for (int y = bcy - br; y <= bcy + br; y++)
+            for (int x = bcx - br; x <= bcx + br; x++)
+                if (fb[y * 1264 + x] == 0x00) lamp_ink++;   /* the INK ring */
+        CHECK(lamp_ink > 20);
+
+        /* A partially-charged lamp really does show a level: the same
+           chord-of-the-disc fill the DMG lamp uses, now reached through the
+           LCD branch. 62% must differ from 0%. */
+        static uint8_t fb0[1264 * 1680];
+        memcpy(fb0, fb, (size_t)1264 * 1680);
+        chrome_render_battery(fb, 1264, &lp, &lc.layout, 0);
+        CHECK(memcmp(fb0, fb, (size_t)1264 * 1680) != 0);
+    }
+
+    /* Guard band, LCD layout: a profile whose rect runs off every edge must
+       not write outside the panel. The DMG faceplate has three such tests;
+       this branch draws a completely different set of shapes (full-width
+       bands whose side pieces are zero- or negative-width) and needs its
+       own. */
+    {
+        const int GUARD2 = 64;
+        const uint8_t SENT = 0x42;
+        int TW = 400, TH = 500;
+        size_t bs = (size_t)(TW + 2 * GUARD2) * (TH + 2 * GUARD2);
+        uint8_t *g2 = malloc(bs);
+        CHECK(g2 != NULL);
+
+        static const struct { int x, y, w, h; const char *name; } bad[] = {
+            {   0,   0, 400, 500, "exactly the panel"        },
+            {  -8,  -8, 420, 520, "over every edge"          },
+            { 390,   0,  50, 500, "past the right edge"      },
+            {   0, 480, 400,  60, "past the bottom, into the strip" },
+            {   0,   0,   1,   1, "degenerate 1x1"           },
+        };
+        for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+            memset(g2, SENT, bs);
+            uint8_t *ps = g2 + (size_t)GUARD2 * (TW + 2 * GUARD2) + GUARD2;
+            koboy_profile bp;
+            memset(&bp, 0, sizeof bp);
+            bp.layout_mode = KOBOY_LAYOUT_LCD;
+            bp.scale = 1; bp.panel_w = TW; bp.panel_h = TH;
+            bp.max_w = bad[i].w; bp.max_h = bad[i].h;
+            bp.game_x = bad[i].x; bp.game_y = bad[i].y;
+            bp.game_w = bad[i].w; bp.game_h = bad[i].h;
+            chrome_render(ps, TW + 2 * GUARD2, &bp, &c.layout);
+            chrome_render_battery(ps, TW + 2 * GUARD2, &bp, &c.layout, 50);
+
+            int bad_px = 0;
+            for (size_t j = 0; j < bs; j++) {
+                int x = (int)(j % (size_t)(TW + 2 * GUARD2));
+                int y = (int)(j / (size_t)(TW + 2 * GUARD2));
+                int is_guard = (x < GUARD2 || x >= TW + GUARD2 ||
+                                y < GUARD2 || y >= TH + GUARD2);
+                if (is_guard && g2[j] != SENT) bad_px++;
+            }
+            if (bad_px)
+                fprintf(stderr, "  LCD guard band: %s corrupted %d px\n",
+                        bad[i].name, bad_px);
+            CHECK_EQ_INT(bad_px, 0);
+        }
+        free(g2);
     }
 })

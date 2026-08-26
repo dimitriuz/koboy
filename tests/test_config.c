@@ -216,7 +216,8 @@ TEST_MAIN({
                    nothing like the Game Boy's 800x720 (5x 160x144), so this
                    is not merely re-running the GB sweep's arithmetic under a
                    new label. */
-                int ctrl_top = chrome_controls_top(&dc.layout, panels[i].w, panels[i].h);
+                int ctrl_top = chrome_controls_top(dc.layout_mode, &dc.layout,
+                                                  panels[i].w, panels[i].h);
                 CHECK(pp.game_y + pp.game_h <= ctrl_top);
 
                 /* And the bezel margin, the same four sides as the Sage
@@ -239,6 +240,185 @@ TEST_MAIN({
         koboy_profile bad;
         CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 0, 0, 0, 0));
         CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 100, 100, -1, 50));
+        /* ...and in the LCD layout too, which takes a completely separate
+           branch and would otherwise divide by max_w in its own arithmetic. */
+        koboy_config lbad; config_defaults(&lbad);
+        lbad.layout_mode = KOBOY_LAYOUT_LCD;
+        CHECK(!config_resolve_profile(&bad, &lbad, 1264, 1680, 0, 0, 0, 0));
+        CHECK(!config_resolve_profile(&bad, &lbad, 1264, 1680, 100, 100, -1, 50));
+    }
+
+    /* --------------------------------------------- the LCD layout resolver
+     *
+     * WHICH LAYOUT, from the ROM's extension alone. Same predicate as
+     * config_core_for_rom, deliberately a separate function -- see config.h.
+     */
+    {
+        CHECK_EQ_INT(config_layout_for_rom("mickey.mgw"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("/a/b/MICKEY.MGW"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("mickey.MgW"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("tetris.gb"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("zelda.gbc"), KOBOY_LAYOUT_DMG);
+        /* Not a suffix match on "mgw" anywhere in the name, and not fooled by
+           a name shorter than the extension -- the same two traps
+           ends_with_mgw's own guard exists for. */
+        CHECK_EQ_INT(config_layout_for_rom("mgw.gb"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("gw"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom(""), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom(NULL), KOBOY_LAYOUT_DMG);
+        /* config_defaults leaves it DMG, which is what every caller that
+           never sets it -- including the placeholder profile main.c resolves
+           before any ROM is chosen -- relies on. */
+        koboy_config d0; config_defaults(&d0);
+        CHECK_EQ_INT(d0.layout_mode, KOBOY_LAYOUT_DMG);
+    }
+
+    /* The reserved rect in the LCD layout: full panel width, everything above
+       the bottom strip, aspect preserved, FRACTIONAL. Asserted three ways --
+       exact numbers on the verified panel, structural properties across every
+       supported panel, and (the point of the whole layout) that the result is
+       dramatically bigger than the integer fit the DMG branch would give.
+       The last is what a "fractional fit" that silently floored to an integer
+       multiple would fail; the first two would not catch it for every title. */
+    {
+        koboy_config lc; config_defaults(&lc);
+        lc.layout_mode = KOBOY_LAYOUT_LCD;
+        koboy_profile lp;
+
+        /* MEASURED geometries, from running the real gw-libretro core --
+           the same three tests/test_config.c's DMG sweep already uses. The
+           expected rects below are on the ONE verified panel (Libra 2,
+           1264x1680), where the strip is 72 permille = 120 px and the rect
+           therefore fits into 1264x1560. */
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
+        CHECK_EQ_INT(lp.layout_mode, KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(lp.game_w, 1264);          /* Mickey Mouse: width binds */
+        CHECK_EQ_INT(lp.game_h, 765);
+        CHECK_EQ_INT(lp.game_x, 0);
+        CHECK_EQ_INT(lp.game_y, (1560 - 765) / 2);
+
+        /* Donkey Kong, 606x748 -- the TALLEST measured title, and the one
+           that decides the strip height: at full width it is 1560 rows,
+           exactly the room a 120 px strip leaves. Height binds here, by a
+           hair, which is what makes this the case that proves both axes are
+           fitted rather than just the width. */
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 606, 748, 606, 748));
+        CHECK_EQ_INT(lp.game_h, 1560);
+        CHECK_EQ_INT(lp.game_w, 606 * 1560 / 748);
+        CHECK_EQ_INT(lp.game_y, 0);
+
+        /* Mario Bros., 973x532 -- the widest measured title. */
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 973, 532, 973, 532));
+        CHECK_EQ_INT(lp.game_w, 1264);
+        CHECK_EQ_INT(lp.game_h, 532 * 1264 / 973);
+
+        /* base != max is carried through untouched, and the rect is sized off
+           MAX -- the invariant that keeps a legitimately larger frame from
+           spilling onto the strip. Only a base != max case can tell the two
+           apart, exactly as in the DMG sweep above. */
+        CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 305, 191, 654, 396));
+        CHECK_EQ_INT(lp.base_w, 305);
+        CHECK_EQ_INT(lp.base_h, 191);
+        CHECK_EQ_INT(lp.max_w, 654);
+        CHECK_EQ_INT(lp.max_h, 396);
+        CHECK_EQ_INT(lp.game_w, 1264);          /* from 654x396, not 305x191 */
+        CHECK_EQ_INT(lp.game_h, 765);
+
+        static const struct { int w, h; const char *name; } panels[] = {
+            { 1072, 1448, "Clara"  },
+            { 1264, 1680, "Libra2" },
+            { 1404, 1872, "Elipsa" },
+            { 1440, 1920, "Sage"   },
+        };
+        static const struct { int w, h; const char *name; } geoms[] = {
+            { 654, 396, "Mickey Mouse (measured)" },
+            { 658, 395, "Parachute (measured)"    },
+            { 973, 532, "Mario Bros. (measured)"  },
+            { 606, 748, "Donkey Kong (measured)"  },
+            { 128, 128, "the load-time placeholder" },
+        };
+
+        for (size_t g = 0; g < sizeof geoms / sizeof geoms[0]; g++) {
+            for (size_t i = 0; i < sizeof panels / sizeof panels[0]; i++) {
+                koboy_profile pp;
+                CHECK(config_resolve_profile(&pp, &lc, panels[i].w, panels[i].h,
+                                             geoms[g].w, geoms[g].h,
+                                             geoms[g].w, geoms[g].h));
+                int strip    = chrome_lcd_strip_h(panels[i].h);
+                int ctrl_top = chrome_controls_top(KOBOY_LAYOUT_LCD, &lc.layout,
+                                                   panels[i].w, panels[i].h);
+                CHECK_EQ_INT(ctrl_top, panels[i].h - strip);
+
+                /* CLEAR OF THE BOTTOM STRIP. The same invariant the DMG
+                   branch keeps against the control band, and for the same
+                   reason: MENU's touch zone lives down there and stays live
+                   under anything drawn over it. */
+                if (pp.game_y + pp.game_h > ctrl_top)
+                    fprintf(stderr, "  %s on %s: rect %dx%d at (%d,%d) reaches %d,"
+                            " strip starts at %d\n",
+                            geoms[g].name, panels[i].name, pp.game_w, pp.game_h,
+                            pp.game_x, pp.game_y, pp.game_y + pp.game_h, ctrl_top);
+                CHECK(pp.game_y + pp.game_h <= ctrl_top);
+
+                /* Inside the panel horizontally, and centred. */
+                CHECK(pp.game_x >= 0);
+                CHECK(pp.game_x + pp.game_w <= panels[i].w);
+                CHECK_EQ_INT(pp.game_x, (panels[i].w - pp.game_w) / 2);
+                CHECK_EQ_INT(pp.game_y, (ctrl_top - pp.game_h) / 2);
+
+                /* One axis is filled EXACTLY -- the fit is a fit, not an
+                   approximation that happens to land inside. */
+                CHECK(pp.game_w == panels[i].w || pp.game_h == ctrl_top);
+
+                /* Aspect preserved to within one pixel of truncation on the
+                   non-binding axis. */
+                long cross = (long)pp.game_w * geoms[g].h - (long)pp.game_h * geoms[g].w;
+                long tol   = geoms[g].w > geoms[g].h ? geoms[g].w : geoms[g].h;
+                if (cross > tol || cross < -tol)
+                    fprintf(stderr, "  %s on %s: aspect error %ld > %ld\n",
+                            geoms[g].name, panels[i].name, cross, tol);
+                CHECK(cross <= tol && cross >= -tol);
+
+                /* AND STRICTLY BIGGER THAN THE INTEGER FIT. This is the
+                   reported problem -- "too small", a G&W unit using about
+                   half the panel width at integer scale 1 -- so it is
+                   asserted directly rather than inferred from the numbers
+                   above. A fractional fit that floored to an integer
+                   multiple would satisfy every other check here. */
+                int ifit_w = panels[i].w / geoms[g].w;
+                int ifit_h = ctrl_top / geoms[g].h;
+                int ifit   = ifit_w < ifit_h ? ifit_w : ifit_h;
+                if (ifit < 1) ifit = 1;
+                if (pp.game_w < geoms[g].w * ifit)
+                    fprintf(stderr, "  %s on %s: fractional %d < integer %d\n",
+                            geoms[g].name, panels[i].name, pp.game_w, geoms[g].w * ifit);
+                CHECK(pp.game_w >= geoms[g].w * ifit);
+                /* At least one of the five geometries must be STRICTLY
+                   better, or "fractional" bought nothing at all. Mickey
+                   Mouse on the verified panel is 1264 wide against an
+                   integer 654; asserted per-case for the ones that cannot
+                   land on an exact multiple by luck. */
+                if (geoms[g].w != 128)
+                    CHECK(pp.game_w > geoms[g].w * ifit);
+            }
+        }
+
+        /* The DMG layout is NOT affected by any of this: the same config
+           with layout_mode back at DMG must still resolve the Game Boy to
+           exactly scale 5, 800x720 at (232,84), on the verified panel. The
+           four-panel DMG sweep above has been broken by a layout change
+           before; this is the same pin restated right beside the new branch
+           so the pair is read together. */
+        koboy_config dmg; config_defaults(&dmg);
+        koboy_profile dp;
+        CHECK(config_resolve_profile(&dp, &dmg, 1264, 1680,
+                                     KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
+        CHECK_EQ_INT(dp.layout_mode, KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(dp.scale, 5);
+        CHECK_EQ_INT(dp.game_w, 800);
+        CHECK_EQ_INT(dp.game_h, 720);
+        CHECK_EQ_INT(dp.game_x, 232);
+        CHECK_EQ_INT(dp.game_y, 84);
     }
 
     /* ini overrides defaults; unknown keys are ignored, not fatal */

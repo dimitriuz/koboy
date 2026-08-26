@@ -43,6 +43,14 @@ typedef struct {
                                     and only an unasked-for core may be
                                     overridden by the ROM's extension. */
     char     save_dir[512];
+    /* koboy_layout_mode. NOT an ini key and not a user preference: it is a
+       fact about the loaded system, derived from the ROM's own extension by
+       config_layout_for_rom the same way the core is by config_core_for_rom,
+       and written here by main.c before config_resolve_profile reads it.
+       config_defaults leaves it at KOBOY_LAYOUT_DMG (0), which is what every
+       caller that never sets it -- every existing test, and the placeholder
+       profile main.c resolves before a ROM has been chosen -- gets. */
+    int      layout_mode;
     koboy_layout layout;
 } koboy_config;
 
@@ -79,6 +87,16 @@ bool config_promote_full(const koboy_config *c, long dirty_px, long whole_px);
    config_resolve_paths' sibling-join turns it into an absolute path later, for
    the reason dlopen documents and this project learned the hard way. */
 const char *config_core_for_rom(const char *rom_path);
+
+/* Which PRESENTATION should this ROM get -- a koboy_layout_mode. Same
+   predicate as config_core_for_rom (the extension, and nothing else), and
+   deliberately a second function rather than a second return value from that
+   one: the core can be overridden by an explicit `core=` or --core, and the
+   layout must NOT follow that override. A .mgw is a Game & Watch unit whose
+   buttons are drawn into its own artwork whichever shared object ends up
+   interpreting it, so naming a core by hand cannot make a DMG faceplate the
+   right answer for it. */
+int config_layout_for_rom(const char *rom_path);
 
 bool config_join_sibling(char *out, size_t n, const char *name, const char *dir);
 bool config_exe_dir(char *out, size_t n);

@@ -5,6 +5,9 @@
 #include "config.h"
 #include "chrome.h"          /* chrome_controls_top: the resolver must reserve
                                 the control band, and chrome.c owns its geometry */
+#include "video.h"           /* video_fit_frac: ONE definition of the aspect
+                                fit, shared with the per-frame placement that
+                                has to land inside the rect this resolves */
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -178,6 +181,16 @@ const char *config_core_for_rom(const char *rom_path)
        where the old unconditional default was merely useless. */
     if (!rom_path || !*rom_path) return "gambatte_libretro.so";
     return ends_with_mgw(rom_path) ? "gw_libretro.so" : "gambatte_libretro.so";
+}
+
+int config_layout_for_rom(const char *rom_path)
+{
+    /* No name at all is the DMG faceplate, matching the sibling above: this
+       is the answer for the placeholder profile main.c resolves before any
+       ROM has been chosen, and it is also the layout every UI screen (MAIN
+       MENU, RECENT, ALL GAMES) is drawn over. */
+    if (!rom_path || !*rom_path) return KOBOY_LAYOUT_DMG;
+    return ends_with_mgw(rom_path) ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
 }
 
 /* ------------------------------------------------- install-relative paths
@@ -399,6 +412,54 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
        Refusing here keeps that division safe without every caller having to
        re-derive the same check. */
     if (max_w < 1 || max_h < 1) return false;
+
+    /* Both layouts reserve the game rect clear of whatever controls their
+       faceplate draws, and both ask the same function where those start --
+       see chrome.h. Hoisted above the split because it is the one thing the
+       two branches genuinely share. */
+    int ctrl_top = chrome_controls_top(c->layout_mode, &c->layout, panel_w, panel_h);
+
+    if (c->layout_mode == KOBOY_LAYOUT_LCD) {
+        /* The LCD layout, in three lines, because it has no scale search to
+           do: the rect is simply the largest aspect-preserving fit of the
+           core's MAX geometry into the full panel width and everything above
+           the bottom strip. Fractional, so a 654x396 Mickey Mouse unit fills
+           1264 columns instead of the 654 an integer scale of 1 would leave
+           it at -- the "too small" the device reported.
+
+           No KOBOY_CHROME_MARGIN on the sides, deliberately, unlike the DMG
+           branch below: the whole point of dropping the drawn controls is to
+           give the artwork the panel, and a Game & Watch unit's own artwork
+           already has a moulded border drawn into it. The vertical margin is
+           whatever centring leaves over. */
+        if (panel_w < 1 || ctrl_top < 1) return false;
+        int gw = 0, gh = 0;
+        video_fit_frac(max_w, max_h, panel_w, ctrl_top, &gw, &gh);
+        if (gw < 1 || gh < 1) return false;
+
+        p->panel_w = panel_w;
+        p->panel_h = panel_h;
+        p->base_w  = base_w;
+        p->base_h  = base_h;
+        p->max_w   = max_w;
+        p->max_h   = max_h;
+        p->layout_mode = KOBOY_LAYOUT_LCD;
+        p->game_w  = gw;
+        p->game_h  = gh;
+        p->game_x  = (panel_w - gw) / 2;
+        p->game_y  = (ctrl_top - gh) / 2;
+        /* INFORMATIONAL ONLY in this layout, and said here because the field
+           name promises more than it can deliver: the real fit is fractional
+           and lives in game_w/game_h, which is what video.c and chrome.c both
+           read. Nothing outside the startup log line and the tests consumes
+           p->scale (checked: it has no other reader in src/). The integer
+           part is reported rather than 0 or 1 so the log still says something
+           true about how much bigger the picture got. */
+        p->scale = gw / max_w;
+        if (p->scale < 1) p->scale = 1;
+        return true;
+    }
+
     int fit_w = panel_w / max_w;
     int fit_h = panel_h / max_h;
     int max_fit = fit_w < fit_h ? fit_w : fit_h;
@@ -416,8 +477,8 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
        direction -- unplayable at the one setting whose whole purpose is a bigger
        picture. Shrinking the controls was the other way out and is explicitly
        not the fix: they are the only way to play on a device with no buttons.
-       See chrome.h for why chrome.c owns the geometry. */
-    int ctrl_top = chrome_controls_top(&c->layout, panel_w, panel_h);
+       See chrome.h for why chrome.c owns the geometry, and the hoisted
+       ctrl_top above for where it is now computed. */
 
     while (s > 1) {
         int game_w = max_w * s;

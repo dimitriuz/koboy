@@ -53,6 +53,58 @@ void video_scale_gray(uint8_t *dst, int dst_stride, const uint8_t *src,
     }
 }
 
+/* Contract, and every reason behind the choices here, in video.h. */
+void video_scale_gray_frac(uint8_t *dst, int dst_stride, const uint8_t *src,
+                           int src_w, int src_h, int src_stride,
+                           int dst_w, int dst_h)
+{
+    /* LIVE GUARD, three separate things in one test. A non-positive extent
+       has nothing to draw and would make the step divisions below a division
+       by zero. And a source over 65535 px on an axis cannot be expressed as a
+       16.16 step at all -- (src << 16) would overflow uint32_t and the scaler
+       would silently sample the wrong pixels rather than fail. No core
+       geometry is remotely near that (the largest measured here is 973), so
+       this is the guard for a caller that has already gone wrong, not a case
+       this project produces. */
+    if (src_w < 1 || src_h < 1 || dst_w < 1 || dst_h < 1) return;
+    if (src_w > 65535 || src_h > 65535) return;
+
+    const uint32_t xstep = ((uint32_t)src_w << 16) / (uint32_t)dst_w;
+    const uint32_t ystep = ((uint32_t)src_h << 16) / (uint32_t)dst_h;
+
+    /* Neither accumulator can overflow: after dst_w steps xfp has reached at
+       most dst_w * ((src_w << 16) / dst_w) <= src_w << 16 <= 0xFFFF0000, and
+       the same bound holds on the y axis. */
+    int      prev_sy  = -1;
+    uint8_t *prev_row = NULL;
+    uint32_t yfp = 0;
+
+    /* NO CLAMP ON sx/sy, and that is a proof rather than an oversight -- the
+       kind of guard this project's convention says to remove outright rather
+       than leave looking defensive (see chrome.c's corner-radius note). The
+       step is FLOORED: xstep <= (src_w << 16) / dst_w, so after the last of
+       dst_w increments the accumulator has reached at most
+       (dst_w - 1) * xstep < src_w << 16, i.e. sx <= src_w - 1, always.
+       Truncation can only make the sampled position too LOW, never too high.
+       The same argument holds on y. Reintroduce a clamp if the step ever
+       stops being floored (a rounded step CAN overshoot) -- but not before,
+       because a clamp that cannot fire is a clamp no test can prove. */
+    for (int dy = 0; dy < dst_h; dy++, yfp += ystep) {
+        int sy = (int)(yfp >> 16);
+        uint8_t *row = dst + (size_t)dy * dst_stride;
+        if (sy == prev_sy) {                  /* repeated source row: copy it */
+            memcpy(row, prev_row, (size_t)dst_w);
+            continue;
+        }
+
+        const uint8_t *s = src + (size_t)sy * src_stride;
+        uint32_t xfp = 0;
+        for (int dx = 0; dx < dst_w; dx++, xfp += xstep)
+            row[dx] = s[xfp >> 16];
+        prev_sy = sy; prev_row = row;
+    }
+}
+
 /* Four evenly spaced levels for the DU4 waveform. These may need retuning
    against a real panel; they are deliberately in one place. */
 const uint8_t KOBOY_DU4_LEVELS[4] = { 0x00, 0x55, 0xAA, 0xFF };
@@ -369,6 +421,11 @@ struct koboy_video {
        cleared on that transition, or the previous, larger frame stays visible
        around the edges of the new one. */
     int      fit_src_w, fit_src_h;
+    /* Where the last frame landed inside the reserved rect -- see
+       video_frame_rect. Recorded rather than recomputed by the caller so
+       there is one answer, produced by the code that actually placed the
+       pixels. */
+    koboy_rect fit_rect;
     uint8_t  lut[65536];
 };
 
@@ -402,6 +459,75 @@ void video_fit(const koboy_profile *p, int src_w, int src_h,
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
     *scale_out = fs; *ox_out = ox; *oy_out = oy;
+}
+
+/* Contract in video.h. Deciding which axis binds by cross-multiplying, rather
+   than by comparing two truncated ratios, is what makes the binding axis come
+   out EXACT: the alternative (a shared 16.16 ratio) loses up to one part in
+   65536 of it twice over -- once resolving the reserved rect, again fitting a
+   frame into that rect -- and the two roundings compound into a couple of
+   stray pixels of margin down one side. */
+void video_fit_frac(int src_w, int src_h, int avail_w, int avail_h,
+                    int *dw_out, int *dh_out)
+{
+    /* LIVE GUARD: a non-positive extent has no fit, and would divide by zero
+       below. Callers check their own inputs; this is the local defence in the
+       function that does the arithmetic. */
+    if (src_w < 1 || src_h < 1 || avail_w < 1 || avail_h < 1) return;
+
+    int dw, dh;
+    if ((long)src_w * avail_h <= (long)src_h * avail_w) {
+        dh = avail_h;                                   /* height binds */
+        dw = (int)(((long)src_w * avail_h) / src_h);
+    } else {
+        dw = avail_w;                                   /* width binds */
+        dh = (int)(((long)src_h * avail_w) / src_w);
+    }
+    /* A source far wider than tall (or the reverse) can floor the non-binding
+       axis to nothing; one row of artwork beats none. */
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    *dw_out = dw; *dh_out = dh;
+}
+
+void video_fit_rect(const koboy_profile *p, int src_w, int src_h,
+                    int *dw_out, int *dh_out, int *ox_out, int *oy_out)
+{
+    int dw, dh;
+
+    if (p->layout_mode == KOBOY_LAYOUT_LCD) {
+        /* The invariant this shortcut states, and the DMG branch below gets
+           for free: A FRAME AT EXACTLY MAX GEOMETRY FILLS THE RESERVED RECT.
+           game_w/game_h were themselves produced by video_fit_frac from
+           max_w/max_h (config_resolve_profile), so re-fitting max into that
+           result is asking the same question twice -- and the second answer
+           can be a pixel short, because the first one's non-binding axis was
+           floored and re-deriving the ratio from a floored number can only
+           lose. Saying so outright is both faster and exact, and it is the
+           same property video_fit already has at max for the DMG layout. */
+        if (src_w == p->max_w && src_h == p->max_h) {
+            dw = p->game_w; dh = p->game_h;
+        } else {
+            dw = 1; dh = 1;
+            video_fit_frac(src_w, src_h, p->game_w, p->game_h, &dw, &dh);
+        }
+    } else {
+        int fs, ox, oy;
+        video_fit(p, src_w, src_h, &fs, &ox, &oy);
+        dw = src_w * fs; dh = src_h * fs;
+    }
+
+    int ox = (p->game_w - dw) / 2;
+    int oy = (p->game_h - dh) / 2;
+    if (ox < 0) ox = 0;
+    if (oy < 0) oy = 0;
+    *dw_out = dw; *dh_out = dh; *ox_out = ox; *oy_out = oy;
+}
+
+void video_frame_rect(const koboy_video *v, koboy_rect *out)
+{
+    if (!v || !out) return;
+    *out = v->fit_rect;
 }
 
 koboy_video *video_create(const koboy_profile *p, bool force_dither)
@@ -491,14 +617,28 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
        otherwise, because this rect is diffed against prev to find the dirty
        region and a memset of the full rect every frame would be pure cost on
        the stage that is already this pipeline's bottleneck. */
-    int fs, ox, oy;
-    video_fit(&v->p, src_w, src_h, &fs, &ox, &oy);
+    int dw, dh, ox, oy;
+    video_fit_rect(&v->p, src_w, src_h, &dw, &dh, &ox, &oy);
     if (src_w != v->fit_src_w || src_h != v->fit_src_h) {
         memset(v->cur, 0, (size_t)v->stride * (size_t)v->p.game_h);
         v->fit_src_w = src_w; v->fit_src_h = src_h;
     }
-    video_scale_gray(v->cur + (size_t)oy * v->stride + ox, v->stride, v->gray,
-                     src_w, src_h, v->p.max_w, fs);
+    {
+        koboy_rect fr = { ox, oy, dw, dh };
+        v->fit_rect = fr;                /* see video_frame_rect */
+    }
+    uint8_t *dst = v->cur + (size_t)oy * v->stride + ox;
+    if (v->p.layout_mode == KOBOY_LAYOUT_LCD) {
+        video_scale_gray_frac(dst, v->stride, v->gray,
+                              src_w, src_h, v->p.max_w, dw, dh);
+    } else {
+        /* dw is src_w * the integer scale by construction (video_fit_rect's
+           DMG branch), so this recovers that scale exactly -- the Game Boy
+           still takes video_scale_gray's block-copy path, byte for byte as
+           before this layout existed. */
+        video_scale_gray(dst, v->stride, v->gray,
+                         src_w, src_h, v->p.max_w, dw / src_w);
+    }
 
     /* Quantise/dither still run over the FULL reserved rect (v->p.game_w x
        game_h = max_w*scale x max_h*scale), exactly as before generalisation.

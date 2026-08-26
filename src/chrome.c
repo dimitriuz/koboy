@@ -42,6 +42,51 @@ static int perm(int v, int total) { return v * total / 1000; }
 
 static int min2(int a, int b) { return a < b ? a : b; }
 
+/* --- the LCD layout's shared geometry. Contracts and rationale in chrome.h.
+   Defined ABOVE chrome_controls_top because that function calls the first of
+   them; the rest sit here with it so the three are read together. */
+
+int chrome_lcd_strip_h(int panel_h)
+{
+    int h = perm(72, panel_h);
+    /* Floor, not a clamp against panel_h: a strip taller than the panel is
+       the caller's problem (config_resolve_profile refuses such a panel
+       outright), while a strip too short to hit is this file's. 48 px is
+       about a third of a fingertip at this panel's density. */
+    if (h < 48) h = 48;
+    return h;
+}
+
+void chrome_lcd_menu_rect(const koboy_profile *p, koboy_rect *out)
+{
+    int strip = chrome_lcd_strip_h(p->panel_h);
+    int sy    = p->panel_h - strip;
+    int mw    = p->panel_w / 5;
+    int mh    = strip * 3 / 5;
+    out->w = mw;
+    out->h = mh;
+    /* Right end of the strip, a double bezel margin in from the edge, so the
+       zone is nowhere near the panel corner a palm rests on. */
+    out->x = p->panel_w - mw - 2 * KOBOY_CHROME_MARGIN;
+    out->y = sy + (strip - mh) / 2;
+    if (out->x < 0) out->x = 0;          /* LIVE GUARD: a very narrow panel */
+    if (out->y < 0) out->y = 0;
+}
+
+void chrome_lcd_battery(const koboy_profile *p, int *cx, int *cy, int *r)
+{
+    int strip = chrome_lcd_strip_h(p->panel_h);
+    int sy    = p->panel_h - strip;
+    int rr    = strip / 5;
+    if (rr < 4) rr = 4;
+    *r  = rr;
+    *cx = 2 * KOBOY_CHROME_MARGIN + rr;
+    /* Two fifths down the strip, not centred: the "BATTERY" caption is drawn
+       BELOW the lamp (as it is in the DMG layout), so the pair has to be
+       centred, not the disc alone. */
+    *cy = sy + strip * 2 / 5;
+}
+
 /* Contract and rationale in chrome.h. Every term below is the exact expression
    the corresponding draw call in chrome_render() uses for its top edge, so the
    two cannot drift: box() spans cy - h/2, disc() spans cy - r, and frame() with
@@ -57,9 +102,20 @@ static int min2(int a, int b) { return a < b ? a : b; }
    independent equality check catches all seven, because deleting any one of
    them changes this function's return value away from what the test believes
    is correct, full stop. */
-int chrome_controls_top(const koboy_layout *l, int panel_w, int panel_h)
+int chrome_controls_top(int layout_mode, const koboy_layout *l,
+                        int panel_w, int panel_h)
 {
     const int W = panel_w, H = panel_h;
+
+    /* The LCD layout draws no permille controls at all -- see chrome.h. Its
+       whole control band IS the bottom strip, so the game rect must stop
+       exactly where the strip starts. */
+    if (layout_mode == KOBOY_LAYOUT_LCD) {
+        int top = H - chrome_lcd_strip_h(H);
+        if (top < 0) top = 0;
+        return top;
+    }
+
     int dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
     int arm = dr / 3;
 
@@ -123,6 +179,17 @@ static void fill_rect(uint8_t *fb, int stride, int W, int H, int x0, int y0, int
     if (x1 >= W) x1 = W - 1;
     if (y0 < 0) y0 = 0;
     if (y1 >= H) y1 = H - 1;
+    /* LIVE GUARD, and it took the LCD layout to expose it. An EMPTY band --
+       x0 > x1 after clamping, which is what "the game rect touches the panel
+       edge, so the side band has no width" produces -- must draw nothing. It
+       used to draw a one-pixel column INSIDE the rect: hline() swaps an
+       unordered pair before clamping, so the empty range (0, -1) came back as
+       (-1, 0) and painted column 0. Measured as 1530 stray pixels (two
+       columns x 765 rows) on the full-width Mickey Mouse rect, straight
+       through chrome_render's "never writes inside the game rect" contract.
+       The DMG faceplate never has a zero-width band, which is why this sat
+       here unexercised until now. */
+    if (x0 > x1 || y0 > y1) return;
     for (int y = y0; y <= y1; y++) hline(fb, stride, W, H, x0, x1, y, v);
 }
 
@@ -243,10 +310,118 @@ void chrome_bands(const koboy_profile *p, int panel_w, int *left, int *right_sta
    that task lands and audio is real, not when it merely exists on paper. */
 static const char STRAPLINE[] = "DOT MATRIX ON ELECTRONIC PAPER";
 
+/* The LCD faceplate: everything the DMG one has MINUS the controls, because a
+   Game & Watch title draws its own into the artwork (koboy.h's
+   koboy_layout_mode has the full argument). What is left is a case, a recess
+   around a game rect that runs the full panel width, and one bottom strip.
+
+   No d-pad, no A/B, no Start/Select. Drawing them would be worse than
+   useless: their touch zones do not stop being live under a rect drawn over
+   them (that is v1's own lesson, quoted in config.c), so a drawn control
+   that presses a button the loaded system does not have is a control that
+   silently eats touches meant for the artwork.
+
+   No strapline either. In the DMG layout it sits in the top bezel band, whose
+   height is derived from a top margin that layout guarantees; here the game
+   rect is allowed to reach y = 0 (Donkey Kong at 606x748 fills a 1264x1560
+   area exactly), so there is no band to guarantee it a home.
+
+   Obeys the same contract as chrome_render: it must never write inside the
+   game rect. Every element below is either in the bottom strip or clipped to
+   the recess band, and the game rect is filled by nothing at all. */
+static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p)
+{
+    const int W = p->panel_w, H = p->panel_h;
+    int gx0 = p->game_x, gy0 = p->game_y;
+    int gx1 = p->game_x + p->game_w - 1, gy1 = p->game_y + p->game_h - 1;
+
+    /* Case everywhere except the game rect, exactly as the DMG path does it
+       and with the same clamped band widths for the same heap-overrun
+       reason -- see chrome_bands. */
+    int lx, rx;
+    chrome_bands(p, W, &lx, &rx);
+    for (int y = 0; y < H; y++) {
+        if (y >= gy0 && y <= gy1) {
+            memset(fb + (size_t)y * stride, BG, (size_t)lx);
+            memset(fb + (size_t)y * stride + rx, BG, (size_t)(W - rx));
+        } else {
+            memset(fb + (size_t)y * stride, BG, (size_t)W);
+        }
+    }
+
+    /* A recess band around the rect. Symmetric here, unlike the DMG bezel's
+       deliberate bottom-heavy asymmetry: that asymmetry exists to make a
+       rectangle read as a DMG handheld, and this is not one. fill_rect clamps,
+       which is what makes a full-width game rect (left/right bands of zero
+       width, the Mickey Mouse case) draw correctly rather than needing its
+       own branch. */
+    int bez = perm(6, W);
+    if (bez < 3) bez = 3;
+    fill_rect(fb, stride, W, H, gx0 - bez, gy0 - bez, gx1 + bez, gy0 - 1, DARK);
+    fill_rect(fb, stride, W, H, gx0 - bez, gy1 + 1, gx1 + bez, gy1 + bez, DARK);
+    fill_rect(fb, stride, W, H, gx0 - bez, gy0, gx0 - 1, gy1, DARK);
+    fill_rect(fb, stride, W, H, gx1 + 1, gy0, gx1 + bez, gy1, DARK);
+    frame(fb, stride, W, H, gx0 - bez, gy0 - bez,
+          (gx1 + bez) - (gx0 - bez) + 1, (gy1 + bez) - (gy0 - bez) + 1, 1, CASE_HI);
+
+    /* The bottom strip. One hairline to separate it from the case above --
+       the strip carries live controls and the case does not, and on a panel
+       with no colour a tone change is the only way to say so. */
+    int strip = chrome_lcd_strip_h(H);
+    int sy    = H - strip;
+    hline(fb, stride, W, H, 0, W - 1, sy, CASE_LO);
+    hline(fb, stride, W, H, 0, W - 1, sy + 1, CASE_HI);
+
+    /* MENU, styled exactly like the DMG layout's: a PILL box with an INK
+       frame and the label inside it. Same tone, same shape, same word --
+       someone who has used the DMG faceplate already knows what this
+       is. It is the only way back to the ROM browser. */
+    koboy_rect m;
+    chrome_lcd_menu_rect(p, &m);
+    fill_rect(fb, stride, W, H, m.x, m.y, m.x + m.w - 1, m.y + m.h - 1, PILL);
+    frame(fb, stride, W, H, m.x, m.y, m.w, m.h, 2, INK);
+    int menu_px = 1;
+    while (menu_px < 6 &&
+          text_measure("MENU", menu_px + 1) <= m.w - 8 &&
+          TEXT_GLYPH_H * (menu_px + 1) <= m.h - 8)
+        menu_px++;
+    text_draw_centred_at(fb, stride, W, H, m.x + m.w / 2,
+                         m.y + (m.h - TEXT_GLYPH_H * menu_px) / 2,
+                         "MENU", menu_px, INK);
+
+    /* Wordmark, centred in the strip between the lamp and MENU. Sized to the
+       room actually left between them rather than to the panel, and skipped
+       outright -- not crushed -- when there is none. */
+    int bcx, bcy, br;
+    chrome_lcd_battery(p, &bcx, &bcy, &br);
+    int word_l = bcx + br + KOBOY_CHROME_MARGIN;
+    int word_r = m.x - KOBOY_CHROME_MARGIN;
+    if (word_r - word_l > 16) {
+        int word_px = 1;
+        while (word_px < 6 &&
+              text_measure("koboy", word_px + 1) <= word_r - word_l &&
+              TEXT_GLYPH_H * (word_px + 1) <= strip - 8)
+            word_px++;
+        text_draw_centred_at(fb, stride, W, H, (word_l + word_r) / 2,
+                             sy + (strip - TEXT_GLYPH_H * word_px) / 2,
+                             "koboy", word_px, DARK);
+    }
+}
+
 void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
                    const koboy_layout *l)
 {
     const int W = p->panel_w, H = p->panel_h;
+
+    if (p->layout_mode == KOBOY_LAYOUT_LCD) {
+        /* `l` is genuinely unused by this branch -- the LCD faceplate has no
+           permille controls to place. Not dropped from the signature, because
+           chrome_render is called from five places that all have a layout and
+           do not know which faceplate they are about to get. */
+        (void)l;
+        chrome_render_lcd(fb, stride, p);
+        return;
+    }
 
     /* The left/right band widths come back from chrome_bands already clamped
        into [0, W] before the cast to size_t, exactly as hline/vline clamp, and
@@ -432,7 +607,7 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        whatever room is actually there instead of assuming Libra 2
        (1264x1680) headroom, and the whole block is skipped -- not crushed
        into garbage -- if some future layout leaves no room at all. */
-    int ctrl_top = chrome_controls_top(l, W, H);
+    int ctrl_top = chrome_controls_top(KOBOY_LAYOUT_DMG, l, W, H);
     int deco_y0 = p->game_y + p->game_h + bot_t;
     int deco_y1 = ctrl_top;
     if (deco_y1 - deco_y0 > TEXT_GLYPH_H + 2) {
@@ -560,6 +735,46 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
 #define BATTERY_LABEL     "BATTERY"
 #define BATTERY_LABEL_PX  1
 
+/* The lamp itself, with no opinion about where it goes -- the two layouts put
+   it in completely different places (the DMG's left-hand case band, the LCD's
+   bottom strip) and this is the part they share. Split out when the LCD
+   layout arrived rather than copied, because the fill geometry below has
+   already been wrong once on the device ("the battery fill is a rectangle")
+   and a second copy is a second chance to get it wrong again. */
+static void battery_lamp(uint8_t *fb, int stride, int W, int H,
+                         int cx, int cy, int r, int percent)
+{
+    disc(fb, stride, W, H, cx, cy, r, BG);
+    ring(fb, stride, W, H, cx, cy, r, INK);
+    if (percent >= 0) {
+        /* Fill proportionally, so the lamp says something rather than merely
+           existing.
+
+           The fill is a CHORD OF THE LAMP, and the containment test below is
+           what makes it one. The previous version ran hline from cx - r to
+           cx + r, which is the disc's BOUNDING BOX: the level was painted full
+           width and spilled outside the circle, and the ring() afterwards
+           merely outlined a circle on top of the overspill. Reported from the
+           device as "the battery fill is a rectangle". Same test as disc()
+           above, deliberately -- there is one definition of what is inside
+           this lamp. */
+        int fill = r * 2 * percent / 100;
+        int top  = cy + r - fill;
+        for (int y = -r; y <= r; y++) {
+            int py = cy + y;
+            if (py < top || py < 0 || py >= H) continue;
+            for (int x = -r; x <= r; x++) {
+                if (x * x + y * y > r * r) continue;
+                int px = cx + x;
+                if (px >= 0 && px < W) fb[(size_t)py * stride + px] = DARK;
+            }
+        }
+        ring(fb, stride, W, H, cx, cy, r, INK);
+    }
+    text_draw_centred_at(fb, stride, W, H, cx, cy + r + r / 2,
+                         BATTERY_LABEL, BATTERY_LABEL_PX, INK);
+}
+
 void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
                            const koboy_layout *l, int percent)
 {
@@ -577,6 +792,26 @@ void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
     if (percent < 0) percent = -1;
 
     const int W = p->panel_w, H = p->panel_h;
+
+    /* THE USER'S EXPLICIT REQUEST: in the LCD layout the battery moves UNDER
+       the screen. It has to -- the DMG position is the case band left of the
+       game rect, and in this layout that rect runs the full panel width, so
+       there is no band to put it in and the DMG guard below (which refuses to
+       draw anything that would reach game_x) would silently draw nothing at
+       all. */
+    if (p->layout_mode == KOBOY_LAYOUT_LCD) {
+        int lcx, lcy, lr;
+        chrome_lcd_battery(p, &lcx, &lcy, &lr);
+        /* Same contract as the DMG guard below, tested on the axis that can
+           actually go wrong here: the lamp lives BELOW the game rect, so what
+           must be proved is that its topmost row clears the rect's bottom.
+           Live: chrome_lcd_strip_h floors at 48 px while the resolver is free
+           to hand this a panel so short that the strip is most of it. */
+        if (lcy - lr <= p->game_y + p->game_h - 1) return;
+        battery_lamp(fb, stride, W, H, lcx, lcy, lr, percent);
+        return;
+    }
+
     /* Left of the screen, like the DMG's power LED. */
     int cx = p->game_x / 2;
     int cy = p->game_y + p->game_h / 2;
@@ -602,33 +837,5 @@ void chrome_render_battery(uint8_t *fb, int stride, const koboy_profile *p,
     int extent = r > label_right ? r : label_right;
     if (cx + extent >= p->game_x) return;
 
-    disc(fb, stride, W, H, cx, cy, r, BG);
-    ring(fb, stride, W, H, cx, cy, r, INK);
-    if (percent >= 0) {
-        /* Fill proportionally, so the lamp says something rather than merely
-           existing.
-
-           The fill is a CHORD OF THE LAMP, and the containment test below is
-           what makes it one. The previous version ran hline from cx - r to
-           cx + r, which is the disc's BOUNDING BOX: the level was painted full
-           width and spilled outside the circle, and the ring() afterwards
-           merely outlined a circle on top of the overspill. Reported from the
-           device as "the battery fill is a rectangle". Same test as disc()
-           twenty lines above, deliberately -- there is one definition of what
-           is inside this lamp. */
-        int fill = r * 2 * percent / 100;
-        int top  = cy + r - fill;
-        for (int y = -r; y <= r; y++) {
-            int py = cy + y;
-            if (py < top || py < 0 || py >= H) continue;
-            for (int x = -r; x <= r; x++) {
-                if (x * x + y * y > r * r) continue;
-                int px = cx + x;
-                if (px >= 0 && px < W) fb[(size_t)py * stride + px] = DARK;
-            }
-        }
-        ring(fb, stride, W, H, cx, cy, r, INK);
-    }
-    text_draw_centred_at(fb, stride, W, H, cx, cy + r + r / 2,
-                         BATTERY_LABEL, BATTERY_LABEL_PX, INK);
+    battery_lamp(fb, stride, W, H, cx, cy, r, percent);
 }
