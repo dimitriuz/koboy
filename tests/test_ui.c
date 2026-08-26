@@ -60,11 +60,42 @@ static int row_y(const koboy_ui_list *u, int r)
     return u->y + u->row_h + u->row_h * r + u->row_h / 2;
 }
 
+/* A touch centred in letter-strip band `b` (0 = '#', 1..26 = A..Z),
+   replicating ui.c's own band geometry from the widget's PUBLIC fields --
+   there is no other state to compute this from, which is the point: if
+   ui.c's internal band math ever drifts from this, a tap that should land
+   on band `b` starts landing on its neighbour instead, and every alpha-jump
+   test below would start failing at the boundary bands, not silently keep
+   passing. */
+/* released() returns by value, so `&released()` is not a valid C lvalue;
+   this exists purely to spell "clear the touch/edge state" as one call at
+   each of the many points below that need it. */
+static void feed_release(koboy_ui_list *u, int *idx)
+{
+    koboy_input_state r = released();
+    ui_list_feed(u, &r, idx);
+}
+
+static koboy_input_state strip_tap(const koboy_ui_list *u, int b)
+{
+    int body_top = u->y + u->row_h;
+    int foot_top = u->y + u->h - u->row_h;
+    int band_h = (foot_top - body_top) / 27;   /* '#' + A..Z */
+    if (band_h < 1) band_h = 1;
+    int ty = body_top + b * band_h + band_h / 2;
+    int tx = u->x + u->w - u->row_h / 2;       /* well inside the strip column */
+    return touch_at(tx, ty);
+}
+
 TEST_MAIN({
     static const char *const items[] = {
         "ZELDA.GB", "TETRIS.GB", "KIRBY 2.GBC", "DUCK.GB", "POKEMON.GBC",
         "SIX.GB", "SEVEN.GB", "EIGHT.GB", "NINE.GB", "TEN.GB",
-        "ELEVEN.GB", "TWELVE.GB", "THIRTEEN.GB",
+        "ELEVEN.GB", "TWELVE.GB", "THIRTEEN.GB", "FOURTEEN.GB", "FIFTEEN.GB",
+        "SIXTEEN.GB", "SEVENTEEN.GB", "EIGHTEEN.GB", "NINETEEN.GB", "TWENTY.GB",
+        "TWENTYONE.GB", "TWENTYTWO.GB", "TWENTYTHREE.GB", "TWENTYFOUR.GB",
+        "TWENTYFIVE.GB", "TWENTYSIX.GB", "TWENTYSEVEN.GB", "TWENTYEIGHT.GB",
+        "TWENTYNINE.GB", "THIRTY.GB",
     };
     const int N = (int)(sizeof items / sizeof items[0]);
 
@@ -110,8 +141,12 @@ TEST_MAIN({
        below that exists to catch "loads the wrong ROM". So the geometry this
        list is built with is asserted OUTRIGHT first: 13 items at 10 rows a
        page is two pages, and if that ever stops being true the two lines
-       below fail loudly instead of silently skipping the rest. */
-    CHECK_EQ_INT(ui_list_rows(&u), 10);
+       below fail loudly instead of silently skipping the rest.
+
+       24, not 10: UI_MAX_ROWS went from 10 to 24 so a 300-ROM collection
+       does not need 23+ pages of prev/next taps to reach the end -- see
+       src/ui.c. 30 items at 24 rows a page is two pages. */
+    CHECK_EQ_INT(ui_list_rows(&u), 24);
     CHECK_EQ_INT(ui_list_pages(&u), 2);
     {
         koboy_input_state b = button(KOBOY_BTN_B);
@@ -320,6 +355,154 @@ TEST_MAIN({
         input_feed_key(in, c.key_a, false);
 
         input_destroy(in);
+    }
+
+    /* ------------------------------------------------------------------
+       Alphabet jump: letter strip (touch) and the A+B combo (hardware).
+
+       Deliberately sparse, with gaps -- '#'=0, A=1 (twice), B=2 MISSING,
+       C=3, D..Y missing, Z=26 -- so "tap an empty letter" and "the next
+       occupied letter" are both actually exercised rather than trivially
+       true because every bucket happens to be full. Presorted, as
+       romlist_scan's output always is: ui.c relies on that, it does not
+       re-sort. */
+    {
+        static const char *const az[] = {
+            "0START.GB", "APPLE.GB", "AVOCADO.GB", "CHERRY.GB", "ZEBRA.GB",
+        };
+        const int AZ_N = (int)(sizeof az / sizeof az[0]);
+
+        koboy_ui_list j;
+        ui_list_init(&j, "CHOOSE A GAME", az, AZ_N, 100, 200, 800, 900);
+
+        /* OFF by default: a list that never opts in must behave exactly as
+           it did before this feature existed. A tap inside what WOULD be
+           the strip's column, on an ordinary row, must still select that
+           row -- not be swallowed by strip logic that isn't there. */
+        {
+            koboy_input_state prime = released();
+            ui_list_feed(&j, &prime, &idx);
+            int tx = j.x + j.w - j.row_h / 2;         /* the strip's column */
+            koboy_input_state d = touch_at(tx, row_y(&j, 0));
+            CHECK_EQ_INT(ui_list_feed(&j, &d, &idx), UI_SELECT);
+            CHECK_EQ_INT(idx, 0);
+            feed_release(&j, &idx);
+
+            /* And A+B together, with alpha_jump off, falls through to the
+               ordinary A-alone handling (checked first) -- UI_JUMP must
+               never appear for a list that did not ask for it. */
+            koboy_input_state ab = button((uint16_t)(KOBOY_BTN_A | KOBOY_BTN_B));
+            ui_action a_off = ui_list_feed(&j, &ab, &idx);
+            CHECK(a_off != UI_JUMP);
+            feed_release(&j, &idx);
+        }
+
+        ui_list_enable_alpha_jump(&j, true);
+        feed_release(&j, &idx);   /* re-clear the guard */
+
+        /* Tap directly on a PRESENT letter (Z, band 26) lands on its first
+           entry. */
+        {
+            koboy_input_state d = strip_tap(&j, 26);
+            CHECK_EQ_INT(ui_list_feed(&j, &d, &idx), UI_JUMP);
+            CHECK_EQ_INT(idx, 4);              /* ZEBRA.GB */
+            feed_release(&j, &idx);
+        }
+
+        /* Tap an EMPTY letter (B, band 2) degrades to the nearest occupied
+           letter AFTER it (C), not a crash, not a no-op, not a silent
+           landing on A. */
+        {
+            koboy_input_state d = strip_tap(&j, 2);
+            CHECK_EQ_INT(ui_list_feed(&j, &d, &idx), UI_JUMP);
+            CHECK_EQ_INT(idx, 3);              /* CHERRY.GB */
+            feed_release(&j, &idx);
+        }
+
+        /* Tap an empty letter PAST the last occupied one wraps around to
+           the FIRST occupied bucket rather than finding nothing. A
+           separate, smaller list for this: `az` has Z occupied, which a tap
+           anywhere below band 26 would reach WITHOUT crossing the wrap
+           boundary, so it cannot tell "found going forward" apart from
+           "found by wrapping". This one's highest occupied bucket is A (1),
+           so a tap on 'T' (band 20) has nothing ahead of it at all until
+           the search wraps past Z back to '#'. */
+        {
+            static const char *const az_wrap[] = { "0START.GB", "APPLE.GB" };
+            koboy_ui_list w;
+            ui_list_init(&w, "WRAP", az_wrap, 2, 100, 200, 800, 900);
+            ui_list_enable_alpha_jump(&w, true);
+            feed_release(&w, &idx);
+
+            koboy_input_state d = strip_tap(&w, 20);
+            CHECK_EQ_INT(ui_list_feed(&w, &d, &idx), UI_JUMP);
+            CHECK_EQ_INT(idx, 0);              /* 0START.GB, only via wraparound */
+        }
+
+        /* The strip does not shadow the row hit-test: a tap in the ROW
+           area (not the strip's column) still selects a row normally, even
+           though alpha_jump is on. */
+        {
+            koboy_input_state d = touch_at(j.x + j.w / 2, row_y(&j, 1));
+            CHECK_EQ_INT(ui_list_feed(&j, &d, &idx), UI_SELECT);
+            CHECK_EQ_INT(idx, 1);              /* APPLE.GB */
+            feed_release(&j, &idx);
+        }
+
+        /* Nor does it shadow the footer arrows: a tap whose X falls inside
+           the strip's column but whose Y is in the FOOTER row (not the
+           list body) is still a page arrow, because the strip check is
+           bounded to body rows only. Right third -> next page (this list
+           has one page, so page cannot move past 0, but the ACTION must
+           still be recognised as a footer tap, not a jump). */
+        {
+            int tx = j.x + j.w - j.row_h / 2;          /* strip's column, x-wise */
+            int ty = j.y + j.h - j.row_h / 2;          /* footer row, y-wise */
+            koboy_input_state d = touch_at(tx, ty);
+            ui_action a2 = ui_list_feed(&j, &d, &idx);
+            CHECK(a2 == UI_PAGE_NEXT || a2 == UI_NONE);   /* footer logic, not UI_JUMP */
+            CHECK(a2 != UI_JUMP);
+            feed_release(&j, &idx);
+        }
+
+        /* Hardware: A alone and B alone are UNCHANGED by alpha_jump being
+           on -- still plain paging, never a jump. */
+        {
+            koboy_input_state a_btn = button(KOBOY_BTN_A);
+            CHECK(ui_list_feed(&j, &a_btn, &idx) != UI_JUMP);
+            feed_release(&j, &idx);
+            koboy_input_state b_btn = button(KOBOY_BTN_B);
+            CHECK(ui_list_feed(&j, &b_btn, &idx) != UI_JUMP);
+            feed_release(&j, &idx);
+        }
+
+        /* A+B TOGETHER jumps from the current top item's letter to the
+           NEXT occupied one, wrapping. Page 0's top item is 0START.GB
+           ('#', bucket 0); the next occupied bucket after '#' is A (band 1,
+           APPLE.GB) -- landing on the FIRST 'A' entry, not AVOCADO. */
+        {
+            koboy_input_state ab = button((uint16_t)(KOBOY_BTN_A | KOBOY_BTN_B));
+            CHECK_EQ_INT(ui_list_feed(&j, &ab, &idx), UI_JUMP);
+            CHECK_EQ_INT(idx, 1);              /* APPLE.GB, not AVOCADO.GB */
+            feed_release(&j, &idx);
+        }
+
+        /* A list where every entry shares one letter: the combo has
+           nowhere DIFFERENT to go, and must degrade to UI_NONE rather than
+           report a jump that changed nothing. */
+        {
+            static const char *const one_letter[] = {
+                "APPLE.GB", "APRICOT.GB", "AVOCADO.GB",
+            };
+            koboy_ui_list ol;
+            ui_list_init(&ol, "ONE LETTER", one_letter, 3, 100, 200, 800, 900);
+            ui_list_enable_alpha_jump(&ol, true);
+            feed_release(&ol, &idx);
+
+            koboy_input_state ab = button((uint16_t)(KOBOY_BTN_A | KOBOY_BTN_B));
+            CHECK_EQ_INT(ui_list_feed(&ol, &ab, &idx), UI_NONE);
+            CHECK_EQ_INT(ol.page, 0);
+        }
     }
 
     /* Rendering is clipped and draws something. */

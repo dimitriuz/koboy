@@ -136,10 +136,17 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
    twenty reviews. MODE_MENU is NOT scripted: nothing passes a script to
    run_menu or run_slot_picker (they are only ever reached from the emulator
    loop, which has no --ui-script hook), and saying otherwise here would
-   overclaim coverage the suite does not have. */
+   overclaim coverage the suite does not have.
+
+   `disabled_index`, when not -1, is a row that SELECTS nothing: the ROM
+   browser's synthetic "+N MORE ROMS NOT SHOWN" row uses this so a tap on it
+   cannot be handed to romlist_path as if it were a real ROM (which would try
+   to load a file that does not exist). The loop just keeps polling instead
+   of breaking, the same as any other no-op input. */
 static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
                     uint8_t *panel, int stride, int pw, int ph,
-                    const koboy_input_state *script, int script_n)
+                    const koboy_input_state *script, int script_n,
+                    int disabled_index)
 {
     int  chosen = -1;
     int  si = 0;
@@ -193,8 +200,8 @@ static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
 
         int idx = -1;
         ui_action a = ui_list_feed(u, st, &idx);
-        if (a == UI_SELECT) { chosen = idx; break; }
-        if (a == UI_PAGE_NEXT || a == UI_PAGE_PREV) need_draw = true;
+        if (a == UI_SELECT && idx != disabled_index) { chosen = idx; break; }
+        if (a == UI_PAGE_NEXT || a == UI_PAGE_PREV || a == UI_JUMP) need_draw = true;
 
         if (!script) usleep(5000);
     }
@@ -256,7 +263,7 @@ static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n);
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n, -1);
     if (pick < 0) return MENU_RESUME;
     if ((pick == MENU_SAVE || pick == MENU_LOAD) && !has_states) return MENU_RESUME;
     return pick;
@@ -282,7 +289,7 @@ static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n);
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n, -1);
     if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
     return pick + 1;
 }
@@ -529,7 +536,13 @@ int main(int argc, char **argv)
         }
     }
 
+    /* Zero-initialised: romlist_scan frees whatever it already points to
+       before scanning, which on stack garbage is undefined behaviour.
+       memset, not `= {0}`: the Linaro 4.9 cross compiler warns
+       -Wmissing-braces on `= {0}` for a struct whose first member is itself
+       an array, and this project ships at zero warnings. */
     koboy_romlist roms;
+    memset(&roms, 0, sizeof roms);
     if (mode == MODE_BROWSE) {
         int n = romlist_scan(&roms, cfg.rom_dir);
         if (n < 0) {
@@ -539,8 +552,14 @@ int main(int argc, char **argv)
             fatal("cannot read rom directory\n%s", cfg.rom_dir);
             free(panel); pf->shutdown(pf->ctx); return 2;
         }
-        if (n == 0) {
+        /* rl->count, the REAL rom count, not n: n also counts the synthetic
+           overflow row when roms.hidden > 0, and a rom_dir holding nothing
+           but one oversized-name ROM (hidden > 0, count == 0) must still
+           report "no roms" rather than open a browser whose only row
+           selects nothing. */
+        if (roms.count == 0) {
             fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+            romlist_free(&roms);
             free(panel); pf->shutdown(pf->ctx); return 2;
         }
 
@@ -555,9 +574,14 @@ int main(int argc, char **argv)
         ui_list_init(&list, "CHOOSE A GAME", romlist_items(&roms), n,
                      KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                      pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+        /* Letter index strip: only the ROM browser gets one, never MENU or
+           the slot picker, which are a handful of fixed labels a strip would
+           just clutter. */
+        ui_list_enable_alpha_jump(&list, true);
 
         int pick = run_list(pf, ui_in, &list, panel, panel_stride, pw, ph,
-                            ui_script_n > 0 ? ui_script : NULL, ui_script_n);
+                            ui_script_n > 0 ? ui_script : NULL, ui_script_n,
+                            roms.hidden > 0 ? roms.count : -1);
         input_destroy(ui_in);
 
         if (pick < 0) {
@@ -571,13 +595,16 @@ int main(int argc, char **argv)
                gets its own exit code rather than being folded into 1 or 2. */
             if (ui_script_n > 0) {
                 fatal("ui script selected nothing");
+                romlist_free(&roms);
                 free(panel); pf->shutdown(pf->ctx); return 4;
             }
             say("koboy: no rom chosen, exiting\n");
+            romlist_free(&roms);
             free(panel); pf->shutdown(pf->ctx); return 0;
         }
         romlist_path(&roms, pick, cfg.rom_path, sizeof cfg.rom_path);
         say("koboy: chose %s\n", cfg.rom_path);
+        romlist_free(&roms);
         mode = MODE_PLAY;
 
         /* The browser painted over the faceplate. */
@@ -743,7 +770,10 @@ int main(int argc, char **argv)
                 sb.mem = NULL;
                 sb.len = 0;
 
+                /* memset, not `= {0}` -- see the identical comment on `roms`
+                   above; same warning, same reason. */
                 koboy_romlist rl;
+                memset(&rl, 0, sizeof rl);
                 int n = romlist_scan(&rl, cfg.rom_dir);
                 int pick = -1;
                 if (n < 0) {
@@ -753,7 +783,11 @@ int main(int argc, char **argv)
                        have no ROMs" are different diagnoses to a user with no
                        terminal, and this is the only diagnostic they get. */
                     fatal("cannot read rom directory\n%s", cfg.rom_dir);
-                } else if (n == 0) {
+                } else if (rl.count == 0) {
+                    /* rl.count, not n: see the startup browser's identical
+                       check for why (an oversized-name-only rom_dir has
+                       n == 1 from the overflow row alone, but zero real
+                       ROMs). */
                     fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
                 } else {
                     koboy_ui_list list;
@@ -761,8 +795,10 @@ int main(int argc, char **argv)
                                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                                  pw - 2 * KOBOY_CHROME_MARGIN,
                                  ph - 2 * KOBOY_CHROME_MARGIN);
+                    ui_list_enable_alpha_jump(&list, true);
                     pick = run_list(pf, in, &list, panel, panel_stride,
-                                    pw, ph, NULL, 0);
+                                    pw, ph, NULL, 0,
+                                    rl.hidden > 0 ? rl.count : -1);
                 }
                 /* No "return to the game" option in any of the three failure
                    cases (n < 0, n == 0, or pick < 0): the running game was
@@ -789,6 +825,12 @@ int main(int argc, char **argv)
                               "Saving is OFF this run.");
                     }
                 }
+                /* This branch can run many times in one session (the user is
+                   free to open CHOOSE ROM repeatedly), and rl is a fresh
+                   local every time -- without this, each pass leaks the
+                   previous pass's heap arrays for as long as koboy stays
+                   running. */
+                romlist_free(&rl);
             }
 
             /* Whatever happened, the panel is now showing a menu. */

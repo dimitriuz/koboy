@@ -27,7 +27,16 @@ script="$(mktemp)"
 # `printf 'tap 300 300\n'`. run_list now feeds one released state before the
 # script's first entry; this line is what proves it, so do not "helpfully" put
 # an `idle` back in front of it.
-printf 'tap 40 200\n' > "$script"
+#
+# y=90, not the original 200: this run takes no --panel, so the SDL backend's
+# default 1072x1448 applies, and 90 is that geometry's row-0 centre under the
+# CURRENT UI_MAX_ROWS=24 (KOBOY_CHROME_MARGIN=8 on every side, row_h=55,
+# body top at y=63, centre at 63+55/2). It was ~200 back when UI_MAX_ROWS was
+# 10 and rows were more than twice as tall; a row-density change is exactly
+# the kind of thing that silently strands a hardcoded pixel coordinate
+# outside every row, so if this ever goes stale again the failure here is
+# "browser did not select the only rom", not something subtler.
+printf 'tap 40 90\n' > "$script"
 
 # Explicit rc capture, not the bare `out=$(...)` the run above uses: under
 # set -e a nonzero exit from inside a command substitution assignment aborts
@@ -79,6 +88,59 @@ echo "$out" | grep -q '^presented=' && {
     rm -rf "$romdir" "$script"; exit 1; }
 rm -rf "$romdir" "$script"
 echo "ok: an unselecting script fails the run (rc=$rc)"
+
+# The "+N MORE ROMS NOT SHOWN" row a truncated scan appends must not be
+# selectable as if it were a real ROM -- run_list's disabled_index exists
+# for exactly this, and nothing above exercises it: every other browser run
+# in this file has too few ROMs to ever truncate. KOBOY_ROMLIST_CAP_TEST
+# dials the cap down to something a test can reach in milliseconds (see
+# src/romlist.c) instead of requiring 20000 real files.
+romdir="$(mktemp -d)"
+: > "$romdir/AAA.gb"; : > "$romdir/BBB.gb"; : > "$romdir/CCC.gb"
+: > "$romdir/DDD.gb"; : > "$romdir/EEE.gb"
+# With the cap at 2, only AAA.gb and BBB.gb survive, and the browser's third
+# row (row index 2) is the synthetic overflow row -- see the y math below,
+# which mirrors ui_list_init's own row_h derivation for a 1264x1680 panel
+# with KOBOY_CHROME_MARGIN=8 on every side (h=1664, slots=26, row_h=64).
+script="$(mktemp)"
+printf 'tap 200 232\n' > "$script"   # row 2: y = 8 + 64 + 2*64 + 64/2
+rc=0
+out=$(KOBOY_ROMLIST_CAP_TEST=2 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom-dir "$romdir" --ui-script "$script" \
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out"
+if [ "$rc" -ne 4 ]; then
+    echo "FAIL: tapping the overflow row exited $rc, wanted 4 (nothing real selected)"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+echo "$out" | grep -q '^presented=' && {
+    echo "FAIL: tapping the overflow row still reached the emulator loop"
+    rm -rf "$romdir" "$script"; exit 1; }
+rm -rf "$romdir" "$script"
+echo "ok: the overflow row cannot be picked as a rom (rc=$rc)"
+
+# Positive control for the geometry above: the SAME cap and rom_dir, tapping
+# row 0 instead, must select the real ROM there. Without this, the negative
+# result above would be equally consistent with "the tap coordinates simply
+# missed every row" as with "the overflow row correctly refused the tap".
+romdir="$(mktemp -d)"
+: > "$romdir/AAA.gb"; : > "$romdir/BBB.gb"; : > "$romdir/CCC.gb"
+: > "$romdir/DDD.gb"; : > "$romdir/EEE.gb"
+script="$(mktemp)"
+printf 'tap 200 104\n' > "$script"   # row 0: y = 8 + 64 + 0*64 + 64/2
+rc=0
+out=$(KOBOY_ROMLIST_CAP_TEST=2 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom-dir "$romdir" --ui-script "$script" \
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out"
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: tapping row 0 exited $rc (124 means it hit the 30s timeout)"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+echo "$out" | grep -q "chose $romdir/AAA.gb" \
+    || { echo "FAIL: row 0 did not select AAA.gb"; rm -rf "$romdir" "$script"; exit 1; }
+rm -rf "$romdir" "$script"
+echo "ok: row 0 still selects normally at the same geometry"
 
 # The menu is reachable only through a live touch (input_take_menu_request is
 # fed by pf->poll_input, and MODE_PLAY's poll loop has no --ui-script hook the

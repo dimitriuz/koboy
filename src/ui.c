@@ -5,8 +5,62 @@
 #define UI_BG        0xFF
 #define UI_INK       0x00
 #define UI_RULE      0xAA
-#define UI_MAX_ROWS  10
+#define UI_MAX_ROWS  24
 #define UI_TEXT_PX   3
+
+/* UI_MAX_ROWS went from 10 to 24 (measured against the shipped browser
+   geometry, 1264x1680 panel minus KOBOY_CHROME_MARGIN on every side, which
+   is a 1664px-tall region): 10 rows meant 138px-tall rows carrying 21px
+   text, and a 300-ROM collection needed 23+ pages reachable only by the
+   footer arrows. 24 rows divides that region into exactly 64px rows -- still
+   3x the 21px glyph height ui_list_init's own clamp requires -- and turns 23
+   pages into 13. Verified by rendering: tests/golden/romlist_dense.pgm. */
+
+/* ------------------------------------------------------- letter buckets
+   Bucket 0 is '#' (anything that doesn't start with a letter -- a digit, a
+   symbol, or an empty string), buckets 1..26 are A..Z. Kept as a small
+   integer rather than the raw char so it doubles as a bit index into
+   letter_present and an array index for iteration, and 27 fits comfortably
+   in the uint32_t the bitmap uses. */
+#define UI_BUCKETS 27
+
+static int bucket_of(const char *s)
+{
+    char c = (s && *s) ? *s : 0;
+    if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 'A');
+    if (c >= 'A' && c <= 'Z') return 1 + (c - 'A');
+    return 0;                              /* '#': digits, symbols, empty */
+}
+
+/* First index in u->items whose bucket is `b`, or -1. items[] is sorted by
+   the caller (romlist_scan sorts before this widget ever sees the array),
+   so the first match is also the page a jump to `b` should land on -- this
+   does not re-derive that ordering, it relies on it. */
+static int first_index_of_bucket(const koboy_ui_list *u, int b)
+{
+    for (int i = 0; i < u->count; i++)
+        if (bucket_of(u->items[i]) == b) return i;
+    return -1;
+}
+
+/* Nearest bucket that actually has an item, searching forward (wrapping
+   after Z back to '#') from `from`. With allow_self, `from` itself counts if
+   it is occupied -- the touch strip's "land on what I tapped, or the next
+   thing after it" behaviour. Without allow_self, `from` is never returned --
+   the hardware jump's "always move to a DIFFERENT letter" behaviour, so
+   holding the combo on a list where every entry shares one starting letter
+   is a no-op instead of reporting a jump that changed nothing.
+   Returns -1 only if letter_present is entirely empty (an empty list). */
+static int nearest_present_bucket(const koboy_ui_list *u, int from, bool allow_self)
+{
+    if (u->letter_present == 0) return -1;
+    if (allow_self && (u->letter_present & (1u << from))) return from;
+    for (int step = 1; step < UI_BUCKETS; step++) {
+        int b = (from + step) % UI_BUCKETS;
+        if (u->letter_present & (1u << b)) return b;
+    }
+    return -1;
+}
 
 void ui_list_init(koboy_ui_list *u, const char *title,
                   const char *const *items, int count,
@@ -40,6 +94,18 @@ void ui_list_init(koboy_ui_list *u, const char *title,
     u->rows = (h / u->row_h) - 2;
     if (u->rows < 1) u->rows = 1;
     if (u->rows > UI_MAX_ROWS) u->rows = UI_MAX_ROWS;
+
+    /* alpha_jump and letter_present are already zero from the memset above:
+       off until ui_list_enable_alpha_jump says otherwise. */
+}
+
+void ui_list_enable_alpha_jump(koboy_ui_list *u, bool enabled)
+{
+    u->alpha_jump = enabled;
+    u->letter_present = 0;
+    if (!enabled) return;
+    for (int i = 0; i < u->count; i++)
+        u->letter_present |= (1u << bucket_of(u->items[i]));
 }
 
 int ui_list_rows(const koboy_ui_list *u) { return u->rows; }
@@ -59,6 +125,12 @@ static int item_at_row(const koboy_ui_list *u, int r)
     int i = u->page * u->rows + r;
     return (i >= 0 && i < u->count) ? i : -1;
 }
+
+/* Width, in panel pixels, of the letter strip. Tied to row_h (which already
+   has a legibility-driven minimum) rather than a fixed constant, so it stays
+   a comfortable touch target at any panel size instead of only the one this
+   was measured on. */
+static int strip_w(const koboy_ui_list *u) { return u->row_h; }
 
 void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
                     int W, int H)
@@ -88,6 +160,56 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
             int x0 = u->x < 0 ? 0 : u->x;
             int x1 = u->x + u->w; if (x1 > W) x1 = W;
             if (x0 < x1) memset(fb + (size_t)ly * stride + x0, UI_RULE, (size_t)(x1 - x0));
+        }
+    }
+
+    /* Letter index strip, drawn LAST (after every row above) so its opaque
+       background covers any row text that ran into its column -- text_draw
+       clips only to the panel, not to a row's width, and a long filename
+       already reaches the panel edge without this strip. Painting the strip
+       on top is simpler and cheaper than measuring and truncating every row
+       label to a narrower width.
+
+       Its background fill goes to W, the true buffer edge, NOT to
+       u->x + u->w like every other fill in this function: a row label can
+       overrun the widget's own right edge (the same "clips to the panel,
+       not the row" fact above) into whatever margin the caller left outside
+       u->w, and that margin never gets background-cleared by anything else
+       -- measured on tests/golden/romlist_dense.pgm, whose longest title
+       left ink stray in exactly that margin before this widened to W. */
+    if (u->alpha_jump) {
+        int sw = strip_w(u);
+        int sx = u->x + u->w - sw;
+        int body_top = u->y + u->row_h;
+        int foot_top = u->y + u->h - u->row_h;
+        int body_h = foot_top - body_top;
+        if (sx < u->x) sx = u->x;             /* degenerate/tiny region guard */
+
+        for (int y = body_top; y < foot_top; y++) {
+            if (y < 0 || y >= H) continue;
+            int x0 = sx < 0 ? 0 : sx;
+            if (x0 < W) memset(fb + (size_t)y * stride + x0, UI_BG, (size_t)(W - x0));
+        }
+        /* Divider between the strip and the row text it sits beside. */
+        for (int y = body_top; y < foot_top; y++) {
+            if (y < 0 || y >= H || sx < 0 || sx >= W) continue;
+            fb[(size_t)y * stride + sx] = UI_RULE;
+        }
+
+        int band_h = body_h / UI_BUCKETS;
+        if (band_h < 1) band_h = 1;
+        for (int b = 0; b < UI_BUCKETS; b++) {
+            char glyph[2] = { (char)(b == 0 ? '#' : 'A' + (b - 1)), 0 };
+            /* Present letters draw in full ink; empty ones draw dim (reusing
+               UI_RULE's tone rather than a new constant) so the strip still
+               shows the whole alphabet for spatial consistency -- like an
+               address book -- while making clear which taps land exactly
+               where they say and which will fall through to the nearest
+               occupied letter (see nearest_present_bucket). */
+            uint8_t ink = (u->letter_present & (1u << b)) ? UI_INK : UI_RULE;
+            int gy = body_top + b * band_h + (band_h - TEXT_GLYPH_H * UI_TEXT_PX) / 2;
+            int gx = sx + (sw - TEXT_GLYPH_W * UI_TEXT_PX) / 2;
+            text_draw(fb, stride, W, H, gx, gy, glyph, UI_TEXT_PX, ink);
         }
     }
 
@@ -129,6 +251,20 @@ static void page_by(koboy_ui_list *u, int delta)
     u->page = p;
 }
 
+/* Jumps to the first item of bucket `b`'s page. `b` must already be a
+   PRESENT bucket (from nearest_present_bucket) -- this does not itself
+   handle "no such bucket", callers do. Returns the index jumped to, or -1 if
+   the bucket turned out to be empty after all (defensive; should not happen
+   given the invariant above, but a jump that fails must still be UI_NONE
+   rather than silently teleport the page). */
+static int jump_to_bucket(koboy_ui_list *u, int b)
+{
+    int idx = first_index_of_bucket(u, b);
+    if (idx < 0) return -1;
+    u->page = idx / u->rows;
+    return idx;
+}
+
 ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
                        int *out_index)
 {
@@ -145,6 +281,27 @@ ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
     bool tap = touching && !u->prev_touch;
     u->prev_touch = touching;
 
+    /* A+B TOGETHER, checked before either alone: the hardware-only letter
+       jump. Two physical page-turn buttons cannot spell a letter, but they
+       can advance through the letters the list actually has, wrapping
+       around -- which is real navigation once "the next occupied letter"
+       instead of "the next page" is 300 ROMs away from where you are. Must
+       be tested BEFORE the single-button checks below, or a rising A+B would
+       always be consumed as PAGE_PREV first (checked here first is what
+       makes the two distinguishable; see tests/test_ui.c). */
+    if (u->alpha_jump && (rising & (KOBOY_BTN_A | KOBOY_BTN_B))
+                       == (KOBOY_BTN_A | KOBOY_BTN_B)) {
+        int top = u->count > 0 ? u->page * u->rows : -1;
+        if (top >= u->count) top = u->count - 1;         /* defensive */
+        if (top < 0) return UI_NONE;
+        int cur_b = bucket_of(u->items[top]);
+        int nb = nearest_present_bucket(u, cur_b, false);
+        if (nb < 0) return UI_NONE;          /* only one letter in the list */
+        int idx = jump_to_bucket(u, nb);
+        if (idx < 0) return UI_NONE;
+        if (out_index) *out_index = idx;
+        return UI_JUMP;
+    }
     if (rising & KOBOY_BTN_A) {
         int before = u->page;
         page_by(u, -1);
@@ -164,8 +321,30 @@ ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
     if (tx < u->x || tx >= u->x + u->w || ty < u->y || ty >= u->y + u->h)
         return UI_NONE;
 
-    /* Footer arrows: left third is previous, right third is next. */
     int foot_top = u->y + u->h - u->row_h;
+    int body_top = u->y + u->row_h;
+
+    /* Letter strip: the narrow right-edge column, body rows only (never the
+       title row above it or the footer row below it, which keeps this from
+       ever competing with the footer arrows for the same pixels). Checked
+       before both the footer-arrow test and the row hit-test below, so a tap
+       inside the strip's column can never fall through to either -- it is
+       always claimed here first. */
+    if (u->alpha_jump && tx >= u->x + u->w - strip_w(u) &&
+        ty >= body_top && ty < foot_top) {
+        int band_h = (foot_top - body_top) / UI_BUCKETS;
+        if (band_h < 1) band_h = 1;
+        int b = (ty - body_top) / band_h;
+        if (b >= UI_BUCKETS) b = UI_BUCKETS - 1;
+        int nb = nearest_present_bucket(u, b, true);
+        if (nb < 0) return UI_NONE;                       /* empty list */
+        int idx = jump_to_bucket(u, nb);
+        if (idx < 0) return UI_NONE;
+        if (out_index) *out_index = idx;
+        return UI_JUMP;
+    }
+
+    /* Footer arrows: left third is previous, right third is next. */
     if (ty >= foot_top) {
         int before = u->page;
         if (tx < u->x + u->w / 3)            page_by(u, -1);
