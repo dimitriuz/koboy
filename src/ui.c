@@ -1,5 +1,6 @@
 #include "ui.h"
 #include "text.h"
+#include <limits.h>
 #include <string.h>
 
 #define UI_BG        0xFF
@@ -7,6 +8,17 @@
 #define UI_RULE      0xAA
 #define UI_MAX_ROWS  24
 #define UI_TEXT_PX   3
+
+/* Row-label fitting: see ui_fit_label. UI_LABEL_BUF is generous against
+   ROMLIST_NAME (128, a relative path up to a subfolder deep) -- ui.c does not
+   depend on romlist.h (it also renders MENU and slot-picker strings that are
+   nothing like a ROM path), so this is sized independently, with headroom. */
+#define UI_LABEL_BUF 256
+/* One character cell of breathing room between a fitted label's last glyph
+   and whatever it is not allowed to touch (the letter strip's divider, or
+   the widget's own right edge with the strip off) -- without it, a label
+   fit to EXACTLY the available width reads as touching the boundary. */
+#define UI_LABEL_GAP (TEXT_ADVANCE * UI_TEXT_PX)
 
 /* UI_MAX_ROWS went from 10 to 24 (measured against the shipped browser
    geometry, 1264x1680 panel minus KOBOY_CHROME_MARGIN on every side, which
@@ -132,6 +144,78 @@ static int item_at_row(const koboy_ui_list *u, int r)
    was measured on. */
 static int strip_w(const koboy_ui_list *u) { return u->row_h; }
 
+/* Length `s` would have with a trailing ".gb"/".gbc" (either case) removed,
+   or strlen(s) unchanged if it has neither. A local, case-insensitive check
+   rather than a call into romlist.c: this widget also draws MENU and
+   slot-picker strings that were never ROM names at all, and for those the
+   check is simply never going to match -- a harmless no-op, not a reason to
+   couple ui.c to romlist.h. */
+static size_t strip_known_ext_len(const char *s, size_t len)
+{
+    static const char *const exts[] = { ".gb", ".gbc" };
+    for (size_t e = 0; e < sizeof exts / sizeof exts[0]; e++) {
+        size_t xl = strlen(exts[e]);
+        if (len < xl) continue;
+        bool match = true;
+        for (size_t i = 0; i < xl && match; i++) {
+            char a = s[len - xl + i], b = exts[e][i];
+            if (a >= 'a' && a <= 'z') a = (char)(a - 'a' + 'A');
+            if (b >= 'a' && b <= 'z') b = (char)(b - 'a' + 'A');
+            if (a != b) match = false;
+        }
+        if (match) return len - xl;
+    }
+    return len;
+}
+
+void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
+{
+    if (!out || !outsz) return;
+    if (!s) s = "";
+    if (px < 1) px = 1;
+    if (outsz > (size_t)INT_MAX) outsz = (size_t)INT_MAX; /* keeps the casts below sane */
+
+    size_t len = strip_known_ext_len(s, strlen(s));
+    if (len >= outsz) len = outsz - 1;      /* defensive; UI_LABEL_BUF dwarfs any real name */
+
+    int adv = TEXT_ADVANCE * px;
+    int max_chars = avail_px > 0 ? avail_px / adv : 0;
+    if (max_chars > (int)outsz - 1) max_chars = (int)outsz - 1;
+
+    if ((int)len <= max_chars) {
+        memcpy(out, s, len);
+        out[len] = 0;
+        return;
+    }
+    if (max_chars <= 0) { out[0] = 0; return; }
+
+    static const char ELLIPSIS[] = "...";
+    int ell_chars = (int)(sizeof ELLIPSIS - 1);
+    if (max_chars <= ell_chars) {
+        /* No room even for the ellipsis marker: this should not happen at any
+           shipped geometry (a row is many characters wide), but showing an
+           unmarked partial head beats showing nothing. */
+        memcpy(out, s, (size_t)max_chars);
+        out[max_chars] = 0;
+        return;
+    }
+
+    /* Split what is left after the ellipsis between head and tail. Tail gets
+       the larger (or equal) half on purpose: the head is the title, which a
+       user can usually recognise from a prefix, but for a No-Intro name the
+       PART THAT DISTINGUISHES two otherwise-identical entries is almost
+       always the trailing parenthetical -- "(USA)" vs "(Europe)" -- so it is
+       the tail that most needs the room. */
+    int remain = max_chars - ell_chars;
+    int head_chars = remain / 2;
+    int tail_chars = remain - head_chars;
+
+    memcpy(out, s, (size_t)head_chars);
+    memcpy(out + head_chars, ELLIPSIS, (size_t)ell_chars);
+    memcpy(out + head_chars + ell_chars, s + len - (size_t)tail_chars, (size_t)tail_chars);
+    out[head_chars + ell_chars + tail_chars] = 0;
+}
+
 void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
                     int W, int H)
 {
@@ -148,12 +232,34 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
     text_draw(fb, stride, W, H, u->x + u->row_h / 2, u->y + u->row_h / 4,
               u->title, UI_TEXT_PX + 1, UI_INK);
 
+    /* The X a row label may not cross: the letter strip's divider when the
+       strip is on, otherwise the widget's own right edge. Computed once,
+       here, and reused below by both the label-fitting loop and the strip's
+       own geometry, so the two can never disagree about where the strip
+       starts -- they used to be two separate computations (this one and the
+       one inside `if (u->alpha_jump)` below), and a label fit against one
+       while the strip drew at the other is exactly how a fitted label could
+       still end up half-covered or with a visible gap. */
+    int strip_x = u->x + u->w - strip_w(u);
+    if (strip_x < u->x) strip_x = u->x;      /* degenerate/tiny region guard */
+    int text_right = u->alpha_jump ? strip_x : (u->x + u->w);
+
     for (int r = 0; r < u->rows; r++) {
         int i = item_at_row(u, r);
         if (i < 0) break;
         int ry = u->y + u->row_h + r * u->row_h;
-        text_draw(fb, stride, W, H, u->x + u->row_h, ry + u->row_h / 4,
-                  u->items[i], UI_TEXT_PX, UI_INK);
+        int text_x = u->x + u->row_h;
+        /* Fit to what is actually free, not the panel edge: without this a
+           long ROM name ran past the widget's own right edge and, with the
+           strip on, straight underneath it -- invisible, and for a
+           No-Intro collection that invisible tail is usually the ONLY thing
+           distinguishing two rows ("(USA)" vs "(Europe)"). See
+           ui_fit_label's own comment for why elision keeps both ends. */
+        char label[UI_LABEL_BUF];
+        ui_fit_label(u->items[i], text_right - text_x - UI_LABEL_GAP,
+                    UI_TEXT_PX, label, sizeof label);
+        text_draw(fb, stride, W, H, text_x, ry + u->row_h / 4,
+                  label, UI_TEXT_PX, UI_INK);
         /* Row rule, so a finger can tell where one entry ends. */
         int ly = ry + u->row_h - 1;
         if (ly >= 0 && ly < H) {
@@ -164,11 +270,11 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
     }
 
     /* Letter index strip, drawn LAST (after every row above) so its opaque
-       background covers any row text that ran into its column -- text_draw
-       clips only to the panel, not to a row's width, and a long filename
-       already reaches the panel edge without this strip. Painting the strip
-       on top is simpler and cheaper than measuring and truncating every row
-       label to a narrower width.
+       background covers any row text that ran into its column. The fitting
+       above already keeps a label from reaching this column at all, but the
+       strip still paints over the full body height rather than trusting
+       that: title text (drawn above, not put through ui_fit_label) and any
+       future row kind that skips the fit are still covered defensively.
 
        Its background fill goes to W, the true buffer edge, NOT to
        u->x + u->w like every other fill in this function: a row label can
@@ -178,12 +284,10 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
        -- measured on tests/golden/romlist_dense.pgm, whose longest title
        left ink stray in exactly that margin before this widened to W. */
     if (u->alpha_jump) {
-        int sw = strip_w(u);
-        int sx = u->x + u->w - sw;
+        int sx = strip_x;
         int body_top = u->y + u->row_h;
         int foot_top = u->y + u->h - u->row_h;
         int body_h = foot_top - body_top;
-        if (sx < u->x) sx = u->x;             /* degenerate/tiny region guard */
 
         for (int y = body_top; y < foot_top; y++) {
             if (y < 0 || y >= H) continue;
@@ -208,7 +312,7 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
                occupied letter (see nearest_present_bucket). */
             uint8_t ink = (u->letter_present & (1u << b)) ? UI_INK : UI_RULE;
             int gy = body_top + b * band_h + (band_h - TEXT_GLYPH_H * UI_TEXT_PX) / 2;
-            int gx = sx + (sw - TEXT_GLYPH_W * UI_TEXT_PX) / 2;
+            int gx = sx + (strip_w(u) - TEXT_GLYPH_W * UI_TEXT_PX) / 2;
             text_draw(fb, stride, W, H, gx, gy, glyph, UI_TEXT_PX, ink);
         }
     }

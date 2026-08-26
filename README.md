@@ -21,8 +21,9 @@ Game Boy.
   "Launching" below for why that is a hard requirement.
 - **Your own ROMs.** None are included, and none ever will be. Either point
   `rom=` in `koboy.ini` at a specific `.gb`/`.gbc` file, or drop several into
-  `.adds/koboy/roms/` (the `rom_dir` default) and pick one from koboy's own
-  on-panel browser at launch -- see "Playing" below.
+  `.adds/koboy/roms/` (the `rom_dir` default, searched recursively -- a
+  `gbc/` subfolder works) and pick one from koboy's own on-panel menu at
+  launch -- see "Playing" below.
 
 ## Install
 
@@ -66,10 +67,14 @@ cannot damage the device identity; it just declines to start.
 
 ## Playing
 
-- If `rom=` in `koboy.ini` is unset, koboy opens a ROM browser instead: a list
-  of every `.gb`/`.gbc` file under `rom_dir` (default `roms`, i.e.
-  `.adds/koboy/roms/`), paged with the page-turn buttons and picked with a tap.
-  Set `rom=` to a specific path to skip the browser entirely.
+- If `rom=` in `koboy.ini` is unset, koboy opens a MAIN MENU instead of going
+  straight to a game: **RECENT** (the last few ROMs actually played, newest
+  first -- empty on a first run), **ALL GAMES** (every `.gb`/`.gbc` file under
+  `rom_dir`, default `roms` i.e. `.adds/koboy/roms/`, searched recursively),
+  or **QUIT**. ALL GAMES pages with the page-turn buttons, jumps by starting
+  letter with a tap on the right-edge strip or with both page-turn buttons
+  together, and is picked with a tap; set `rom=` to a specific path to skip
+  this menu entirely and go straight to that ROM.
 - The two page-turn buttons are A and B, mapped out of the box to the codes the
   Libra 2 emits (193 and 194). If yours differ, clear `key_a`/`key_b` in
   `koboy.ini` and the next launch asks you to press each one and records what it
@@ -81,7 +86,8 @@ cannot damage the device identity; it just declines to start.
   you first touched, thumb-pad style, and needs a drag rather than a tap.
 - A drawn **MENU** box opens the in-game menu: save to or load from one of
   three per-ROM save-state slots, reset the core, switch to a different ROM
-  (back to the browser, above), or quit. The save-state format is gambatte's
+  (back to the same MAIN MENU above, so RECENT is reachable mid-session too),
+  or quit. The save-state format is gambatte's
   own serialised core state, written and read through `safefile.c`'s
   all-or-nothing helpers so a crash or a full disk mid-write cannot leave a
   slot half-written; loading a slot never touches the core until the whole
@@ -94,7 +100,7 @@ cannot damage the device identity; it just declines to start.
 
 Everything else is in `koboy.ini`, which documents each key inline: render
 scale, which waveform to use for fast refreshes, d-pad geometry, `rom_dir` for
-the browser above, and the two ghosting mitigations that ship *disabled* ---
+ALL GAMES above, and the two ghosting mitigations that ship *disabled* ---
 the driver's own waveform choice made them redundant, and measuring showed
 they were the only thing making the panel flash. The file explains that in
 place, so nobody turns them back on thinking they were forgotten.

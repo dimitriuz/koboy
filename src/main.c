@@ -16,6 +16,7 @@
 #include "core.h"
 #include "koboy.h"
 #include "pacing.h"
+#include "recent.h"
 #include "romlist.h"
 #include "safefile.h"
 #include "sram.h"
@@ -103,13 +104,17 @@ static void usage(const char *argv0)
         "  --message TEXT    draw TEXT on the panel and exit 3 (launcher errors)\n"
         "  --waveform auto|du4  waveform for fast refreshes (default auto)\n"
         "  --quiet           suppress everything but the presented= counter\n"
-        "  --rom-dir PATH    directory the ROM browser lists\n"
-        "  --ui-script PATH  replay synthetic UI input into the ROM browser;\n"
+        "  --rom-dir PATH    directory the ALL GAMES list scans\n"
+        "  --ui-script PATH  replay synthetic UI input into the startup flow\n"
+        "                    (MAIN MENU, then RECENT or ALL GAMES);\n"
         "                    exits 4 if the script selects nothing\n",
         argv0, DEFAULT_INI);
 }
 
-typedef enum { MODE_BROWSE, MODE_PLAY, MODE_MENU, MODE_QUIT } koboy_mode;
+/* MODE_BROWSE is gone: the startup file browser is now reached only via
+   MODE_MAIN -> ALL GAMES (run_list, inline in main()), not a mode of its
+   own -- see task 5's MAIN MENU. */
+typedef enum { MODE_MAIN, MODE_PLAY, MODE_MENU, MODE_QUIT } koboy_mode;
 
 /* One definition of "put the faceplate back", replacing three hand-copied
    blocks (post-calibration, post-fatal, post-SRAM-warning) and now used by
@@ -130,13 +135,25 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
 /* Drives one list widget to a selection. Returns the chosen index, or -1 if
    the user quit, the run was stopped, or a script ran out.
 
-   `script`/`script_n` make MODE_BROWSE reachable in a bounded unattended run.
-   Without them every automated test would pass --rom and skip that screen
-   entirely -- the same blind spot that hid v1's first-run deadlock through
-   twenty reviews. MODE_MENU is NOT scripted: nothing passes a script to
-   run_menu or run_slot_picker (they are only ever reached from the emulator
-   loop, which has no --ui-script hook), and saying otherwise here would
-   overclaim coverage the suite does not have.
+   `script`/`script_n` make the startup flow reachable in a bounded unattended
+   run. Without them every automated test would pass --rom and skip every
+   list screen entirely -- the same blind spot that hid v1's first-run
+   deadlock through twenty reviews. MODE_MENU is NOT scripted: nothing passes
+   a script to run_menu or run_slot_picker (they are only ever reached from
+   the emulator loop, which has no --ui-script hook), and saying otherwise
+   here would overclaim coverage the suite does not have.
+
+   `script_i`, when not NULL, is a CURSOR shared across every screen one
+   --ui-script run drives (MAIN MENU, then RECENT or ALL GAMES) -- a pointer
+   rather than a local index so a script written as one flat sequence of taps
+   can walk through several run_list calls in a row, each screen picking up
+   exactly where the previous one's last consumed state left off. Every call
+   still primes with one synthetic released state regardless of the cursor's
+   position (see the `primed` logic below): each fresh koboy_ui_list demands
+   its own release before its first tap, independent of what the PREVIOUS
+   screen's script tap left the finger doing. Callers that never script
+   (run_menu, run_slot_picker) pass NULL here, same as they pass NULL for
+   `script`.
 
    `disabled_index`, when not -1, is a row that SELECTS nothing: the ROM
    browser's synthetic "+N MORE ROMS NOT SHOWN" row uses this so a tap on it
@@ -145,11 +162,11 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
    of breaking, the same as any other no-op input. */
 static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
                     uint8_t *panel, int stride, int pw, int ph,
-                    const koboy_input_state *script, int script_n,
+                    const koboy_input_state *script, int *script_i, int script_n,
                     int disabled_index)
 {
     int  chosen = -1;
-    int  si = 0;
+    int  si = script_i ? *script_i : 0;
     bool need_draw = true;
     bool primed = false;
 
@@ -205,6 +222,7 @@ static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
 
         if (!script) usleep(5000);
     }
+    if (script_i) *script_i = si;
     return chosen;
 }
 
@@ -263,7 +281,10 @@ static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n, -1);
+    /* NULL script_i: run_menu is never scripted (see run_list's own comment
+       on why -- no --ui-script hook reaches here), so there is no cursor to
+       share across screens. */
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, NULL, script_n, -1);
     if (pick < 0) return MENU_RESUME;
     if ((pick == MENU_SAVE || pick == MENU_LOAD) && !has_states) return MENU_RESUME;
     return pick;
@@ -289,9 +310,80 @@ static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_n, -1);
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, NULL, script_n, -1);
     if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
     return pick + 1;
+}
+
+enum { MAIN_RECENT = 0, MAIN_ALL_GAMES, MAIN_QUIT, MAIN_COUNT };
+
+/* Returns the chosen MAIN_* action, or -1 if the run was stopped (signal, or
+   should_quit()) or a script ran out before choosing anything. Unlike
+   run_menu/run_slot_picker, THIS screen IS scripted -- it is the new first
+   screen of the startup flow, in front of both the ROM browser and the
+   RECENT picker, so a --ui-script run has to navigate it to reach either. */
+static int run_main_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                         int stride, int pw, int ph,
+                         const koboy_input_state *script, int *script_i, int script_n)
+{
+    static const char *const items[MAIN_COUNT] = { "RECENT", "ALL GAMES", "QUIT" };
+
+    koboy_ui_list list;
+    ui_list_init(&list, "KOBOY", items, MAIN_COUNT,
+                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+    return run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
+}
+
+/* Returns the chosen index into `rc` (0-based), or -1 if the user backed out
+   by tapping BACK.
+
+   BACK is a real, always-present trailing row -- the same device
+   run_slot_picker uses -- rather than "no cancel gesture" the way the
+   top-level MAIN MENU and the ROM browser both get away with (their only
+   ways out are picking something or the whole app quitting, which is fine
+   because THEY are reachable only by deliberate user choice already). A
+   RECENT list can be genuinely empty on a first run or right after clearing
+   history, and staring at a screen with nothing to tap and no way back is a
+   worse first experience than one more row. When `rc` is empty, a single
+   disabled placeholder row explains why, using run_list's disabled_index the
+   same way the ROM browser's "+N MORE ROMS" overflow row does. */
+static int run_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
+                             int stride, int pw, int ph, const koboy_recent *rc,
+                             const koboy_input_state *script, int *script_i, int script_n)
+{
+    enum { RECENT_UI_MAX = KOBOY_RECENT_MAX + 2 };   /* entries + placeholder + BACK */
+    static char labels[RECENT_UI_MAX][KOBOY_RECENT_DISPLAY];
+    const char *items[RECENT_UI_MAX];
+    int n = 0, placeholder = -1;
+
+    if (rc->count == 0) {
+        snprintf(labels[n], sizeof labels[n], "NO RECENT GAMES YET");
+        items[n] = labels[n];
+        placeholder = n;
+        n++;
+    } else {
+        for (int i = 0; i < rc->count; i++) {
+            snprintf(labels[n], sizeof labels[n], "%s", recent_display(rc, i));
+            items[n] = labels[n];
+            n++;
+        }
+    }
+    snprintf(labels[n], sizeof labels[n], "BACK");
+    items[n] = labels[n];
+    int back_index = n;
+    n++;
+
+    koboy_ui_list list;
+    ui_list_init(&list, "RECENT", items, n,
+                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n,
+                        placeholder);
+    if (pick < 0 || pick == back_index) return -1;
+    return pick;    /* placeholder, when present, is index 0 and never reached here */
 }
 
 int main(int argc, char **argv)
@@ -424,9 +516,12 @@ int main(int argc, char **argv)
 
     /* An explicit --rom or rom= goes straight to play, which keeps every
        existing smoke test, --frames run and scripted path behaving exactly as
-       it did in v1. The shipped ini leaves rom commented out, so a real user
-       starts in the browser. */
-    koboy_mode mode = cfg.rom_path[0] ? MODE_PLAY : MODE_BROWSE;
+       it did in v1 -- this is task 5's "the --rom fast path must still bypass
+       everything" requirement. The shipped ini leaves rom commented out, so a
+       real user starts on the MAIN MENU, not the file browser: landing
+       someone in a 300-entry list as the very first screen is the wrong
+       default now that RECENT exists. */
+    koboy_mode mode = cfg.rom_path[0] ? MODE_PLAY : MODE_MAIN;
 
     /* Genuinely unused past this point. It was carried here as groundwork for
        MODE_MENU's CHOOSE ROM entry, on the theory that a ROM picked from
@@ -543,26 +638,37 @@ int main(int argc, char **argv)
        an array, and this project ships at zero warnings. */
     koboy_romlist roms;
     memset(&roms, 0, sizeof roms);
-    if (mode == MODE_BROWSE) {
-        int n = romlist_scan(&roms, cfg.rom_dir);
-        if (n < 0) {
-            /* Distinct from "no roms": a wrong rom_dir and an empty one are
-               different mistakes, and this is the only diagnostic a user with
-               no terminal gets. */
-            fatal("cannot read rom directory\n%s", cfg.rom_dir);
-            free(panel); pf->shutdown(pf->ctx); return 2;
-        }
-        /* rl->count, the REAL rom count, not n: n also counts the synthetic
-           overflow row when roms.hidden > 0, and a rom_dir holding nothing
-           but one oversized-name ROM (hidden > 0, count == 0) must still
-           report "no roms" rather than open a browser whose only row
-           selects nothing. */
-        if (roms.count == 0) {
-            fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
-            romlist_free(&roms);
-            free(panel); pf->shutdown(pf->ctx); return 2;
-        }
 
+    /* Where the RECENT list lives: beside save_dir (recent.dat next to the
+       .srm/.stN files), not beside koboy.ini. Two reasons, either one
+       sufficient on its own: save_dir is GUARANTEED writable by the time
+       execution reaches here -- config_resolve_paths already resolved it
+       install-relative, and the save-state/SRAM paths below already trust it
+       for exactly this reason -- while koboy.ini can legitimately live
+       somewhere the user chose for CONFIGURATION, not for data, and may not
+       even be writable from a menu-launched process. And recent.dat is data,
+       exactly like a .srm: it belongs with the rest of what koboy owns, not
+       with what the user edits. */
+    char recents_file[600];
+    snprintf(recents_file, sizeof recents_file, "%s/recent.dat", cfg.save_dir);
+
+    /* Shared across every list screen one --ui-script run drives (MAIN MENU,
+       then either RECENT or ALL GAMES) -- see run_list's script_i comment for
+       why a single flat script can walk through more than one screen. NULL
+       when there is no script, same as every other script-less run_list
+       call in this file. */
+    int script_i = 0;
+    const koboy_input_state *ui_scr = ui_script_n > 0 ? ui_script : NULL;
+    int *ui_scr_i = ui_script_n > 0 ? &script_i : NULL;
+
+    /* Captured before the loop below can change `mode`: only a run that
+       actually went through a UI screen painted over the faceplate, and only
+       such a run needs it redrawn afterward. The --rom/rom= fast path skips
+       this whole loop (mode is already MODE_PLAY) and must not pay for a
+       redraw of chrome nothing has touched. */
+    bool used_startup_ui = (mode == MODE_MAIN);
+
+    while (mode == MODE_MAIN) {
         koboy_input *ui_in = input_create(&cfg, &prof);
         if (!ui_in) { fatal("out of memory"); free(panel); pf->shutdown(pf->ctx); return 1; }
 #ifdef KOBOY_PLATFORM_KOBO
@@ -570,44 +676,110 @@ int main(int argc, char **argv)
 #else
         input_set_touch_transform(ui_in, pw, ph, false, false, false);
 #endif
-        koboy_ui_list list;
-        ui_list_init(&list, "CHOOSE A GAME", romlist_items(&roms), n,
-                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                     pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-        /* Letter index strip: only the ROM browser gets one, never MENU or
-           the slot picker, which are a handful of fixed labels a strip would
-           just clutter. */
-        ui_list_enable_alpha_jump(&list, true);
+        int choice = run_main_menu(pf, ui_in, panel, panel_stride, pw, ph,
+                                   ui_scr, ui_scr_i, ui_script_n);
 
-        int pick = run_list(pf, ui_in, &list, panel, panel_stride, pw, ph,
-                            ui_script_n > 0 ? ui_script : NULL, ui_script_n,
-                            roms.hidden > 0 ? roms.count : -1);
-        input_destroy(ui_in);
+        if (choice == MAIN_RECENT) {
+            koboy_recent rc;
+            recent_load(&rc, recents_file);      /* corrupt/missing -> empty, never fatal */
+            recent_prune_missing(&rc);
+            int ri = run_recent_picker(pf, ui_in, panel, panel_stride, pw, ph, &rc,
+                                       ui_scr, ui_scr_i, ui_script_n);
+            input_destroy(ui_in);
+            if (ri >= 0) {
+                snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s", recent_path(&rc, ri));
+                say("koboy: chose %s (recent)\n", cfg.rom_path);
+                recent_touch(&rc, cfg.rom_path, recent_display(&rc, ri));
+                recent_save(&rc, recents_file);
+                mode = MODE_PLAY;
+            }
+            /* else: BACK was tapped, or the run was stopped/exhausted while
+               ON the recent screen -- loop back to MAIN MENU either way. A
+               stopped or script-exhausted run converges on the SAME terminal
+               exit one iteration later, when run_main_menu itself reports
+               it (the `else` branch below) -- this does not need its own
+               copy of that handling. */
+        } else if (choice == MAIN_ALL_GAMES) {
+            int n = romlist_scan(&roms, cfg.rom_dir);
+            if (n < 0) {
+                /* Distinct from "no roms": a wrong rom_dir and an empty one
+                   are different mistakes, and this is the only diagnostic a
+                   user with no terminal gets. */
+                fatal("cannot read rom directory\n%s", cfg.rom_dir);
+                input_destroy(ui_in);
+                free(panel); pf->shutdown(pf->ctx); return 2;
+            }
+            /* roms.count, the REAL rom count, not n: n also counts the
+               synthetic overflow row when roms.hidden > 0, and a rom_dir
+               holding nothing but one oversized-name ROM (hidden > 0,
+               count == 0) must still report "no roms" rather than open a
+               browser whose only row selects nothing. */
+            if (roms.count == 0) {
+                fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+                romlist_free(&roms); input_destroy(ui_in);
+                free(panel); pf->shutdown(pf->ctx); return 2;
+            }
 
-        if (pick < 0) {
-            /* A SCRIPTED run that chose nothing is a failure, not a clean
-               exit. Backing out of the browser is a legitimate thing for a
-               person to do, so an interactive run still exits 0 -- but
-               --ui-script exists to make an unattended run exercise the
-               browser, and a run that exercised nothing and reported success
-               is a CI job that is green for having tested nothing. That is
-               the exact shape of failure this project keeps finding, so it
-               gets its own exit code rather than being folded into 1 or 2. */
+            koboy_ui_list list;
+            ui_list_init(&list, "CHOOSE A GAME", romlist_items(&roms), n,
+                         KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                         pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
+            /* Letter index strip: only the ROM browser gets one, never MENU,
+               MAIN MENU, RECENT or the slot picker, which are all short
+               fixed-ish lists a strip would just clutter. */
+            ui_list_enable_alpha_jump(&list, true);
+
+            int pick = run_list(pf, ui_in, &list, panel, panel_stride, pw, ph,
+                                ui_scr, ui_scr_i, ui_script_n,
+                                roms.hidden > 0 ? roms.count : -1);
+            input_destroy(ui_in);
+
+            if (pick < 0) {
+                /* A SCRIPTED run that ends without a rom chosen is a
+                   failure, not a clean exit -- see run_list's own comment on
+                   why this needs its own exit code. Backing out of ALL GAMES
+                   interactively (only reachable via a signal/should_quit;
+                   there is no in-widget cancel) still exits 0. */
+                if (ui_script_n > 0) {
+                    fatal("ui script selected nothing");
+                    romlist_free(&roms);
+                    free(panel); pf->shutdown(pf->ctx); return 4;
+                }
+                say("koboy: no rom chosen, exiting\n");
+                romlist_free(&roms);
+                free(panel); pf->shutdown(pf->ctx); return 0;
+            }
+            romlist_path(&roms, pick, cfg.rom_path, sizeof cfg.rom_path);
+            say("koboy: chose %s\n", cfg.rom_path);
+            {
+                /* Recorded here too, not only from RECENT: "played" means
+                   actually loaded, and ALL GAMES is the other of the two
+                   entry points that can load a rom at startup. */
+                koboy_recent rc;
+                recent_load(&rc, recents_file);
+                recent_touch(&rc, cfg.rom_path, romlist_name(&roms, pick));
+                recent_save(&rc, recents_file);
+            }
+            romlist_free(&roms);
+            mode = MODE_PLAY;
+        } else {
+            /* MAIN_QUIT, or run_main_menu itself was stopped/exhausted
+               (choice == -1: g_stop, should_quit, or -- for a script -- the
+               verbs ran out before landing on anything). Every one of these
+               is a deliberate or forced end with nothing to resume to. */
+            input_destroy(ui_in);
             if (ui_script_n > 0) {
                 fatal("ui script selected nothing");
-                romlist_free(&roms);
                 free(panel); pf->shutdown(pf->ctx); return 4;
             }
             say("koboy: no rom chosen, exiting\n");
-            romlist_free(&roms);
             free(panel); pf->shutdown(pf->ctx); return 0;
         }
-        romlist_path(&roms, pick, cfg.rom_path, sizeof cfg.rom_path);
-        say("koboy: chose %s\n", cfg.rom_path);
-        romlist_free(&roms);
-        mode = MODE_PLAY;
+    }
 
-        /* The browser painted over the faceplate. */
+    if (used_startup_ui) {
+        /* Whichever screen led here (RECENT or ALL GAMES) painted over the
+           faceplate. */
         redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
     }
     /* mode is MODE_PLAY from here on, until the emulator loop below reads and
@@ -770,49 +942,101 @@ int main(int argc, char **argv)
                 sb.mem = NULL;
                 sb.len = 0;
 
-                /* memset, not `= {0}` -- see the identical comment on `roms`
-                   above; same warning, same reason. */
-                koboy_romlist rl;
-                memset(&rl, 0, sizeof rl);
-                int n = romlist_scan(&rl, cfg.rom_dir);
-                int pick = -1;
-                if (n < 0) {
-                    /* Distinct from n == 0, matching the startup browser's two
-                       messages: romlist.h documents why they must stay
-                       distinguishable -- "your rom_dir is wrong" and "you
-                       have no ROMs" are different diagnoses to a user with no
-                       terminal, and this is the only diagnostic they get. */
-                    fatal("cannot read rom directory\n%s", cfg.rom_dir);
-                } else if (rl.count == 0) {
-                    /* rl.count, not n: see the startup browser's identical
-                       check for why (an oversized-name-only rom_dir has
-                       n == 1 from the overflow row alone, but zero real
-                       ROMs). */
-                    fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
-                } else {
-                    koboy_ui_list list;
-                    ui_list_init(&list, "CHOOSE A GAME", romlist_items(&rl), n,
-                                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                                 pw - 2 * KOBOY_CHROME_MARGIN,
-                                 ph - 2 * KOBOY_CHROME_MARGIN);
-                    ui_list_enable_alpha_jump(&list, true);
-                    pick = run_list(pf, in, &list, panel, panel_stride,
-                                    pw, ph, NULL, 0,
-                                    rl.hidden > 0 ? rl.count : -1);
+                /* Points at the MAIN MENU, not straight at the browser --
+                   task 5's decision: this is the ONLY way a mid-session
+                   switch can reach RECENT, so "recently played" stays useful
+                   past the first pick of the session, not just at startup.
+                   Never scripted (MODE_MENU has no --ui-script hook -- see
+                   run_list's comment), so NULL/0 for every script argument
+                   below, same as run_menu/run_slot_picker above. */
+                bool picked = false;
+                while (!picked && !g_stop && !pf->should_quit(pf->ctx)) {
+                    int choice = run_main_menu(pf, in, panel, panel_stride,
+                                               pw, ph, NULL, NULL, 0);
+                    if (choice == MAIN_RECENT) {
+                        koboy_recent rc;
+                        recent_load(&rc, recents_file);
+                        recent_prune_missing(&rc);
+                        int ri = run_recent_picker(pf, in, panel, panel_stride,
+                                                   pw, ph, &rc, NULL, NULL, 0);
+                        if (ri >= 0) {
+                            snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s",
+                                    recent_path(&rc, ri));
+                            recent_touch(&rc, cfg.rom_path, recent_display(&rc, ri));
+                            recent_save(&rc, recents_file);
+                            picked = true;
+                        }
+                        /* else: BACK -- loop shows MAIN MENU again. */
+                    } else if (choice == MAIN_ALL_GAMES) {
+                        /* memset, not `= {0}` -- see the identical comment on
+                           `roms` above; same warning, same reason. This
+                           branch can run many times in one session (the user
+                           can bounce between MAIN MENU and ALL GAMES freely),
+                           and `rl` is a fresh local every pass -- without
+                           romlist_free below, each pass leaks the previous
+                           one's heap arrays for as long as koboy keeps
+                           running. */
+                        koboy_romlist rl;
+                        memset(&rl, 0, sizeof rl);
+                        int n = romlist_scan(&rl, cfg.rom_dir);
+                        if (n < 0) {
+                            /* Distinct from n == 0, matching the startup
+                               browser's two messages: romlist.h documents why
+                               they must stay distinguishable -- "your rom_dir
+                               is wrong" and "you have no ROMs" are different
+                               diagnoses to a user with no terminal, and this
+                               is the only diagnostic they get. */
+                            fatal("cannot read rom directory\n%s", cfg.rom_dir);
+                        } else if (rl.count == 0) {
+                            /* rl.count, not n: an oversized-name-only rom_dir
+                               has n == 1 from the overflow row alone, but
+                               zero real ROMs. */
+                            fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+                        } else {
+                            koboy_ui_list list;
+                            ui_list_init(&list, "CHOOSE A GAME", romlist_items(&rl), n,
+                                         KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
+                                         pw - 2 * KOBOY_CHROME_MARGIN,
+                                         ph - 2 * KOBOY_CHROME_MARGIN);
+                            ui_list_enable_alpha_jump(&list, true);
+                            int pick = run_list(pf, in, &list, panel, panel_stride,
+                                                pw, ph, NULL, NULL, 0,
+                                                rl.hidden > 0 ? rl.count : -1);
+                            if (pick >= 0) {
+                                romlist_path(&rl, pick, cfg.rom_path, sizeof cfg.rom_path);
+                                koboy_recent rc;
+                                recent_load(&rc, recents_file);
+                                recent_touch(&rc, cfg.rom_path, romlist_name(&rl, pick));
+                                recent_save(&rc, recents_file);
+                                picked = true;
+                            }
+                            /* pick < 0: nothing chosen from ALL GAMES either
+                               -- loop back to MAIN MENU, same as BACK from
+                               RECENT above. */
+                        }
+                        romlist_free(&rl);
+                    } else {
+                        /* MAIN_QUIT, or the while loop's own g_stop/
+                           should_quit -- either way there is nothing left to
+                           resume (the running game was already flushed and
+                           unloaded above), so this ends the session. */
+                        break;
+                    }
                 }
-                /* No "return to the game" option in any of the three failure
-                   cases (n < 0, n == 0, or pick < 0): the running game was
-                   already flushed and unloaded above so CHOOSE ROM could have
-                   the core to itself, and by the time rom_dir turns out empty
-                   or unreadable -- or the user backs out of the picker --
-                   there is nothing left to resume. Quitting, after telling
-                   the user why on the panel, is the only coherent option: the
+                /* No "return to the game" option when nothing was picked:
+                   the running game was already flushed and unloaded above so
+                   CHOOSE ROM could have the core to itself, and by the time
+                   the flow above ends without a pick there is nothing left to
+                   resume. Quitting is the only coherent option: the
                    alternative is a black or frozen screen with no
                    explanation, which this project's own constraint calls
-                   "indistinguishable from a crash". */
-                if (pick < 0) { mode = MODE_QUIT; }
-                else {
-                    romlist_path(&rl, pick, cfg.rom_path, sizeof cfg.rom_path);
+                   "indistinguishable from a crash". A DIAGNOSABLE failure
+                   (rom_dir missing or empty) already told the user why on the
+                   panel above, via fatal(); a plain QUIT or backing all the
+                   way out needs no extra message. */
+                if (!picked) {
+                    mode = MODE_QUIT;
+                } else {
                     char lerr[512];
                     if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
                         fatal("%s", lerr);
@@ -825,12 +1049,6 @@ int main(int argc, char **argv)
                               "Saving is OFF this run.");
                     }
                 }
-                /* This branch can run many times in one session (the user is
-                   free to open CHOOSE ROM repeatedly), and rl is a fresh
-                   local every time -- without this, each pass leaks the
-                   previous pass's heap arrays for as long as koboy stays
-                   running. */
-                romlist_free(&rl);
             }
 
             /* Whatever happened, the panel is now showing a menu. */

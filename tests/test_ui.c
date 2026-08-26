@@ -2,8 +2,15 @@
 #include "chrome.h"
 #include "config.h"
 #include "input.h"
+#include "text.h"
 #include "ui.h"
 #include <string.h>
+
+/* ui.c's own UI_TEXT_PX is private to that file; the value here only needs
+   to match it where a test cross-checks against a real rendered row (it
+   currently does not), so any reasonable glyph scale works for exercising
+   ui_fit_label as a standalone function. */
+#define TEST_LABEL_PX 3
 
 /* Press one finger at a panel coordinate through the REAL evdev decode path,
    the same way tests/test_chrome.c's zone sweep does. Nothing here builds a
@@ -503,6 +510,72 @@ TEST_MAIN({
             CHECK_EQ_INT(ui_list_feed(&ol, &ab, &idx), UI_NONE);
             CHECK_EQ_INT(ol.page, 0);
         }
+    }
+
+    /* ------------------------------------------------------------------
+       ui_fit_label: the row-label fitting that keeps a long ROM name off
+       the letter strip -- task 5's "long names overflow" fix.
+
+       Asserted directly against character counts and text_measure, not
+       just inferred from a rendered image: the whole point is a class of
+       bug (two names differing only in a trailing parenthetical rendering
+       IDENTICALLY once truncated) that a golden image would only catch if
+       a reviewer happened to look at exactly the right two rows. */
+    {
+        char out[256];
+
+        /* A name that already fits is returned unchanged BUT with a known
+           ROM extension stripped -- display only. */
+        ui_fit_label("TETRIS.GB", 100000, TEST_LABEL_PX, out, sizeof out);
+        CHECK(strcmp(out, "TETRIS") == 0);
+        ui_fit_label("KIRBY 2.gbc", 100000, TEST_LABEL_PX, out, sizeof out);
+        CHECK(strcmp(out, "KIRBY 2") == 0);
+        /* Not a ROM extension: left alone. */
+        ui_fit_label("SLOT 1 - SAVED", 100000, TEST_LABEL_PX, out, sizeof out);
+        CHECK(strcmp(out, "SLOT 1 - SAVED") == 0);
+
+        /* Whatever comes back never exceeds avail_px, at every width from
+           "plenty of room" down to "barely any". */
+        const char *long_name =
+            "Legend of Zelda, The - Link's Awakening (USA, Europe) (Rev 2).gb";
+        for (int avail = 400; avail <= 2000; avail += 137) {
+            ui_fit_label(long_name, avail, TEST_LABEL_PX, out, sizeof out);
+            CHECK(text_measure(out, TEST_LABEL_PX) <= avail);
+        }
+
+        /* THE acceptance case: two names identical except for the trailing
+           parenthetical must still read as DIFFERENT once both are
+           truncated to the same narrow width -- proving the tail, not just
+           the head, survives elision. */
+        const char *usa =
+            "Some Very Long Game Title That Does Not Fit The Row (USA).gb";
+        const char *eur =
+            "Some Very Long Game Title That Does Not Fit The Row (Europe).gb";
+        char out_usa[256], out_eur[256];
+        int narrow = text_measure("Some Very Long Game", TEST_LABEL_PX);
+        ui_fit_label(usa, narrow, TEST_LABEL_PX, out_usa, sizeof out_usa);
+        ui_fit_label(eur, narrow, TEST_LABEL_PX, out_eur, sizeof out_eur);
+        CHECK(strcmp(out_usa, out_eur) != 0);
+        /* And both are visibly truncated (contain the ellipsis), not just
+           silently cut -- a truncated row must look truncated. */
+        CHECK(strstr(out_usa, "...") != NULL);
+        CHECK(strstr(out_eur, "...") != NULL);
+
+        /* A width too narrow even for the ellipsis marker degrades to a
+           bare, unmarked partial head rather than crashing or overrunning
+           `out`. */
+        ui_fit_label(long_name, TEXT_ADVANCE * TEST_LABEL_PX, TEST_LABEL_PX,
+                    out, sizeof out);
+        CHECK_EQ_INT((int)strlen(out), 1);
+        ui_fit_label(long_name, 0, TEST_LABEL_PX, out, sizeof out);
+        CHECK_EQ_INT(out[0], 0);
+
+        /* A destination buffer smaller than the source (even with unlimited
+           avail_px, so the source-fits-avail branch is the one taken) is
+           respected, not overrun. */
+        char tiny[6];
+        ui_fit_label("ABCDEFGHIJKLMNOP", 100000, TEST_LABEL_PX, tiny, sizeof tiny);
+        CHECK_EQ_INT((int)strlen(tiny), (int)sizeof tiny - 1);
     }
 
     /* Rendering is clipped and draws something. */

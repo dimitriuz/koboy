@@ -12,10 +12,12 @@ presented=$(echo "$out" | sed -n 's/.*presented=\([0-9]*\).*/\1/p')
 [ "$presented" -ge 1 ] || { echo "FAIL: presented $presented frames"; exit 1; }
 echo "PASS smoke_host presented=$presented"
 
-# The browser is invisible to every other test in this suite, because they all
-# pass --rom and take the MODE_PLAY shortcut. That is precisely the shape of
-# the blind spot that hid v1's first-run deadlock through twenty reviews, so
-# this run exists to take the other path.
+# The startup flow (MAIN MENU -> ALL GAMES -> the browser) is invisible to
+# every other test in this suite, because they all pass --rom and take the
+# MODE_PLAY fast path straight past it. That is precisely the shape of the
+# blind spot that hid v1's first-run deadlock through twenty reviews, so this
+# run exists to take the other path -- now TWO screens deep instead of one,
+# since task 5 put a MAIN MENU in front of the browser.
 romdir="$(mktemp -d)"
 : > "$romdir/AAA TEST.gb"
 script="$(mktemp)"
@@ -25,18 +27,19 @@ script="$(mktemp)"
 # as the priming edge -- selecting nothing and exiting 0, i.e. a CI run that
 # went green having tested nothing. Confirmed on hardware with
 # `printf 'tap 300 300\n'`. run_list now feeds one released state before the
-# script's first entry; this line is what proves it, so do not "helpfully" put
-# an `idle` back in front of it.
+# script's first entry, on EVERY screen it drives (see its script_i comment),
+# which is what lets two taps in a row -- one per screen below -- both land.
 #
-# y=90, not the original 200: this run takes no --panel, so the SDL backend's
-# default 1072x1448 applies, and 90 is that geometry's row-0 centre under the
-# CURRENT UI_MAX_ROWS=24 (KOBOY_CHROME_MARGIN=8 on every side, row_h=55,
-# body top at y=63, centre at 63+55/2). It was ~200 back when UI_MAX_ROWS was
-# 10 and rows were more than twice as tall; a row-density change is exactly
-# the kind of thing that silently strands a hardcoded pixel coordinate
-# outside every row, so if this ever goes stale again the failure here is
-# "browser did not select the only rom", not something subtler.
-printf 'tap 40 90\n' > "$script"
+# Both coordinates are this run's --panel 1264x1680 geometry: row_h=64
+# (KOBOY_CHROME_MARGIN=8 on every side, h=1664, 26 slots of 64px under the
+# CURRENT UI_MAX_ROWS=24), so row r's centre is 8 + 64 + r*64 + 64/2.
+#   tap 200 168  -- MAIN MENU row 1 ("ALL GAMES"; row 0 is "RECENT")
+#   tap 200 104  -- the browser's row 0, the only rom in $romdir
+# A row-density or MAIN MENU item-order change is exactly the kind of thing
+# that silently strands a hardcoded pixel coordinate outside every row, so if
+# this ever goes stale again the failure here is "did not select the only
+# rom", not something subtler.
+printf 'tap 200 168\ntap 200 104\n' > "$script"
 
 # Explicit rc capture, not the bare `out=$(...)` the run above uses: under
 # set -e a nonzero exit from inside a command substitution assignment aborts
@@ -102,8 +105,10 @@ romdir="$(mktemp -d)"
 # row (row index 2) is the synthetic overflow row -- see the y math below,
 # which mirrors ui_list_init's own row_h derivation for a 1264x1680 panel
 # with KOBOY_CHROME_MARGIN=8 on every side (h=1664, slots=26, row_h=64).
+# First tap navigates MAIN MENU -> ALL GAMES (row 1), same as the tap-first
+# script far above; the second is the one under test here.
 script="$(mktemp)"
-printf 'tap 200 232\n' > "$script"   # row 2: y = 8 + 64 + 2*64 + 64/2
+printf 'tap 200 168\ntap 200 232\n' > "$script"   # row 2: y = 8 + 64 + 2*64 + 64/2
 rc=0
 out=$(KOBOY_ROMLIST_CAP_TEST=2 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom-dir "$romdir" --ui-script "$script" \
@@ -127,7 +132,8 @@ romdir="$(mktemp -d)"
 : > "$romdir/AAA.gb"; : > "$romdir/BBB.gb"; : > "$romdir/CCC.gb"
 : > "$romdir/DDD.gb"; : > "$romdir/EEE.gb"
 script="$(mktemp)"
-printf 'tap 200 104\n' > "$script"   # row 0: y = 8 + 64 + 0*64 + 64/2
+# Same MAIN MENU navigation tap first, then the browser's row 0.
+printf 'tap 200 168\ntap 200 104\n' > "$script"   # row 0: y = 8 + 64 + 0*64 + 64/2
 rc=0
 out=$(KOBOY_ROMLIST_CAP_TEST=2 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom-dir "$romdir" --ui-script "$script" \

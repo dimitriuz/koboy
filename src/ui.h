@@ -54,4 +54,19 @@ void      ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
                          int W, int H);
 ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
                        int *out_index);
+
+/* Builds the label ui_list_render actually draws for one row: `s` with any
+   known ROM extension (.gb/.gbc, either case) stripped -- display only, the
+   string a caller loads a ROM from is built separately from the untouched
+   item text and never passes through here -- and, if it still does not fit
+   `avail_px` at glyph scale `px`, middle-ellipsised so BOTH the head and the
+   tail survive. That matters specifically for a No-Intro collection: two
+   ROMs that differ only in a trailing "(USA)" vs "(Europe)" need that tail
+   visible to stay distinguishable, and a naive tail-only truncation would
+   have discarded exactly that. Writes into `out` (size `outsz`), always
+   NUL-terminated. Exposed (not static) so the fit/ellipsis logic can be
+   asserted directly by index/character-count rather than only inferred from
+   a rendered image -- the same reasoning as text_pixel_visible in text.h. */
+void      ui_fit_label(const char *s, int avail_px, int px,
+                       char *out, size_t outsz);
 #endif
