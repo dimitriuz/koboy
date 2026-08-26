@@ -230,20 +230,66 @@ TEST_MAIN({
            and deleting the clear changed nothing -- confirmed by mutating it
            away and watching the suite stay green.
 
-           90x70 does not divide evenly: 1000/90 = 11 but 750/70 = 10, so the
-           height limits it to 10x = 900x700, centred at (50,25) with a real
-           margin. Coming from an all-white buffer, a WHITE frame makes the
-           margin the only thing that can distinguish "cleared" from "stale":
-           without the clear it keeps the previous frame's white. */
+           Two frames, and BOTH are needed. First a full-rect BLACK one, which
+           is not a size change and so does not clear: it just guarantees the
+           margin is dark before the interesting frame arrives, because the
+           clear now writes the LIGHTEST of the four levels and a clear-to-
+           white is invisible against a buffer that was already white. */
+        fill_solid565(gfb, 200, 150, 200, 0x0000);
+        gr = video_submit(gv, gfb, 200, 150,
+                          200 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(gr.w > 0);
+        CHECK_EQ_INT(video_buffer(gv)[0], 0x00);
+
+        /* Then 90x70, which does not divide evenly: 1000/90 = 11 but
+           750/70 = 10, so the height limits it to 10x = 900x700, centred at
+           (50,25) with a real margin. The margin must come out WHITE against
+           the black it is replacing -- delete the clear and it stays 0x00. */
         fill_solid565(gfb, 90, 70, 200, 0xFFFF);
         gr = video_submit(gv, gfb, 90, 70,
                           200 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
         CHECK(gr.w > 0);
         CHECK_EQ_INT(video_buffer(gv)[500 + (size_t)375 * video_stride(gv)], 0xFF);
-        CHECK_EQ_INT(video_buffer(gv)[0], 0x00);                   /* margin, cleared */
-        CHECK_EQ_INT(video_buffer(gv)[999 + (size_t)749 * video_stride(gv)], 0x00);
+        CHECK_EQ_INT(video_buffer(gv)[0], 0xFF);                   /* margin, cleared */
+        CHECK_EQ_INT(video_buffer(gv)[999 + (size_t)749 * video_stride(gv)], 0xFF);
+
+        /* And once more with a BLACK frame at a new size, which is what pins
+           the clear to the light level rather than to "whatever the frame
+           happens to be": 80x60 fits at 12x = 960x720 centred at (20,15), so
+           the margin and the picture must now differ. A clear that wrote 0,
+           or none at all, leaves them identical. */
+        fill_solid565(gfb, 80, 60, 200, 0x0000);
+        gr = video_submit(gv, gfb, 80, 60,
+                          200 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(gr.w > 0);
+        CHECK_EQ_INT(video_buffer(gv)[500 + (size_t)375 * video_stride(gv)], 0x00);
+        CHECK_EQ_INT(video_buffer(gv)[0], 0xFF);
+        CHECK_EQ_INT(video_buffer(gv)[999 + (size_t)749 * video_stride(gv)], 0xFF);
 
         video_destroy(gv);
+
+        /* THE SAME MARGIN, UNDER force_dither. The dither path is 1-bit and
+           thresholds against a Bayer matrix whose top cell is 255, so
+           `255 > 255` is false and a dither pass run over the CLEARED margin
+           speckles it black -- a permanent, static, half-black band around
+           every frame on a panel whose whole point is a clean page. The
+           margin therefore has to stay outside the dithered region, exactly
+           as it stays outside the quantised one. Asserted over the whole top
+           band rather than at one probe, because a Bayer pattern is only
+           visible if you look at more than one pixel. */
+        koboy_video *dv2 = video_create(&gp, true);
+        CHECK(dv2 != NULL);
+        fill_solid565(gfb, 90, 70, 200, 0xFFFF);
+        koboy_rect dr2 = video_submit(dv2, gfb, 90, 70,
+                                      200 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(dr2.w > 0);
+        int margin_dark = 0;
+        for (int y = 0; y < 25; y++)                    /* rows above the fit */
+            for (int x = 0; x < 1000; x++)
+                if (video_buffer(dv2)[x + (size_t)y * video_stride(dv2)] != 0xFF)
+                    margin_dark++;
+        CHECK_EQ_INT(margin_dark, 0);
+        video_destroy(dv2);
     }
 
     /* ---- video_fit: centring a sub-max frame, and not moving the Game Boy ---- */
@@ -491,9 +537,14 @@ TEST_MAIN({
         CHECK_EQ_INT(fr.x, (1264 - fr.w) / 2);
         CHECK_EQ_INT(fr.y, 0);
         /* Drawn where it says it is: black inside the reported rect, and the
-           margin outside it cleared (the size changed, so the clear fires). */
+           margin outside it cleared to the LIGHTEST of the four levels (the
+           size changed, so the clear fires). White, not black, and that is
+           the point of asserting both probes: a WonderSwan reserves a square
+           rect for a landscape frame and lives with that margin for a whole
+           session, so it has to read as blank paper rather than as a solid
+           black band on a reflective panel. */
         CHECK_EQ_INT(video_buffer(lv)[fr.x + 4 + (size_t)400 * video_stride(lv)], 0x00);
-        CHECK_EQ_INT(video_buffer(lv)[0], 0x00);   /* margin, cleared to black */
+        CHECK_EQ_INT(video_buffer(lv)[0], 0xFF);   /* margin, cleared to white */
 
         video_destroy(lv);
     }

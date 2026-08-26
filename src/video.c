@@ -620,7 +620,23 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
     int dw, dh, ox, oy;
     video_fit_rect(&v->p, src_w, src_h, &dw, &dh, &ox, &oy);
     if (src_w != v->fit_src_w || src_h != v->fit_src_h) {
-        memset(v->cur, 0, (size_t)v->stride * (size_t)v->p.game_h);
+        /* Cleared to the LIGHTEST of the four levels, not to 0. Until a core
+           arrived whose frame is permanently smaller than its max in one
+           axis, this margin was a transient and nobody looked at it; a
+           WonderSwan makes it 36% of the reserved rect for the whole session.
+           The core reports max 224x224 so that BOTH its orientations fit
+           without re-fitting the rect (see main.c's base-only branch), which
+           leaves a 224x80-equivalent band above and below a landscape title
+           forever. At 0 that band is solid black -- unreadable-adjacent on
+           reflective paper and the worst case for this panel's waveforms, the
+           same reasoning that already picked the Pokemon Mini's inverted
+           palette in core.c.
+
+           KOBOY_DU4_LEVELS[3] specifically, not 0xFF-as-a-number: it is the
+           value the quantiser below emits for white, so the margin is already
+           quantised and stays byte-stable frame after frame -- which is what
+           keeps it out of the dirty diff instead of flickering into it. */
+        memset(v->cur, KOBOY_DU4_LEVELS[3], (size_t)v->stride * (size_t)v->p.game_h);
         v->fit_src_w = src_w; v->fit_src_h = src_h;
     }
     {
@@ -640,24 +656,32 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
                          src_w, src_h, v->p.max_w, dw / src_w);
     }
 
-    /* Quantise/dither still run over the FULL reserved rect (v->p.game_w x
-       game_h = max_w*scale x max_h*scale), exactly as before generalisation.
-       For the Game Boy that is exactly the area video_scale_gray just wrote,
-       so this is unchanged behaviour bit for bit. For a core whose current
-       frame is smaller than its max, the area outside the just-scaled
-       corner is whatever was quantised into it last -- v->cur/prev start
-       life zero-filled (video_create's calloc), which quantises to the
-       darkest of the four levels, and nothing here paints over that until a
-       frame actually reaches that pixel. That is a known rough edge for a
-       shrinking-frame core, not something this task's target (fixed-size
-       Game & Watch artwork per title) exercises, and is called out rather
-       than silently accepted -- see the video_submit_rects comment on the
-       matching dirty-rect tradeoff. */
+    /* Quantise/dither run over the FITTED rect only -- the dw x dh the scaler
+       just wrote -- not over the whole reserved rect. For the Game Boy those
+       are the same region (base == max, so dw x dh IS game_w x game_h at
+       offset 0,0) and this is unchanged behaviour bit for bit, which
+       tests/test_video_pipeline.c's Game Boy cases are what actually prove.
+
+       For a core whose frame is smaller than its max it is both cheaper and
+       more correct. Cheaper: video_submit is this pipeline's measured
+       bottleneck (CLAUDE.md), and a landscape WonderSwan's fitted rect is 64%
+       of its 896x896 reserved one, so a third of the per-frame quantise pass
+       was being spent on pixels no frame ever reaches. More correct: those
+       pixels are the margin the size-change clear above just set to the
+       lightest level, and re-quantising them every frame only risks moving
+       them.
+
+       The dither path keeps its Bayer phase by being handed the margin's
+       PANEL coordinates (game_x + ox, game_y + oy) rather than the rect's
+       origin -- the matrix is indexed by absolute screen position on purpose,
+       so shifting the region must shift the phase with it or the pattern
+       walks. */
+    uint8_t *fit = v->cur + (size_t)oy * v->stride + ox;
     if (v->dither)
-        video_dither_1bit(v->cur, v->p.game_w, v->p.game_h, v->stride,
-                          v->p.game_x, v->p.game_y);
+        video_dither_1bit(fit, dw, dh, v->stride,
+                          v->p.game_x + ox, v->p.game_y + oy);
     else
-        video_quantise4(v->cur, v->p.game_w, v->p.game_h, v->stride);
+        video_quantise4(fit, dw, dh, v->stride);
     return true;
 }
 
