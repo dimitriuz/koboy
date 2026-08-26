@@ -1,10 +1,10 @@
 #include "input.h"
-#include "chrome.h"    /* chrome_lcd_menu_rect: the MENU zone in the LCD
-                          layout is a drawn box, and chrome.c owns where the
-                          drawn controls are -- see chrome.h. Hit-testing it
-                          from a second, independently derived copy of that
-                          arithmetic is precisely how a control and its touch
-                          zone drift apart. */
+#include "chrome.h"    /* chrome_lcd_layout: every control in the LCD layout's
+                          bottom strip is a drawn box or disc, and chrome.c
+                          owns where the drawn controls are -- see chrome.h.
+                          Hit-testing them from a second, independently derived
+                          copy of that arithmetic is precisely how a control
+                          and its touch zone drift apart. */
 #include <stdlib.h>
 #include <string.h>
 
@@ -143,47 +143,139 @@ static int16_t pointer_axis(int d, int span)
     return (int16_t)((long)d * 65534 / (span - 1) - 32767);
 }
 
-/* The LCD layout's input model, in full: hardware keys, one MENU zone, and
-   the pointer. No d-pad, no A/B, no Start/Select -- chrome_render_lcd draws
-   none of them, and a live zone under nothing drawn is worse than useless
-   (it eats touches meant for the artwork).
+/* The touch d-pad, for a cross drawn at (dcx, dcy) with arms of half-length
+   dr. BOTH layouts call this: the Game & Watch strip draws the same cross
+   chrome.c draws for the DMG faceplate (draw_dpad, shared for the same
+   reason), and a title that binds up/down/left/right is steered exactly the
+   same way. Extracted rather than copied so the deadzone, the hysteresis and
+   the CROSS-vs-RELATIVE origin have one implementation -- v1 already learned
+   that a drawn absolute cross has to be steered absolutely, and a second copy
+   is a second chance to get that wrong.
 
-   MENU is tested FIRST and its slot is excluded from the pointer scan below.
-   The two zones cannot overlap at the shipped geometry -- MENU is in the
-   bottom strip and the game rect stops above it -- but "cannot overlap today"
-   is a property of two numbers in two files, and the consequence of it
-   lapsing is a MENU tap that also presses whatever the artwork draws under
-   it. Ordering makes it structural instead. */
+   Owns in->pad_active / pad_slot / pad_ox / pad_oy / held_dirs, and must be
+   called exactly ONCE per recompute: the claim-on-touch-down and
+   release-on-lift below are edge logic, not a query. */
+static uint16_t dpad_bits(koboy_input *in, int dcx, int dcy, int dr)
+{
+    /* claim a pad slot on touch-down inside the pad region */
+    if (!in->pad_active) {
+        for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
+            if (in->st.touch[s].down &&
+                in_circle(in->st.touch[s].x, in->st.touch[s].y, dcx, dcy, dr)) {
+                in->pad_active = true; in->pad_slot = s;
+                in->pad_ox = in->st.touch[s].x; in->pad_oy = in->st.touch[s].y;
+                break;
+            }
+        }
+    } else if (!in->st.touch[in->pad_slot].down) {
+        in->pad_active = false; in->held_dirs = 0;
+    }
+    if (!in->pad_active) return 0;
+
+    const koboy_touch *t = &in->st.touch[in->pad_slot];
+    int ox = in->pad_ox, oy = in->pad_oy;
+    if (in->cfg.dpad_mode == KOBOY_DPAD_CROSS) { ox = dcx; oy = dcy; }
+    uint16_t d = 0;
+    d |= axis_bits(t->x - ox, in->cfg.dpad_deadzone, in->cfg.dpad_hysteresis,
+                   KOBOY_BTN_LEFT, KOBOY_BTN_RIGHT, in->held_dirs);
+    d |= axis_bits(t->y - oy, in->cfg.dpad_deadzone, in->cfg.dpad_hysteresis,
+                   KOBOY_BTN_UP, KOBOY_BTN_DOWN, in->held_dirs);
+    in->held_dirs = d;
+    return d;
+}
+
+/* The LCD layout's input model, in full: hardware keys, a FULL RETROPAD drawn
+   into the bottom strip, one MENU zone, and the pointer.
+
+   The retropad is the correction this layout needed. Its first version drew
+   and hit-tested nothing but MENU, on the theory that a Game & Watch title
+   exposes its own on-artwork buttons to a pointer. Measured against the
+   shipped .mgw collection, it does not: those files route through gwlua's
+   compat init, which has no pointer handling at all -- a pointer press
+   anywhere on the artwork changes ZERO pixels, a joypad press changes 211k.
+   Every one of these titles is driven by per-title retropad bindings that
+   koboy cannot know in advance (Mickey Mouse: up/down/x/b for four diagonals,
+   l1/r1 for GAME A / GAME B; Donkey Kong: the full cross plus b for JUMP), so
+   the whole set is exposed rather than a guessed subset.
+
+   Every zone below comes out of chrome_lcd_layout -- the SAME struct
+   chrome.c draws from -- so a drawn control and its live zone cannot drift.
+
+   MENU is tested FIRST and its slot is excluded from everything after it, and
+   a slot that pressed any control is excluded from the pointer scan. At the
+   shipped geometry none of these zones can overlap (the controls are in the
+   strip, the pointer rect is the artwork above it) -- but "cannot overlap
+   today" is a property of numbers in two files, and the consequence of it
+   lapsing is a MENU tap that also fires a button, or a button press that also
+   clicks the artwork. Ordering makes it structural instead, and
+   tests/test_input_touch.c overlaps the zones deliberately (through
+   input_set_pointer_rect) so the ordering is an assertion and not a comment. */
 static void recompute_lcd(koboy_input *in, uint16_t b)
 {
-    koboy_rect m;
-    chrome_lcd_menu_rect(&in->prof, &m);
+    chrome_lcd_controls c;
+    chrome_lcd_layout(&in->prof, &c);
 
     int menu_slot = -1;
     for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
         if (!in->st.touch[s].down) continue;
-        if (in_rect_xywh(in->st.touch[s].x, in->st.touch[s].y, &m)) { menu_slot = s; break; }
+        if (in_rect_xywh(in->st.touch[s].x, in->st.touch[s].y, &c.menu)) { menu_slot = s; break; }
     }
     /* Edge triggered, exactly as the DMG path: a held finger latches once. */
     if (menu_slot >= 0 && !in->menu_touching) in->menu_latched = true;
     in->menu_touching = (menu_slot >= 0);
 
+    /* The d-pad, through the same decode the DMG faceplate uses. Called
+       before the loop below and unconditionally, because it is edge logic:
+       skipping it on a pass with no touches would never release the pad. */
+    b |= dpad_bits(in, c.dpad_cx, c.dpad_cy, c.dpad_r);
+
     bool pressed = false;
     for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
         if (!in->st.touch[s].down) continue;
         if (s == menu_slot) continue;                      /* MENU wins */
+        if (in->pad_active && s == in->pad_slot) continue; /* steering, not a button */
         int x = in->st.touch[s].x, y = in->st.touch[s].y;
-        if (!in_rect_xywh(x, y, &in->ptr_rect)) continue;  /* case, not artwork */
-        in->st.pointer.x = pointer_axis(x - in->ptr_rect.x, in->ptr_rect.w);
-        in->st.pointer.y = pointer_axis(y - in->ptr_rect.y, in->ptr_rect.h);
-        pressed = true;
-        break;                     /* one pointer; the first live touch owns it */
+
+        /* The diamond. X on top and B on the bottom is not decoration: the
+           core's own overlay (START with no cursor active) draws a SNES pad
+           and labels the TOP button NORTHEAST, which is Mickey Mouse's `x`
+           binding. A user reading that overlay has to find the same button
+           here. */
+        uint16_t hit = 0;
+        if (in_circle(x, y, c.x_cx, c.x_cy, c.face_r)) hit |= KOBOY_BTN_X;
+        if (in_circle(x, y, c.y_cx, c.y_cy, c.face_r)) hit |= KOBOY_BTN_Y;
+        if (in_circle(x, y, c.a_cx, c.a_cy, c.face_r)) hit |= KOBOY_BTN_A;
+        if (in_circle(x, y, c.b_cx, c.b_cy, c.face_r)) hit |= KOBOY_BTN_B;
+        if (in_rect_xywh(x, y, &c.l1))     hit |= KOBOY_BTN_L1;
+        if (in_rect_xywh(x, y, &c.select)) hit |= KOBOY_BTN_SELECT;
+        if (in_rect_xywh(x, y, &c.start))  hit |= KOBOY_BTN_START;
+        if (in_rect_xywh(x, y, &c.r1))     hit |= KOBOY_BTN_R1;
+        if (hit) { b |= hit; continue; }        /* a drawn control wins the touch */
+
+        /* Otherwise it may be a pointer press. Written as one condition
+           rather than as two early-outs so the loop ALWAYS reaches every
+           remaining slot: an early `break` once the pointer is claimed reads
+           as an optimisation and behaves identically in every case a test can
+           reach with two fingers, while silently dropping a third finger's
+           button press. `!pressed` keeps the first live touch as the owner --
+           there is one touchscreen and one pointer. */
+        if (!pressed && in_rect_xywh(x, y, &in->ptr_rect)) {
+            in->st.pointer.x = pointer_axis(x - in->ptr_rect.x, in->ptr_rect.w);
+            in->st.pointer.y = pointer_axis(y - in->ptr_rect.y, in->ptr_rect.h);
+            pressed = true;
+        }
     }
     /* MUST be assigned every pass, not only when something is down: a core
        that never sees PRESSED go false holds the artwork's button forever.
        The COORDINATES are deliberately left where they were -- that is what a
        real pointer device reports on release, and the core reads PRESSED to
-       decide a press, not the position. */
+       decide a press, not the position.
+
+       The pointer stays even though the shipped titles ignore it: it is
+       additive, koboy's side of it is verified end to end, and a title using
+       gwlua's NEW init path (18 of the games in third_party/gw/games/ already
+       do) reads it. It is not dead code -- it is code the CONTENT in this
+       collection happens not to exercise. */
     in->st.pointer.pressed = pressed;
 
     in->st.buttons = b;
@@ -206,34 +298,7 @@ static void recompute(koboy_input *in)
        because the faceplate stopped drawing any. */
     if (in->prof.layout_mode == KOBOY_LAYOUT_LCD) { recompute_lcd(in, b); return; }
 
-    int dcx = perm(l->dpad_cx, W), dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
-
-    /* claim a pad slot on touch-down inside the pad region */
-    if (!in->pad_active) {
-        for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
-            if (in->st.touch[s].down &&
-                in_circle(in->st.touch[s].x, in->st.touch[s].y, dcx, dcy, dr)) {
-                in->pad_active = true; in->pad_slot = s;
-                in->pad_ox = in->st.touch[s].x; in->pad_oy = in->st.touch[s].y;
-                break;
-            }
-        }
-    } else if (!in->st.touch[in->pad_slot].down) {
-        in->pad_active = false; in->held_dirs = 0;
-    }
-
-    if (in->pad_active) {
-        const koboy_touch *t = &in->st.touch[in->pad_slot];
-        int ox = in->pad_ox, oy = in->pad_oy;
-        if (in->cfg.dpad_mode == KOBOY_DPAD_CROSS) { ox = dcx; oy = dcy; }
-        uint16_t d = 0;
-        d |= axis_bits(t->x - ox, in->cfg.dpad_deadzone, in->cfg.dpad_hysteresis,
-                       KOBOY_BTN_LEFT, KOBOY_BTN_RIGHT, in->held_dirs);
-        d |= axis_bits(t->y - oy, in->cfg.dpad_deadzone, in->cfg.dpad_hysteresis,
-                       KOBOY_BTN_UP, KOBOY_BTN_DOWN, in->held_dirs);
-        in->held_dirs = d;
-        b |= d;
-    }
+    b |= dpad_bits(in, perm(l->dpad_cx, W), perm(l->dpad_cy, H), perm(l->dpad_r, W));
 
     for (int s = 0; s < KOBOY_MAX_TOUCH; s++) {
         if (!in->st.touch[s].down) continue;

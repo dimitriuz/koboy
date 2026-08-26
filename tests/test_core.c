@@ -136,6 +136,47 @@ TEST_MAIN({
             CHECK_EQ_INT(((const uint16_t *)last_data)[0], KOBOY_BTN_B | KOBOY_BTN_UP);
             CHECK_EQ_INT(*pp, 1);
 
+            /* THE NEW RETROPAD BITS REACH THE IDS THEY CLAIM TO. koboy's
+               KOBOY_BTN_* are RETRO_DEVICE_ID_JOYPAD_* by BIT POSITION, which
+               is what makes core.c's forwarding a plain `latched >> id`, and
+               a Game & Watch title's binding is chosen by id: Mickey Mouse
+               (Wide Screen) puts NORTHEAST on id 9 and its GAME A / GAME B
+               switches on ids 10 and 11. Renumber a bit and koboy silently
+               presses a different button on every one of these titles.
+
+               stub_core.c queries ids 0..15 one at a time and repacks each
+               answer as 1u << id, so the LITERAL on the right-hand side below
+               is the id the core actually asked about -- deliberately written
+               as a shift and not as the KOBOY_BTN_* name, which would compare
+               the constant with itself and pass whatever it was changed to. */
+            {
+                static const struct { uint16_t bit; unsigned id; const char *n; } abi[] = {
+                    { KOBOY_BTN_B,      0,  "B"      },
+                    { KOBOY_BTN_Y,      1,  "Y"      },
+                    { KOBOY_BTN_SELECT, 2,  "SELECT" },
+                    { KOBOY_BTN_START,  3,  "START"  },
+                    { KOBOY_BTN_UP,     4,  "UP"     },
+                    { KOBOY_BTN_DOWN,   5,  "DOWN"   },
+                    { KOBOY_BTN_LEFT,   6,  "LEFT"   },
+                    { KOBOY_BTN_RIGHT,  7,  "RIGHT"  },
+                    { KOBOY_BTN_A,      8,  "A"      },
+                    { KOBOY_BTN_X,      9,  "X"      },
+                    { KOBOY_BTN_L1,     10, "L1"     },
+                    { KOBOY_BTN_R1,     11, "R1"     },
+                };
+                g_ptr_down = false;
+                for (size_t k = 0; k < sizeof abi / sizeof abi[0]; k++) {
+                    g_buttons = abi[k].bit;
+                    core_run_frame(c);
+                    uint16_t got = ((const uint16_t *)last_data)[0];
+                    if (got != (uint16_t)(1u << abi[k].id))
+                        fprintf(stderr, "  %s: core saw 0x%04x, id %u expects 0x%04x\n",
+                                abi[k].n, got, abi[k].id, 1u << abi[k].id);
+                    CHECK_EQ_INT(got, (uint16_t)(1u << abi[k].id));
+                }
+                g_buttons = 0;
+            }
+
             /* Uninstalling goes back to zeros, so the rest of this file runs
                against the same core state it always did. */
             core_set_pointer_fn(c, NULL, NULL);

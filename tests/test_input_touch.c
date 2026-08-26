@@ -1,6 +1,6 @@
 #include "test.h"
 #include "input.h"
-#include "chrome.h"   /* chrome_lcd_menu_rect: the MENU zone under test */
+#include "chrome.h"   /* chrome_lcd_layout: the strip's zones under test */
 #include "config.h"
 
 /* Protocol B, as the Elan panel reports it: slot, tracking id, x, y, syn. */
@@ -20,6 +20,34 @@ static void mt(koboy_ev *e, int *n, int slot, int id, int x, int y)
    what is asserted is the zone geometry the emulator actually uses. The caller
    must have installed an identity touch transform (raw_max == panel - 1), which
    makes scale_axis a no-op and the probe pixel-exact. */
+/* Press one finger and LEAVE IT DOWN, so state that only exists while a
+   finger is on the panel can be read. touch_probe below lifts before it
+   returns, which is right for reading st.buttons (recompute latches those)
+   and WRONG for reading st.pointer.pressed -- that is cleared by the lift, so
+   a check made after touch_probe returns passes whether or not the press ever
+   happened. It did: the "a drawn control wins the touch" mutant survived that
+   way until this helper existed. */
+static void touch_hold(koboy_input *in, int x, int y)
+{
+    koboy_ev down[5] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, down, 5);
+}
+
+static void touch_lift(koboy_input *in)
+{
+    koboy_ev up[2] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+        { KOBOY_EV_SYN, 0, 0 },
+    };
+    input_feed(in, up, 2);
+}
+
 static uint16_t touch_probe(koboy_input *in, int x, int y)
 {
     koboy_ev down[5] = {
@@ -397,6 +425,196 @@ TEST_MAIN({
             CHECK(!input_state(li)->pointer.pressed);
             input_feed(li, up, 2);
             input_set_pointer_rect(li, lp.game_x, lp.game_y, lp.game_w, lp.game_h);
+        }
+
+        /* ================== THE CONTROL STRIP: every zone, and only that zone
+         *
+         * The shipped .mgw titles are driven by per-title RETROPAD bindings
+         * and ignore the pointer entirely (measured: a pointer press changes
+         * 0 pixels, a joypad press 211k), so the strip exposes the whole
+         * retropad. A zone that merely EXISTS is not evidence it is
+         * reachable, and a zone that also fires its neighbour is worse than
+         * one that fires nothing -- so each is tapped at its own centre and
+         * the WHOLE button word is compared, not just the bit under test.
+         */
+        {
+            chrome_lcd_controls c;
+            memset(&c, 0, sizeof c);
+            chrome_lcd_layout(&lp, &c);
+
+            struct { int x, y; uint16_t want; const char *name; } tap[] = {
+                { c.x_cx, c.x_cy, KOBOY_BTN_X, "X" },
+                { c.y_cx, c.y_cy, KOBOY_BTN_Y, "Y" },
+                { c.a_cx, c.a_cy, KOBOY_BTN_A, "A" },
+                { c.b_cx, c.b_cy, KOBOY_BTN_B, "B" },
+                { c.l1.x     + c.l1.w / 2,     c.l1.y     + c.l1.h / 2,     KOBOY_BTN_L1,     "L1" },
+                { c.select.x + c.select.w / 2, c.select.y + c.select.h / 2, KOBOY_BTN_SELECT, "SELECT" },
+                { c.start.x  + c.start.w / 2,  c.start.y  + c.start.h / 2,  KOBOY_BTN_START,  "START" },
+                { c.r1.x     + c.r1.w / 2,     c.r1.y     + c.r1.h / 2,     KOBOY_BTN_R1,     "R1" },
+            };
+            for (size_t t = 0; t < sizeof tap / sizeof tap[0]; t++) {
+                uint16_t got = touch_probe(li, tap[t].x, tap[t].y);
+                if (got != tap[t].want)
+                    fprintf(stderr, "  strip zone %s at (%d,%d): got 0x%04x want 0x%04x\n",
+                            tap[t].name, tap[t].x, tap[t].y, got, tap[t].want);
+                CHECK_EQ_INT(got, tap[t].want);
+            }
+
+            /* AND EVERY ZONE'S OWN EXTREMES, not just its centre. A zone
+               hit-tested against the wrong rect can still contain the centre
+               of the right one -- the two boxes need only overlap in the
+               middle -- so the corners are what pin the geometry. Inset by
+               one pixel because the right/bottom edges are exclusive. */
+            const koboy_rect *box[4] = { &c.l1, &c.select, &c.start, &c.r1 };
+            const uint16_t   bit[4] = { KOBOY_BTN_L1, KOBOY_BTN_SELECT,
+                                        KOBOY_BTN_START, KOBOY_BTN_R1 };
+            for (int i = 0; i < 4; i++) {
+                CHECK_EQ_INT(touch_probe(li, box[i]->x, box[i]->y), bit[i]);
+                CHECK_EQ_INT(touch_probe(li, box[i]->x + box[i]->w - 1,
+                                             box[i]->y + box[i]->h - 1), bit[i]);
+                /* One pixel outside is NOTHING -- neither this button nor the
+                   next one along. */
+                CHECK_EQ_INT(touch_probe(li, box[i]->x - 1, box[i]->y + box[i]->h / 2), 0);
+                CHECK_EQ_INT(touch_probe(li, box[i]->x + box[i]->w,
+                                             box[i]->y + box[i]->h / 2), 0);
+                CHECK_EQ_INT(touch_probe(li, box[i]->x + box[i]->w / 2, box[i]->y - 1), 0);
+                CHECK_EQ_INT(touch_probe(li, box[i]->x + box[i]->w / 2,
+                                             box[i]->y + box[i]->h), 0);
+            }
+
+            /* THE FOUR DISCS ARE DISCS, not their bounding boxes: a bounding
+               box corner is sqrt(2) * face_r from the centre and so belongs to
+               no button. Tested at the corners pointing AWAY from the diamond
+               (X's top-left, B's bottom-right) and not at the inner ones,
+               which was the first draft and was wrong for a real reason worth
+               recording: the inner corner of X's box is 0.85 * face_r from Y's
+               CENTRE, i.e. genuinely inside the Y disc. The four boxes
+               overlap; the four circles do not. */
+            CHECK_EQ_INT(touch_probe(li, c.x_cx - c.face_r, c.x_cy - c.face_r), 0);
+            CHECK_EQ_INT(touch_probe(li, c.b_cx + c.face_r, c.b_cy + c.face_r), 0);
+
+            /* THE D-PAD STEERS. CROSS mode (the shipped default) takes its
+               origin from the drawn centre, so a tap off-centre reports that
+               direction and the hub reports none. The same decode the DMG
+               faceplate uses -- one implementation, dpad_bits(). */
+            CHECK_EQ_INT(touch_probe(li, c.dpad_cx, c.dpad_cy - c.dpad_r / 2), KOBOY_BTN_UP);
+            CHECK_EQ_INT(touch_probe(li, c.dpad_cx, c.dpad_cy + c.dpad_r / 2), KOBOY_BTN_DOWN);
+            CHECK_EQ_INT(touch_probe(li, c.dpad_cx - c.dpad_r / 2, c.dpad_cy), KOBOY_BTN_LEFT);
+            CHECK_EQ_INT(touch_probe(li, c.dpad_cx + c.dpad_r / 2, c.dpad_cy), KOBOY_BTN_RIGHT);
+            CHECK_EQ_INT(touch_probe(li, c.dpad_cx, c.dpad_cy), 0);
+            /* Well outside the cross is nothing at all -- the pad must not
+                claim the whole left half of the strip. */
+            CHECK_EQ_INT(touch_probe(li, c.dpad_cx + 2 * c.dpad_r, c.dpad_cy), 0);
+
+            /* BARE STRIP BETWEEN CONTROLS presses nothing. Without this every
+               check above is satisfied just as well by a hit test that
+               returns its zone's bit for the entire panel. */
+            CHECK_EQ_INT(touch_probe(li, (c.l1.x + c.l1.w + c.select.x) / 2,
+                                         c.l1.y + c.l1.h / 2), 0);
+            CHECK_EQ_INT(touch_probe(li, (c.dpad_cx + c.dpad_r + c.menu.x) / 2,
+                                         c.dpad_cy), 0);
+
+            /* MENU presses NO game button, and is still edge-triggered. It is
+               the only way back to the ROM browser; a MENU tap that also fired
+               START would begin a round on the way out. */
+            CHECK_EQ_INT(input_take_menu_request(li), 0);
+            CHECK_EQ_INT(touch_probe(li, c.menu.x + c.menu.w / 2,
+                                         c.menu.y + c.menu.h / 2), 0);
+            CHECK_EQ_INT(input_take_menu_request(li), 1);
+
+            /* A DRAWN CONTROL WINS THE TOUCH over the pointer. At the shipped
+               geometry the two cannot overlap -- the controls are in the
+               strip and the pointer rect is the artwork above it -- so the
+               ordering is unreachable and untestable as shipped, exactly like
+               the MENU case below it. Overlapping them deliberately, through
+               input_set_pointer_rect (the same public setter main.c drives
+               every frame), is what makes it an assertion rather than a
+               comment. Restored immediately afterwards. */
+            input_set_pointer_rect(li, c.strip.x, c.strip.y, c.strip.w, c.strip.h);
+            touch_hold(li, c.a_cx, c.a_cy);
+            CHECK_EQ_INT(input_state(li)->buttons, KOBOY_BTN_A);
+            CHECK(!input_state(li)->pointer.pressed);   /* read WHILE down */
+            touch_lift(li);
+            touch_hold(li, c.start.x + c.start.w / 2, c.start.y + c.start.h / 2);
+            CHECK_EQ_INT(input_state(li)->buttons, KOBOY_BTN_START);
+            CHECK(!input_state(li)->pointer.pressed);
+            touch_lift(li);
+            /* ...while bare strip inside the same rect DOES reach the pointer,
+               which is what proves the two checks above are about the control
+               and not about the rect being ignored wholesale. */
+            touch_hold(li, (c.l1.x + c.l1.w + c.select.x) / 2, c.l1.y + c.l1.h / 2);
+            CHECK(input_state(li)->pointer.pressed);
+            touch_lift(li);
+            /* The D-PAD wins its touch too, and by a different route: it is
+               claimed by dpad_bits before the loop runs, so what keeps it out
+               of the pointer is the loop SKIPPING the pad's slot. Without this
+               case that skip is unreachable -- the d-pad circle overlaps no
+               other zone at the shipped geometry -- and deleting it changes
+               nothing any other check can see. (Real mutant, confirmed.) */
+            touch_hold(li, c.dpad_cx, c.dpad_cy - c.dpad_r / 2);
+            CHECK_EQ_INT(input_state(li)->buttons, KOBOY_BTN_UP);
+            CHECK(!input_state(li)->pointer.pressed);
+            touch_lift(li);
+            input_set_pointer_rect(li, lp.game_x, lp.game_y, lp.game_w, lp.game_h);
+
+            /* A FINGER ON THE ARTWORK DOES NOT DISARM THE BUTTONS. The pointer
+               is claimed by the first touch that lands inside the frame rect;
+               the scan must carry on to the remaining slots afterwards, or a
+               second finger on a control is silently dropped for as long as
+               the first is down. Slot ORDER matters here: the artwork touch is
+               slot 0 so that it is the one that claims the pointer first. */
+            {
+                koboy_ev two[10]; int n = 0;
+                mt(two, &n, 0, 1, lp.game_x + lp.game_w / 2, lp.game_y + lp.game_h / 2);
+                mt(two, &n, 1, 2, c.a_cx, c.a_cy);
+                input_feed(li, two, (size_t)n);
+                CHECK(input_state(li)->pointer.pressed);
+                CHECK_EQ_INT(input_state(li)->buttons, KOBOY_BTN_A);
+                int m = 0; koboy_ev off3[10];
+                mt(off3, &m, 0, -1, 0, 0);
+                mt(off3, &m, 1, -1, 0, 0);
+                input_feed(li, off3, (size_t)m);
+                CHECK(!input_state(li)->pointer.pressed);
+                CHECK_EQ_INT(input_state(li)->buttons, 0);
+            }
+
+            /* TWO FINGERS AT ONCE: a d-pad direction and a face button
+               together, which is what actually playing looks like. The pad
+               owns its own slot and must not swallow the second one. */
+            {
+                koboy_ev two[10]; int n = 0;
+                mt(two, &n, 0, 1, c.dpad_cx + c.dpad_r / 2, c.dpad_cy);
+                mt(two, &n, 1, 2, c.b_cx, c.b_cy);
+                input_feed(li, two, (size_t)n);
+                CHECK_EQ_INT(input_state(li)->buttons,
+                             KOBOY_BTN_RIGHT | KOBOY_BTN_B);
+                int m = 0; koboy_ev off2[10];
+                mt(off2, &m, 0, -1, 0, 0);
+                mt(off2, &m, 1, -1, 0, 0);
+                input_feed(li, off2, (size_t)m);
+                CHECK_EQ_INT(input_state(li)->buttons, 0);
+            }
+
+            /* TWO FINGERS ON THE ARTWORK: the FIRST one owns the pointer.
+               There is one touchscreen and one pointer to report, so which
+               touch wins has to be decided, and "the first" is the only
+               answer that does not make the reported position jump to
+               whichever finger happens to occupy the highest slot. Asserted
+               at the two opposite corners of the frame rect, so first-wins
+               and last-wins give opposite signs on both axes. */
+            {
+                koboy_ev two[10]; int n = 0;
+                mt(two, &n, 0, 1, lp.game_x, lp.game_y);
+                mt(two, &n, 1, 2, lp.game_x + lp.game_w - 1, lp.game_y + lp.game_h - 1);
+                input_feed(li, two, (size_t)n);
+                CHECK(input_state(li)->pointer.pressed);
+                CHECK_EQ_INT(input_state(li)->pointer.x, -32767);
+                CHECK_EQ_INT(input_state(li)->pointer.y, -32767);
+                int m = 0; koboy_ev off4[10];
+                mt(off4, &m, 0, -1, 0, 0);
+                mt(off4, &m, 1, -1, 0, 0);
+                input_feed(li, off4, (size_t)m);
+            }
         }
 
         /* THE DRAWN DMG CONTROLS ARE DEAD. Their permille zones do not stop
