@@ -530,6 +530,16 @@ TEST_MAIN({
         CHECK(strcmp(out, "TETRIS") == 0);
         ui_fit_label("KIRBY 2.gbc", 100000, TEST_LABEL_PX, out, sizeof out);
         CHECK(strcmp(out, "KIRBY 2") == 0);
+        /* Game & Watch content too: a folder of these is 59 rows ending in
+           the same four characters. */
+        ui_fit_label("Fire (Silver).mgw", 100000, TEST_LABEL_PX, out, sizeof out);
+        CHECK(strcmp(out, "Fire (Silver)") == 0);
+        ui_fit_label("BALL.MGW", 100000, TEST_LABEL_PX, out, sizeof out);
+        CHECK(strcmp(out, "BALL") == 0);
+        /* A near-miss is not an extension: nothing is stripped from a name
+           that merely ends in something similar. */
+        ui_fit_label("BALL.mgwx", 100000, TEST_LABEL_PX, out, sizeof out);
+        CHECK(strcmp(out, "BALL.mgwx") == 0);
         /* Not a ROM extension: left alone. */
         ui_fit_label("SLOT 1 - SAVED", 100000, TEST_LABEL_PX, out, sizeof out);
         CHECK(strcmp(out, "SLOT 1 - SAVED") == 0);

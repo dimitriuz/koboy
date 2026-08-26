@@ -145,15 +145,22 @@ static int item_at_row(const koboy_ui_list *u, int r)
    was measured on. */
 static int strip_w(const koboy_ui_list *u) { return u->row_h; }
 
-/* Length `s` would have with a trailing ".gb"/".gbc" (either case) removed,
-   or strlen(s) unchanged if it has neither. A local, case-insensitive check
-   rather than a call into romlist.c: this widget also draws MENU and
-   slot-picker strings that were never ROM names at all, and for those the
-   check is simply never going to match -- a harmless no-op, not a reason to
-   couple ui.c to romlist.h. */
+/* Length `s` would have with a trailing ".gb"/".gbc"/".mgw" (any case)
+   removed, or strlen(s) unchanged if it has none of them. A local,
+   case-insensitive check rather than a call into romlist.c: this widget also
+   draws MENU and slot-picker strings that were never ROM names at all, and
+   for those the check is simply never going to match -- a harmless no-op, not
+   a reason to couple ui.c to romlist.h.
+
+   ".mgw" is here for the same reason the other two are: with the browser
+   listing one folder at a time, a Game & Watch folder is 59 rows that all end
+   in the same four characters, and the extension is the one part of a row
+   that tells the reader nothing they cannot see from where they are
+   standing. Keep this in step with romlist_is_rom -- an extension listed
+   there and missing here is only ever cosmetic, which is why it can drift. */
 static size_t strip_known_ext_len(const char *s, size_t len)
 {
-    static const char *const exts[] = { ".gb", ".gbc" };
+    static const char *const exts[] = { ".gb", ".gbc", ".mgw" };
     for (size_t e = 0; e < sizeof exts / sizeof exts[0]; e++) {
         size_t xl = strlen(exts[e]);
         if (len < xl) continue;
