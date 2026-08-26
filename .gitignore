@@ -11,6 +11,10 @@ third_party/pokemini/
 third_party/wswan/
 third_party/race/
 third_party/ngp/
+third_party/stella2014/
+third_party/gearcoleco/
+third_party/freeintv/
+third_party/gpgx/
 *.srm
 *.ngf
 *.flash
@@ -27,3 +31,8 @@ koboy-probe
 *.wsc
 *.ngp
 *.ngc
+*.a26
+*.col
+*.int
+*.sms
+*.gg
