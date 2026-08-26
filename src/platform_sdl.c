@@ -392,6 +392,10 @@ static uint64_t sdl_now_us(void *ctx)
 
 static bool sdl_should_quit(void *ctx) { return ((sdl_ctx *)ctx)->quit; }
 
+/* The desktop has no battery to report; -1 is a valid, expected answer, not a
+   stub that needs revisiting. */
+static int sdl_battery_percent(void *ctx) { (void)ctx; return -1; }
+
 /* ------------------------------------------------------------------ ctor */
 
 koboy_platform *platform_sdl_create(void);
@@ -414,6 +418,7 @@ koboy_platform *platform_sdl_create(void)
     pf->poll_input  = sdl_poll_input;
     pf->now_us      = sdl_now_us;
     pf->should_quit = sdl_should_quit;
+    pf->battery_percent = sdl_battery_percent;
     return pf;
 }
 

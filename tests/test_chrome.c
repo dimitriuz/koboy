@@ -405,4 +405,157 @@ TEST_MAIN({
         int menu_top = (c.layout.menu_cy * H / 1000) - (c.layout.menu_h * H / 1000) / 2;
         CHECK(top <= menu_top);
     }
+
+    /* GENERAL guard, carried forward from Task 8: the check above covers only
+       MENU, which is exactly the gap that let a reviewer delete a term from
+       chrome_controls_top's min2 chain with nothing noticing -- five of its
+       six terms had no test at all. Task 12 adds several new drawn elements
+       (labels, a bezel, a wordmark, a speaker grille), which is exactly the
+       kind of change that tends to nudge one of the six upward, so this is
+       where the guard has to earn its place for real.
+
+       This scans the ACTUAL RENDERED PIXELS rather than recomputing each
+       control's expected top edge from the layout -- recomputing would only
+       re-derive the same formula the chain uses and could never observe a
+       chain/drawing mismatch. Each control's own fill/frame colour (MID or
+       INK) is unique to controls: the case, bezel, strapline, grille and
+       wordmark added by this task use BG/CASE_HI/CASE_LO/DARK and never MID
+       or INK, so restricting the scan to those two values finds each
+       control's true topmost pixel without the surrounding decoration
+       (which legitimately sits above chrome_controls_top -- it lives in the
+       gap between the screen and the control band on purpose) ever being
+       mistaken for one. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        const int W = 1264, H = 1680;
+        static uint8_t fb5[1264 * 1680];
+        config_resolve_profile(&p, &c, W, H);
+        memset(fb5, 0xFF, (size_t)W * H);
+        chrome_render(fb5, W, &p, &c.layout);
+
+        int top = chrome_controls_top(&c.layout, W, H);
+
+        struct { const char *name; int cx, half; } zones[] = {
+            /* dpad's column span (cx +- dr) covers both the vertical and the
+               narrower horizontal arm, so one probe finds whichever is
+               topmost. */
+            { "dpad",   c.layout.dpad_cx,   c.layout.dpad_r },
+            { "a",      c.layout.a_cx,      c.layout.a_r },
+            { "b",      c.layout.b_cx,      c.layout.b_r },
+            { "start",  c.layout.start_cx,  c.layout.start_w / 2 },
+            { "select", c.layout.select_cx, c.layout.select_w / 2 },
+            { "menu",   c.layout.menu_cx,   c.layout.menu_w / 2 },
+        };
+        for (size_t zi = 0; zi < sizeof zones / sizeof zones[0]; zi++) {
+            int x0 = zones[zi].cx * W / 1000 - zones[zi].half * W / 1000;
+            int x1 = zones[zi].cx * W / 1000 + zones[zi].half * W / 1000;
+            if (x0 < 0) x0 = 0;
+            if (x1 >= W) x1 = W - 1;
+
+            int found = -1;
+            for (int y = 0; y < H && found < 0; y++)
+                for (int x = x0; x <= x1; x++)
+                    if (fb5[(size_t)y * W + x] == 0xAA || fb5[(size_t)y * W + x] == 0x00) {
+                        found = y;
+                        break;
+                    }
+
+            /* POSITIVE CONTROL: a probe that silently found nothing would
+               make the CHECK below pass vacuously. */
+            if (found < 0)
+                fprintf(stderr, "  %s: no MID/INK pixel found in its column span\n",
+                        zones[zi].name);
+            CHECK(found >= 0);
+
+            if (found >= 0 && found < top)
+                fprintf(stderr, "  %s drawn at row %d, above chrome_controls_top=%d\n",
+                        zones[zi].name, found, top);
+            CHECK(found >= top);
+        }
+    }
+
+    /* The faceplate must be LABELLED. Before this task A, B, Start and Select
+       were four indistinguishable grey shapes. Labels are the difference
+       between a faceplate and a set of blobs, and text.c exists so they are
+       possible at all. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        const int W = 1264, H = 1680;
+        static uint8_t fb2[1264 * 1680];
+        config_resolve_profile(&p, &c, W, H);
+        memset(fb2, 0x7F, (size_t)W * H);
+        chrome_render(fb2, W, &p, &c.layout);
+
+        /* The chrome is drawn with KOBOY_REFRESH_FULL, i.e. GC16 and sixteen
+           levels. The four-level ceiling constrains the GAME RECT only, and
+           before this task the faceplate used three values out of sixteen. A
+           tonal ramp costs nothing at runtime. */
+        int distinct = 0;
+        int seen[256] = {0};
+        for (size_t i = 0; i < (size_t)W * H; i++)
+            if (!seen[fb2[i]]) { seen[fb2[i]] = 1; distinct++; }
+        CHECK(distinct >= 5);
+
+        /* Still never inside the game rect -- the contract that predates this
+           redraw and survives it. */
+        int intruded = 0;
+        for (int y = p.game_y; y < p.game_y + p.game_h; y++)
+            for (int x = p.game_x; x < p.game_x + p.game_w; x++)
+                if (fb2[y * W + x] != 0x7F) intruded++;
+        CHECK_EQ_INT(intruded, 0);
+
+        CHECK(pgm_compare_golden("chrome_1264x1680", fb2, W, H, W) == 1);
+    }
+
+    /* The battery lamp renders from a percentage, and an unknown battery (-1)
+       is a valid input rather than a crash: the SDL backend has no battery and
+       an unseen Kobo may not expose one either. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        const int W = 1264, H = 1680;
+        static uint8_t a[1264 * 1680], b[1264 * 1680];
+        config_resolve_profile(&p, &c, W, H);
+
+        memset(a, 0xFF, (size_t)W * H);
+        chrome_render(a, W, &p, &c.layout);
+        chrome_render_battery(a, W, &p, &c.layout, 100);
+
+        memset(b, 0xFF, (size_t)W * H);
+        chrome_render(b, W, &p, &c.layout);
+        chrome_render_battery(b, W, &p, &c.layout, 5);
+
+        /* Different levels must look different, or the indicator is a lie. */
+        CHECK(memcmp(a, b, (size_t)W * H) != 0);
+
+        /* Unknown must not write inside the game rect either. */
+        memset(a, 0x7F, (size_t)W * H);
+        chrome_render(a, W, &p, &c.layout);
+        chrome_render_battery(a, W, &p, &c.layout, -1);
+        int intruded = 0;
+        for (int y = p.game_y; y < p.game_y + p.game_h; y++)
+            for (int x = p.game_x; x < p.game_x + p.game_w; x++)
+                if (a[y * W + x] != 0x7F) intruded++;
+        CHECK_EQ_INT(intruded, 0);
+    }
+
+    /* NO NINTENDO MARKS. This is a public GPLv3 repo; the faceplate is an
+       homage to the industrial design and carries none of the word marks.
+       Asserted on the source rather than the pixels, because that is where a
+       future edit would add one. */
+    {
+        FILE *f = fopen("src/chrome.c", "rb");
+        CHECK(f != NULL);
+        static char src[200000];
+        size_t n = f ? fread(src, 1, sizeof src - 1, f) : 0;
+        if (f) fclose(f);
+        src[n] = 0;
+        for (size_t i = 0; i < n; i++)
+            if (src[i] >= 'a' && src[i] <= 'z') src[i] = (char)(src[i] - 32);
+        CHECK(strstr(src, "NINTENDO") == NULL);
+        CHECK(strstr(src, "GAME BOY") == NULL);
+        CHECK(strstr(src, "GAMEBOY") == NULL);
+    }
 })

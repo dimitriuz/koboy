@@ -119,6 +119,9 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
 {
     memset(panel, 0xFF, (size_t)stride * (size_t)ph);
     chrome_render(panel, stride, prof, layout);
+    /* Free, because the panel is already being repainted. */
+    chrome_render_battery(panel, stride, prof, layout,
+                          pf->battery_percent ? pf->battery_percent(pf->ctx) : -1);
     pf->blit_gray8(pf->ctx, panel, pw, ph, stride, 0, 0);
     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
 }
@@ -414,6 +417,9 @@ int main(int argc, char **argv)
     if (!panel) { fatal("out of memory"); pf->shutdown(pf->ctx); return 1; }
     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
     chrome_render(panel, panel_stride, &prof, &cfg.layout);
+    /* Free, because the panel is already being repainted. */
+    chrome_render_battery(panel, panel_stride, &prof, &cfg.layout,
+                          pf->battery_percent ? pf->battery_percent(pf->ctx) : -1);
     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
 
