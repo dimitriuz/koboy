@@ -195,6 +195,16 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     unzip -qo "$ZF" .adds/koboy/README-fbneo.txt -d "$rdf"
     grep -qF -- "1.0.0.03" "$rdf/.adds/koboy/README-fbneo.txt" \
         || { echo "FAIL: arcade README does not state the FBNeo version the set must match"; rm -rf "$rdf"; exit 1; }
+    # And the one save mechanism an arcade board HAS. There is no .srm here --
+    # retro_get_memory_size(SAVE_RAM) is 0 on all 227 boards measured -- so
+    # high scores go through FBNeo's own hiscore.dat, which koboy enables
+    # (src/core.c) and the owner supplies. Named by FILE and by DIRECTORY,
+    # because "put it in the system folder" is not actionable: the core looks
+    # in a `fbneo` SUBdirectory that does not exist until someone makes it.
+    grep -qF -- "hiscore.dat" "$rdf/.adds/koboy/README-fbneo.txt" \
+        || { echo "FAIL: arcade README does not name hiscore.dat"; rm -rf "$rdf"; exit 1; }
+    grep -qF -- ".adds/koboy/fbneo/" "$rdf/.adds/koboy/README-fbneo.txt" \
+        || { echo "FAIL: arcade README does not say where hiscore.dat goes"; rm -rf "$rdf"; exit 1; }
     rm -rf "$rdf"
     echo "ok: arcade packaging"
 fi

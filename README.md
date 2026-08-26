@@ -84,8 +84,16 @@ and do smear, exactly as a Game Boy platformer does.
 is Coin and `START` is Start. The faceplate's `B` and `A` are the board's
 buttons 1 and 2, and the two extra discs are buttons 3 and 4.
 
-**Saving.** An arcade board has no battery, so there is no `.srm`. Use the
-in-game MENU's save states.
+**Saving.** An arcade board has no battery, so there is no `.srm` --- the
+in-game MENU's save states are the way to keep a game mid-play.
+
+**High scores** are the other half, and they need one file you supply. Put
+`hiscore.dat` (FinalBurn Neo's own, matching this build) in
+`.adds/koboy/fbneo/` --- create the directory. koboy turns the feature on for
+you; without the file it is simply inert. With it, each board writes
+`.adds/koboy/fbneo/<board>.hi` when you leave the game and reads it back next
+time. Verified on Ms. Pac-Man: after a 220-point game the attract screen reads
+`HIGH SCORE 220` on the next launch, where a fresh install shows a blank.
 
 ## BIOS files
 

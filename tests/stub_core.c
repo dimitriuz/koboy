@@ -23,6 +23,12 @@ int stub_saw_mix_frames_disabled = 0;
    -- see core.c). Empty means the key was refused. */
 char stub_pm_video_scale[32] = "";
 char stub_pm_palette[64] = "";
+/* And the arcade one, recorded the same way and for a sharper reason: an
+   arcade board has NO battery save at all, so FinalBurn Neo's hiscore.dat
+   mechanism is the only thing that persists anything, and the code that reads
+   this option leaves it OFF when the frontend refuses the query. "koboy said
+   something" would not distinguish the two answers that matter. */
+char stub_fbneo_hiscores[32] = "";
 int stub_saw_can_dupe = 0;
 int stub_unknown_option_refused = 0;
 
@@ -155,6 +161,11 @@ void retro_set_environment(retro_environment_t cb)
     if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vs) && vs.value) {
         strncpy(stub_pm_video_scale, vs.value, sizeof stub_pm_video_scale - 1);
         stub_pm_video_scale[sizeof stub_pm_video_scale - 1] = 0;
+    }
+    struct retro_variable vh = { "fbneo-hiscores", NULL };
+    if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vh) && vh.value) {
+        strncpy(stub_fbneo_hiscores, vh.value, sizeof stub_fbneo_hiscores - 1);
+        stub_fbneo_hiscores[sizeof stub_fbneo_hiscores - 1] = 0;
     }
     struct retro_variable vp = { "pokemini_palette", NULL };
     if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vp) && vp.value) {

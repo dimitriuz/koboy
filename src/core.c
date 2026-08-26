@@ -148,6 +148,30 @@ static bool env_cb(unsigned cmd, void *data)
         if (!strcmp(v->key, "pokemini_palette")) {
             v->value = "Monochrome Vector"; return true;
         }
+
+        /* AN ARCADE BOARD HAS NO BATTERY, so the high-score table is the only
+           thing it can persist -- retro_get_memory_size(RETRO_MEMORY_SAVE_RAM)
+           is 0 on all 227 romsets in the author's set, measured, and there is
+           no .srm for any of them. FinalBurn Neo keeps scores through its own
+           hiscore.dat mechanism instead, and this answer is what turns that
+           on. It is not a preference: the core's OWN default for this option
+           is "enabled", but the code that reads it (retro_common.cpp,
+           check_variables) leaves EnableHiscores at its BSS zero when the
+           frontend REFUSES the query -- and refusing every unrecognised key
+           is exactly what the line below this block does. So a front-end that
+           says nothing gets the opposite of the core's stated default, and
+           the only way to ask for the documented behaviour is to ask for it
+           by name.
+
+           Safe when the owner has not installed hiscore.dat: HiscoreInit
+           opens <system_dir>/fbneo/hiscore.dat, finds nothing, and the
+           feature is inert. With it present, scores are written to
+           <save_dir>/fbneo/<board>.hi -- a directory the core creates itself
+           -- and read back on the next load. koboy answers both directory
+           queries with save_dir (above), so both live under .adds/koboy/fbneo/. */
+        if (!strcmp(v->key, "fbneo-hiscores")) {
+            v->value = "enabled"; return true;
+        }
         v->value = NULL; return false;
     }
     case RETRO_ENVIRONMENT_SET_ROTATION: {

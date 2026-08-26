@@ -232,6 +232,23 @@ TEST_MAIN({
        with a frontend that answers every key with something. */
     if (unknown_refused) CHECK_EQ_INT(*unknown_refused, 1);
 
+    /* THE ARCADE HIGH-SCORE SWITCH, and it is not a preference. An arcade
+       board has no battery: retro_get_memory_size(RETRO_MEMORY_SAVE_RAM) is 0
+       on all 227 romsets measured, so there is no .srm for any of them and
+       FinalBurn Neo's hiscore.dat mechanism is the ONLY thing that persists
+       anything at all. The core's own stated default for `fbneo-hiscores` is
+       "enabled" -- and the code that reads it leaves the flag at its BSS zero
+       when the frontend REFUSES the query, which is what koboy does with
+       every key it has no opinion about. So saying nothing gets the opposite
+       of the documented default, and this assertion is what stops that
+       reverting. Verified end to end on the real core: with it answered,
+       Ms. Pac-Man writes fbneo/mspacman.hi on unload and its attract screen
+       reads back HIGH SCORE 220 on the next launch; without it, nothing is
+       written. Exact string, because the core matches it with strcmp. */
+    const char *fb_hi = (const char *)dlsym(so, "stub_fbneo_hiscores");
+    CHECK(fb_hi != NULL);
+    if (fb_hi) CHECK(strcmp(fb_hi, "enabled") == 0);
+
     /* THE SAVE DIRECTORY, which for one whole system IS the save path.
        Neo Geo Pocket cartridges save into flash rather than into
        RETRO_MEMORY_SAVE_RAM -- measured with scripts/probe_core.c:
