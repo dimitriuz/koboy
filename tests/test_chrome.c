@@ -440,21 +440,27 @@ TEST_MAIN({
             { 1404, 1872 },   /* Elipsa family, 10.3"                    */
             { 1440, 1920 },   /* Sage, 8"                                */
         };
-        /* TWO layouts, not one: the shipped default (no C button) and the
-           one config_face_c_for_rom builds for a Pokemon Mini. The first is
-           what catches an UNGUARDED c term -- with c_r == 0 an unconditional
-           `perm(c_cy) - perm(c_r)` computes 0 - 0 = 0 and collapses the
-           whole reservation, so this loop would report 0 against an expected
-           1018. The second is what proves the term is honoured when the
-           button really is there. */
-        koboy_config cfgs[2];
+        /* THREE layouts, not one: the shipped default (no extra discs), the
+           one config_extra_buttons_for_rom builds for a Pokemon Mini (one
+           disc) and the one it builds for a WonderSwan (two). The first is
+           what catches an UNGUARDED extra term -- with r == 0 an
+           unconditional `perm(cy) - perm(r)` computes 0 - 0 = 0 and collapses
+           the whole reservation, so this loop would report 0 against an
+           expected 1018. The other two are what prove the term is honoured
+           when the discs really are there, at both array lengths. */
+        koboy_config cfgs[3];
         config_defaults(&cfgs[0]);
         config_defaults(&cfgs[1]);
-        config_face_c_for_rom(&cfgs[1].layout, "Pokemon Tetris.min");
-        CHECK_EQ_INT(cfgs[0].layout.c_r, 0);
-        CHECK(cfgs[1].layout.c_r > 0);
+        config_defaults(&cfgs[2]);
+        config_extra_buttons_for_rom(&cfgs[1].layout, "Pokemon Tetris.min");
+        config_extra_buttons_for_rom(&cfgs[2].layout, "GunPey.ws");
+        CHECK_EQ_INT(cfgs[0].layout.extra[0].r, 0);
+        CHECK(cfgs[1].layout.extra[0].r > 0);
+        CHECK_EQ_INT(cfgs[1].layout.extra[1].r, 0);
+        CHECK(cfgs[2].layout.extra[0].r > 0);
+        CHECK(cfgs[2].layout.extra[1].r > 0);
 
-        for (size_t li = 0; li < 2; li++) {
+        for (size_t li = 0; li < 3; li++) {
         const koboy_layout *l = &cfgs[li].layout;
 
         for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
@@ -469,11 +475,12 @@ TEST_MAIN({
             int b_top = l->b_cy * H / 1000 - l->b_r * W / 1000;
             if (b_top < expected) expected = b_top;
             /* Conditional here for the same reason it is conditional in
-               chrome.c: c_r == 0 means there is no third button, not a
-               button of zero radius sitting at the top of the panel. */
-            if (l->c_r > 0) {
-                int c_top = l->c_cy * H / 1000 - l->c_r * W / 1000;
-                if (c_top < expected) expected = c_top;
+               chrome.c: r == 0 means an empty slot, not a button of zero
+               radius sitting at the top of the panel. */
+            for (int e = 0; e < KOBOY_MAX_EXTRA_BTNS; e++) {
+                if (l->extra[e].r <= 0) continue;
+                int e_top = l->extra[e].cy * H / 1000 - l->extra[e].r * W / 1000;
+                if (e_top < expected) expected = e_top;
             }
             int start_top = l->start_cy * H / 1000 - (l->start_h * H / 1000) / 2;
             if (start_top < expected) expected = start_top;
@@ -542,14 +549,17 @@ TEST_MAIN({
             koboy_layout l;
             memset(&l, 0, sizeof l);
             /* Parked: negligible footprint, far down the panel. */
-            l.dpad_cx = l.a_cx = l.b_cx = l.c_cx = l.start_cx = l.select_cx = l.menu_cx = 500;
-            l.dpad_cy = l.a_cy = l.b_cy = l.c_cy = l.start_cy = l.select_cy = l.menu_cy = 990;
-            /* c_r is parked NON-zero, unlike the parked cy/r pairs above,
-               because zero is this field's "absent" sentinel: a parked 0
-               would make the term skip entirely rather than lose on merit,
-               and the six non-c cases would then be testing a layout with no
-               C button in it at all. */
-            l.dpad_r = l.a_r = l.b_r = l.c_r = 5;
+            l.dpad_cx = l.a_cx = l.b_cx = l.start_cx = l.select_cx = l.menu_cx = 500;
+            l.dpad_cy = l.a_cy = l.b_cy = l.start_cy = l.select_cy = l.menu_cy = 990;
+            l.extra[0].cx = l.extra[1].cx = 500;
+            l.extra[0].cy = l.extra[1].cy = 990;
+            /* The extra radii are parked NON-zero, unlike the parked cy/r
+               pairs above, because zero is that field's "absent" sentinel: a
+               parked 0 would make the term skip entirely rather than lose on
+               merit, and the six non-extra cases would then be testing a
+               layout with no extra disc in it at all. */
+            l.dpad_r = l.a_r = l.b_r = 5;
+            l.extra[0].r = l.extra[1].r = 5;
             l.start_w = l.select_w = l.menu_w = 10;
             l.start_h = l.select_h = l.menu_h = 10;
 
@@ -557,7 +567,11 @@ TEST_MAIN({
             if (cases[ci].dpad)   { l.dpad_cy   = 300; l.dpad_r   = 80; }
             if (cases[ci].a)      { l.a_cy      = 300; l.a_r      = 80; }
             if (cases[ci].b)      { l.b_cy      = 300; l.b_r      = 80; }
-            if (cases[ci].c)      { l.c_cy      = 300; l.c_r      = 80; }
+            /* Case "c" drives extra[1], the SECOND slot, deliberately: a loop
+               that only ever read extra[0] would pass every other assertion
+               in this file, because the Pokemon Mini -- the only system with
+               exactly one disc -- fills slot 0. */
+            if (cases[ci].c)      { l.extra[1].cy = 300; l.extra[1].r = 80; }
             if (cases[ci].start)  { l.start_cy  = 300; l.start_h  = 160; }
             if (cases[ci].select) { l.select_cy = 300; l.select_h = 160; }
             if (cases[ci].menu)   { l.menu_cy   = 300; l.menu_h   = 160; }
@@ -573,7 +587,7 @@ TEST_MAIN({
             } else if (cases[ci].b) {
                 expected = l.b_cy * H / 1000 - l.b_r * W / 1000;
             } else if (cases[ci].c) {
-                expected = l.c_cy * H / 1000 - l.c_r * W / 1000;
+                expected = l.extra[1].cy * H / 1000 - l.extra[1].r * W / 1000;
             } else if (cases[ci].start) {
                 expected = l.start_cy * H / 1000 - (l.start_h * H / 1000) / 2;
             } else if (cases[ci].select) {
@@ -644,131 +658,237 @@ TEST_MAIN({
         CHECK(pgm_compare_golden("chrome_1264x1680", fb2, W, H, W) == 1);
     }
 
-    /* THE THIRD FACE BUTTON. A Pokemon Mini has A, B and C; the core binds C
-       to RETRO_DEVICE_ID_JOYPAD_R, and a button that exists in the hardware
-       and is unreachable on koboy is the exact bug the Game & Watch layout
-       was just fixed for. So it has to be DRAWN (an invisible live zone is
-       the same bug wearing a hat), it has to be drawn ONLY for the system
-       that has one, and it has to clear everything already on the faceplate.
+    /* THE EXTRA DISCS. A Pokemon Mini has A, B and C; a WonderSwan has an A
+       and a B that land on L1/R1 once its screen is rotated. In both cases a
+       button that exists in the hardware and is unreachable on koboy is the
+       exact bug the Game & Watch layout was fixed for, twice over now. So
+       each disc has to be DRAWN (an invisible live zone is the same bug
+       wearing a hat), drawn ONLY for the system that has it, and it has to
+       clear everything already on the faceplate.
 
        Note what the golden-image check immediately above already proves on
        its own: the Game Boy faceplate is unchanged, pixel for pixel, by all
-       of this. That golden was rendered before the C button existed. */
+       of this. That golden was rendered before any extra disc existed. */
     {
         static const int panels[][2] = {
             { 1072, 1448 }, { 1264, 1680 }, { 1404, 1872 }, { 1440, 1920 },
         };
+        /* Both systems, with the geometry each core actually reports -- 96x64
+           for the Pokemon Mini (measured through probe_core with the core's
+           video scale at 1x, not the 384x256 its internal 4x upscaler reports
+           by default) and 224x224 for the WonderSwan (its MAX, which is square
+           because the core reports one geometry that both orientations fit
+           inside). `n` is how many discs that system must have; asserting the
+           count is what stops a one-disc renderer from passing the WonderSwan
+           case by drawing only extra[0]. */
+        static const struct { const char *rom; int n, gw, gh; } sys[] = {
+            { "/roms/Pokemon Tetris.min", 1,  96,  64 },
+            { "/roms/GunPey.ws",          2, 224, 224 },
+        };
         static uint8_t fbc[1440 * 1920], fbn[1440 * 1920];
 
+        for (size_t si = 0; si < sizeof sys / sizeof sys[0]; si++)
         for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
             const int W = panels[pi][0], H = panels[pi][1];
 
             koboy_config cc; config_defaults(&cc);
-            config_face_c_for_rom(&cc.layout, "/roms/Pokemon Tetris.min");
+            config_extra_buttons_for_rom(&cc.layout, sys[si].rom);
             koboy_config cn; config_defaults(&cn);
-            config_face_c_for_rom(&cn.layout, "/roms/Metroid.nes");   /* clears it */
-            CHECK_EQ_INT(cn.layout.c_r, 0);
+            config_extra_buttons_for_rom(&cn.layout, "/roms/Metroid.nes"); /* clears */
+            CHECK_EQ_INT(cn.layout.extra[0].r, 0);
+            CHECK_EQ_INT(cn.layout.extra[1].r, 0);
+
+            int have = 0;
+            for (int e = 0; e < KOBOY_MAX_EXTRA_BTNS; e++)
+                if (cc.layout.extra[e].r > 0) have++;
+            CHECK_EQ_INT(have, sys[si].n);
 
             koboy_profile p;
-            /* 96x64 is the Pokemon Mini's real panel, measured through
-               probe_core with the core's video scale at 1x -- not the
-               384x256 its internal 4x upscaler reports by default. */
-            CHECK(config_resolve_profile(&p, &cc, W, H, 96, 64, 96, 64));
+            CHECK(config_resolve_profile(&p, &cc, W, H,
+                                         sys[si].gw, sys[si].gh,
+                                         sys[si].gw, sys[si].gh));
 
             memset(fbc, 0x7F, (size_t)W * H);
             chrome_render(fbc, W, &p, &cc.layout);
             memset(fbn, 0x7F, (size_t)W * H);
             chrome_render(fbn, W, &p, &cn.layout);
 
-            int ccx = cc.layout.c_cx * W / 1000;
-            int ccy = cc.layout.c_cy * H / 1000;
-            int cr  = cc.layout.c_r  * W / 1000;
             int case_v = fbc[2 * (size_t)W + 2];
 
-            /* Drawn, and drawn as a BUTTON: clearly darker than the case, by
-               more than one ~17-level GC16 step, exactly like A and B. A
-               probe just inside the rim rather than dead centre, because the
-               centre is where the label's ink lands. */
-            int rim_v = fbc[(size_t)ccy * W + (ccx + cr * 4 / 5)];
-            CHECK(case_v - rim_v > 17);
+            for (int e = 0; e < sys[si].n; e++) {
+                int ccx = cc.layout.extra[e].cx * W / 1000;
+                int ccy = cc.layout.extra[e].cy * H / 1000;
+                int cr  = cc.layout.extra[e].r  * W / 1000;
 
-            /* ...and NOT drawn for a system with no C button. Without this
-               the assertion above is equally consistent with a faceplate
-               that grew a third disc for every game. */
-            CHECK_EQ_INT(fbn[(size_t)ccy * W + (ccx + cr * 4 / 5)], case_v);
+                /* Drawn, and drawn as a BUTTON: clearly darker than the case,
+                   by more than one ~17-level GC16 step, exactly like A and B.
+                   A probe just inside the rim rather than dead centre,
+                   because the centre is where the label's ink lands. */
+                int rim_v = fbc[(size_t)ccy * W + (ccx + cr * 4 / 5)];
+                CHECK(case_v - rim_v > 17);
 
-            /* LABELLED. The disc must contain ink -- an unlabelled disc in a
-               cluster of three is the "indistinguishable grey shapes"
-               problem text.c was added to solve. */
-            int ink = 0;
-            for (int y = ccy - cr; y <= ccy + cr; y++)
-                for (int x = ccx - cr; x <= ccx + cr; x++)
-                    if (fbc[(size_t)y * W + x] == 0x00) ink++;
-            CHECK(ink > 0);
+                /* ...and NOT drawn for a system with no extra discs. Without
+                   this the assertion above is equally consistent with a
+                   faceplate that grew these discs for every game. */
+                CHECK_EQ_INT(fbn[(size_t)ccy * W + (ccx + cr * 4 / 5)], case_v);
 
-            /* CLEARANCES, re-derived here rather than trusted from the
-               comment in config.c: clear of the A disc, clear of the MENU
-               pill below it, and KOBOY_CHROME_MARGIN clear of the panel's
-               right edge. */
-            int acx = cc.layout.a_cx * W / 1000, acy = cc.layout.a_cy * H / 1000;
-            int ar  = cc.layout.a_r  * W / 1000;
-            long dx = acx - ccx, dy = acy - ccy;
-            CHECK(dx * dx + dy * dy > (long)(ar + cr) * (ar + cr));
-            int menu_top = cc.layout.menu_cy * H / 1000
-                         - (cc.layout.menu_h * H / 1000) / 2;
-            CHECK(ccy + cr < menu_top);
-            CHECK(W - (ccx + cr) >= KOBOY_CHROME_MARGIN);
+                /* LABELLED. The disc must contain ink -- an unlabelled disc in
+                   a cluster is the "indistinguishable grey shapes" problem
+                   text.c was added to solve. */
+                int ink = 0;
+                for (int y = ccy - cr; y <= ccy + cr; y++)
+                    for (int x = ccx - cr; x <= ccx + cr; x++)
+                        if (fbc[(size_t)y * W + x] == 0x00) ink++;
+                CHECK(ink > 0);
 
-            /* And it never reaches into the game rect, the contract every
-               other drawn control on this faceplate is held to. */
+                /* CLEARANCES, re-derived here rather than trusted from the
+                   comment in config.c: clear of the A disc, of the B disc, of
+                   the d-pad, of the START/SELECT/MENU row below, and
+                   KOBOY_CHROME_MARGIN clear of the panel's right edge. */
+                int acx = cc.layout.a_cx * W / 1000, acy = cc.layout.a_cy * H / 1000;
+                int ar  = cc.layout.a_r  * W / 1000;
+                long dx = acx - ccx, dy = acy - ccy;
+                CHECK(dx * dx + dy * dy > (long)(ar + cr) * (ar + cr));
+
+                int bcx = cc.layout.b_cx * W / 1000, bcy = cc.layout.b_cy * H / 1000;
+                int br  = cc.layout.b_r  * W / 1000;
+                dx = bcx - ccx; dy = bcy - ccy;
+                CHECK(dx * dx + dy * dy > (long)(br + cr) * (br + cr));
+
+                int dcx = cc.layout.dpad_cx * W / 1000;
+                int dcy = cc.layout.dpad_cy * H / 1000;
+                int dr  = cc.layout.dpad_r  * W / 1000;
+                dx = dcx - ccx; dy = dcy - ccy;
+                CHECK(dx * dx + dy * dy > (long)(dr + cr) * (dr + cr));
+
+                int row_top = cc.layout.menu_cy * H / 1000
+                            - (cc.layout.menu_h * H / 1000) / 2;
+                CHECK(ccy + cr < row_top);
+                CHECK(W - (ccx + cr) >= KOBOY_CHROME_MARGIN);
+
+                /* And it never reaches into the game rect, the contract every
+                   other drawn control on this faceplate is held to. */
+                CHECK(ccy - cr >= p.game_y + p.game_h ||
+                      ccx - cr >= p.game_x + p.game_w ||
+                      ccx + cr <  p.game_x);
+            }
+
+            /* Discs must not overlap EACH OTHER either -- two live zones on
+               the same pixels report two buttons for one finger. */
+            if (sys[si].n == 2) {
+                int x0 = cc.layout.extra[0].cx * W / 1000;
+                int y0 = cc.layout.extra[0].cy * H / 1000;
+                int r0 = cc.layout.extra[0].r  * W / 1000;
+                int x1 = cc.layout.extra[1].cx * W / 1000;
+                int y1 = cc.layout.extra[1].cy * H / 1000;
+                int r1 = cc.layout.extra[1].r  * W / 1000;
+                long dx = x0 - x1, dy = y0 - y1;
+                CHECK(dx * dx + dy * dy > (long)(r0 + r1) * (r0 + r1));
+                /* Different BITS, too: two discs reporting the same button is
+                   a copy-paste away and looks fine on the panel. */
+                CHECK(cc.layout.extra[0].bit != cc.layout.extra[1].bit);
+            }
+
+            /* Nothing painted over the game rect at all, for any of them. */
             int intruded = 0;
             for (int y = p.game_y; y < p.game_y + p.game_h; y++)
                 for (int x = p.game_x; x < p.game_x + p.game_w; x++)
                     if (fbc[(size_t)y * W + x] != 0x7F) intruded++;
             CHECK_EQ_INT(intruded, 0);
+
+            /* The extras must not have MOVED chrome_controls_top: that is
+               what lets these systems get the same game rect and resolved
+               scale they would have had with no extra discs at all. */
+            CHECK_EQ_INT(chrome_controls_top(KOBOY_LAYOUT_DMG, &cc.layout, W, H),
+                         chrome_controls_top(KOBOY_LAYOUT_DMG, &cn.layout, W, H));
         }
     }
 
-    /* config_face_c_for_rom itself: which extensions get a C, and -- the half
-       that is easy to leave out -- that it CLEARS. The config outlives one
-       game (MENU -> CHOOSE ROM reuses it), so a setter that only ever set
-       would leave a live, drawn C button on the next Game Boy. */
+    /* config_extra_buttons_for_rom itself: which extensions get which discs,
+       and -- the half that is easy to leave out -- that it CLEARS. The config
+       outlives one game (MENU -> CHOOSE ROM reuses it), so a setter that only
+       ever set would leave live, drawn discs on the next Game Boy. */
     {
         koboy_config c; config_defaults(&c);
-        CHECK_EQ_INT(c.layout.c_r, 0);
+        CHECK_EQ_INT(c.layout.extra[0].r, 0);
 
-        config_face_c_for_rom(&c.layout, "Pokemon Tetris.min");
-        CHECK(c.layout.c_r > 0);
-        int set_cx = c.layout.c_cx, set_cy = c.layout.c_cy, set_r = c.layout.c_r;
+        config_extra_buttons_for_rom(&c.layout, "Pokemon Tetris.min");
+        CHECK(c.layout.extra[0].r > 0);
+        CHECK_EQ_INT(c.layout.extra[1].r, 0);
+        /* The BIT is the core's, and it is asserted rather than assumed: the
+           Pokemon Mini core binds C to RETRO_DEVICE_ID_JOYPAD_R. */
+        CHECK_EQ_INT(c.layout.extra[0].bit, KOBOY_BTN_R1);
+        CHECK(!strcmp(c.layout.extra[0].label, "C"));
+        int set_cx = c.layout.extra[0].cx, set_cy = c.layout.extra[0].cy;
+        int set_r  = c.layout.extra[0].r;
 
         /* Idempotent: a second call for the same ROM must not drift. */
-        config_face_c_for_rom(&c.layout, "Pokemon Tetris.min");
-        CHECK_EQ_INT(c.layout.c_cx, set_cx);
-        CHECK_EQ_INT(c.layout.c_cy, set_cy);
-        CHECK_EQ_INT(c.layout.c_r,  set_r);
+        config_extra_buttons_for_rom(&c.layout, "Pokemon Tetris.min");
+        CHECK_EQ_INT(c.layout.extra[0].cx, set_cx);
+        CHECK_EQ_INT(c.layout.extra[0].cy, set_cy);
+        CHECK_EQ_INT(c.layout.extra[0].r,  set_r);
 
         /* Case-insensitive, like every other extension test in this suite. */
-        config_face_c_for_rom(&c.layout, "/roms/POKEMON TETRIS.MIN");
-        CHECK_EQ_INT(c.layout.c_r, set_r);
-        config_face_c_for_rom(&c.layout, "/roms/Pokemon Tetris.MiN");
-        CHECK_EQ_INT(c.layout.c_r, set_r);
+        config_extra_buttons_for_rom(&c.layout, "/roms/POKEMON TETRIS.MIN");
+        CHECK_EQ_INT(c.layout.extra[0].r, set_r);
+        config_extra_buttons_for_rom(&c.layout, "/roms/Pokemon Tetris.MiN");
+        CHECK_EQ_INT(c.layout.extra[0].r, set_r);
 
-        /* Cleared for everything else, from a SET state each time. */
+        /* A WONDERSWAN GETS TWO, on both extensions and in both cases, and
+           they are L1 and R1 -- the bits beetle-wswan's rotated key map puts
+           the console's own A and B on. Asserting the BITS is the point: two
+           discs in the right places reporting the wrong buttons look exactly
+           like two working discs. */
+        static const char *ws[] = {
+            "GunPey.ws", "/roms/Final Fantasy.wsc",
+            "/roms/GUNPEY.WS", "/roms/FINAL FANTASY.WSC",
+        };
+        for (size_t i = 0; i < sizeof ws / sizeof ws[0]; i++) {
+            config_extra_buttons_for_rom(&c.layout, ws[i]);
+            CHECK(c.layout.extra[0].r > 0);
+            CHECK(c.layout.extra[1].r > 0);
+            CHECK_EQ_INT(c.layout.extra[0].bit, KOBOY_BTN_L1);
+            CHECK_EQ_INT(c.layout.extra[1].bit, KOBOY_BTN_R1);
+            CHECK(!strcmp(c.layout.extra[0].label, "L1"));
+            CHECK(!strcmp(c.layout.extra[1].label, "R1"));
+        }
+
+        /* A NEO GEO POCKET gets NONE -- its stick, A, B and OPTION are exactly
+           what the DMG faceplate already draws. Checked from a SET state, so
+           this is the clearing path too. */
+        static const char *ngp[] = { "Sonic.ngp", "/roms/METAL SLUG.NGC" };
+        for (size_t i = 0; i < sizeof ngp / sizeof ngp[0]; i++) {
+            config_extra_buttons_for_rom(&c.layout, "GunPey.ws");
+            CHECK(c.layout.extra[0].r > 0);
+            config_extra_buttons_for_rom(&c.layout, ngp[i]);
+            CHECK_EQ_INT(c.layout.extra[0].r, 0);
+            CHECK_EQ_INT(c.layout.extra[1].r, 0);
+        }
+
+        /* Cleared for everything else, from a SET state each time -- and from
+           the TWO-disc state as well as the one-disc one, so a clear that
+           only ever emptied slot 0 is caught. */
         static const char *others[] = {
             "Metroid.nes", "Tetris.gb", "Zelda.gbc", "BALL.mgw",
             "no-extension", "Tetris.minx", "Tetris.mi", "",
+            "GunPey.wsx", "GunPey.w", "Sonic.ngpx",
         };
         for (size_t i = 0; i < sizeof others / sizeof others[0]; i++) {
-            config_face_c_for_rom(&c.layout, "Pokemon Tetris.min");
-            CHECK(c.layout.c_r > 0);
-            config_face_c_for_rom(&c.layout, others[i]);
-            CHECK_EQ_INT(c.layout.c_cx, 0);
-            CHECK_EQ_INT(c.layout.c_cy, 0);
-            CHECK_EQ_INT(c.layout.c_r,  0);
+            config_extra_buttons_for_rom(&c.layout, "GunPey.ws");
+            CHECK(c.layout.extra[0].r > 0);
+            CHECK(c.layout.extra[1].r > 0);
+            config_extra_buttons_for_rom(&c.layout, others[i]);
+            for (int e = 0; e < KOBOY_MAX_EXTRA_BTNS; e++) {
+                CHECK_EQ_INT(c.layout.extra[e].cx, 0);
+                CHECK_EQ_INT(c.layout.extra[e].cy, 0);
+                CHECK_EQ_INT(c.layout.extra[e].r,  0);
+                CHECK_EQ_INT(c.layout.extra[e].bit, 0);
+            }
         }
-        config_face_c_for_rom(&c.layout, "Pokemon Tetris.min");
-        config_face_c_for_rom(&c.layout, NULL);
-        CHECK_EQ_INT(c.layout.c_r, 0);
+        config_extra_buttons_for_rom(&c.layout, "GunPey.ws");
+        config_extra_buttons_for_rom(&c.layout, NULL);
+        CHECK_EQ_INT(c.layout.extra[0].r, 0);
+        CHECK_EQ_INT(c.layout.extra[1].r, 0);
     }
 
     /* The battery lamp renders from a percentage, and an unknown battery (-1)

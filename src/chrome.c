@@ -209,12 +209,13 @@ int chrome_controls_top(int layout_mode, const koboy_layout *l,
     top = min2(top, dcy - arm / 2 - 1);        /* horizontal arm + its frame   */
     top = min2(top, perm(l->a_cy, H) - perm(l->a_r, W));
     top = min2(top, perm(l->b_cy, H) - perm(l->b_r, W));
-    /* The third face button, and the ONLY conditional term in this chain.
-       c_r == 0 means the loaded system has no C button (koboy.h), and an
-       unguarded term would then compute 0 - 0 = 0 and collapse the whole
-       reservation to the top of the panel for every DMG title. The guard is
-       the presence test, not a clamp. */
-    if (l->c_r > 0) top = min2(top, perm(l->c_cy, H) - perm(l->c_r, W));
+    /* The extra discs, and the ONLY conditional terms in this chain. An empty
+       slot has r == 0 (koboy.h), and an unguarded term would then compute
+       0 - 0 = 0 and collapse the whole reservation to the top of the panel
+       for every DMG title. The guard is the presence test, not a clamp. */
+    for (int i = 0; i < KOBOY_MAX_EXTRA_BTNS; i++)
+        if (l->extra[i].r > 0)
+            top = min2(top, perm(l->extra[i].cy, H) - perm(l->extra[i].r, W));
     top = min2(top, perm(l->start_cy, H) - perm(l->start_h, H) / 2);
     top = min2(top, perm(l->select_cy, H) - perm(l->select_h, H) / 2);
     top = min2(top, perm(l->menu_cy, H) - perm(l->menu_h, H) / 2);
@@ -850,14 +851,19 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     disc(fb, stride, W, H, acx, acy, ar, BUTTON);
     disc(fb, stride, W, H, bcx, bcy, br, BUTTON);
 
-    /* C, when the loaded system has one -- a Pokemon Mini and nothing else so
-       far (koboy.h). Drawn with the LCD strip's draw_face_button rather than
-       the bare disc + below-label pair A and B use, because there is no case
-       band under it to put a label in: the Start/Select/MENU row begins 30
-       permille below its bottom edge. Same shape, same tone, label inside. */
-    if (l->c_r > 0)
-        draw_face_button(fb, stride, W, H, perm(l->c_cx, W), perm(l->c_cy, H),
-                         perm(l->c_r, W), "C");
+    /* The extra discs, for the systems whose hardware has controls this
+       faceplate's original did not (koboy.h): a Pokemon Mini's C, a
+       WonderSwan's rotated A/B pair. Drawn
+       with the LCD strip's draw_face_button rather than the bare disc +
+       below-label pair A and B use, because none of these has a case band
+       under it to put a label in -- the Start/Select/MENU row begins 30
+       permille below the lowest of them. Same shape, same tone, label
+       inside. */
+    for (int i = 0; i < KOBOY_MAX_EXTRA_BTNS; i++)
+        if (l->extra[i].r > 0)
+            draw_face_button(fb, stride, W, H,
+                             perm(l->extra[i].cx, W), perm(l->extra[i].cy, H),
+                             perm(l->extra[i].r, W), l->extra[i].label);
 
     /* Labels: A, B, Start and Select centred BELOW their control, exactly
        where the real DMG puts them -- before this task the four were

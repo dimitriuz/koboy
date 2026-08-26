@@ -232,6 +232,33 @@ TEST_MAIN({
        with a frontend that answers every key with something. */
     if (unknown_refused) CHECK_EQ_INT(*unknown_refused, 1);
 
+    /* THE SAVE DIRECTORY, which for one whole system IS the save path.
+       Neo Geo Pocket cartridges save into flash rather than into
+       RETRO_MEMORY_SAVE_RAM -- measured with scripts/probe_core.c:
+       retro_get_memory_size(SAVE_RAM) is 0 for every one of the author's ten
+       .ngp titles, on both available cores -- and RACE writes that flash
+       itself, into whatever directory this query answers. So koboy's answer
+       has to be the save_dir it was opened with, exactly, and it has to be an
+       answer rather than a refusal. Nothing else in this suite pins it: every
+       other system reaches disk through sram.c, and a refused query here
+       would lose every Neo Geo Pocket save while looking identical to a
+       working build.
+
+       The SYSTEM directory is asserted alongside it because core.c answers
+       both from the same field, and a core that asks for one and not the
+       other is common (RACE asks only for the save directory, beetle-ngp for
+       both). "build" is the save_dir this test's core_open was given. */
+    const char *sdir = (const char *)dlsym(so, "stub_save_dir");
+    const char *ydir = (const char *)dlsym(so, "stub_system_dir");
+    int *sdir_ans = (int *)dlsym(so, "stub_save_dir_answered");
+    int *ydir_ans = (int *)dlsym(so, "stub_system_dir_answered");
+    CHECK(sdir != NULL); CHECK(ydir != NULL);
+    CHECK(sdir_ans != NULL); CHECK(ydir_ans != NULL);
+    if (sdir_ans) CHECK_EQ_INT(*sdir_ans, 1);
+    if (ydir_ans) CHECK_EQ_INT(*ydir_ans, 1);
+    if (sdir) CHECK(strcmp(sdir, "build") == 0);
+    if (ydir) CHECK(strcmp(ydir, "build") == 0);
+
     /* Save states round-trip through the core. Deltas, not absolute values:
        the stub's counters are process-wide statics, so an absolute == 1
        would be fragile against test order/reruns within the same binary. */

@@ -293,10 +293,20 @@ cp build/stub_core.so "$d/gambatte_libretro.so"
 cp build/stub_core.so "$d/gw_libretro.so"
 cp build/stub_core.so "$d/fceumm_libretro.so"
 cp build/stub_core.so "$d/pokemini_libretro.so"
+cp build/stub_core.so "$d/mednafen_wswan_libretro.so"
+cp build/stub_core.so "$d/race_libretro.so"
 printf '\0' > "$d/GAME.mgw"
 printf '\0' > "$d/GAME.gb"
 printf '\0' > "$d/GAME.nes"
 printf '\0' > "$d/GAME.min"
+printf '\0' > "$d/GAME.ws"
+# UPPERCASE on purpose, and only here: the device partition is FAT32 and a
+# real collection carries mixed case (the author's Game Gear directory has
+# both .gg and .GG). config_core_for_rom lowercases the candidate, not the
+# pattern, and this is the only place that claim is exercised end to end.
+printf '\0' > "$d/GAME.WSC"
+printf '\0' > "$d/GAME.ngp"
+printf '\0' > "$d/GAME.NGC"
 
 # .mgw with no --core: the Game & Watch core, resolved beside the binary.
 rc=0
@@ -337,8 +347,8 @@ echo "$out" | grep -qx "koboy: core $d/fceumm_libretro.so" \
     || { echo "FAIL: .nes did not select the NES core"; rm -rf "$d"; exit 1; }
 echo "$out" | grep -q "LCD layout" \
     && { echo "FAIL: a .nes was given the LCD layout"; rm -rf "$d"; exit 1; }
-echo "$out" | grep -q "with a C button" \
-    && { echo "FAIL: a .nes grew a third face button"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "extra buttons" \
+    && { echo "FAIL: a .nes grew an extra face button"; rm -rf "$d"; exit 1; }
 echo "ok: .nes selects fceumm_libretro.so and keeps the DMG faceplate"
 
 rc=0
@@ -354,9 +364,50 @@ echo "$out" | grep -q "LCD layout" \
 # it, both unit tested -- but main.c has to ASK, and a missed call there is
 # invisible to every unit test and shows up on the device as a Pokemon Mini
 # with no C button. The .gb and .nes runs either side are the control.
-echo "$out" | grep -qx "koboy: faceplate DMG, with a C button" \
+echo "$out" | grep -qx "koboy: faceplate DMG, extra buttons: C" \
     || { echo "FAIL: a .min did not get the C button"; rm -rf "$d"; exit 1; }
 echo "ok: .min selects pokemini_libretro.so and keeps the DMG faceplate"
+
+# .ws/.wsc and .ngp/.ngc, the two systems after those. Same shape and the
+# same reason, plus one this pair adds: TWO of the four names are UPPERCASE,
+# which is the only end-to-end exercise of the case-insensitive match that
+# a FAT32 partition makes mandatory.
+for pair in "GAME.ws mednafen_wswan_libretro.so" \
+            "GAME.WSC mednafen_wswan_libretro.so" \
+            "GAME.ngp race_libretro.so" \
+            "GAME.NGC race_libretro.so"; do
+    rom=${pair%% *}; want=${pair##* }
+    rc=0
+    out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/$rom" \
+            --panel 1264x1680 --frames 10 2>&1) || rc=$?
+    echo "$out"
+    [ "$rc" -eq 0 ] || { echo "FAIL: $rom run exited $rc"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -qx "koboy: core $d/$want" \
+        || { echo "FAIL: $rom did not select $want"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -q "LCD layout" \
+        && { echo "FAIL: $rom was given the LCD layout"; rm -rf "$d"; exit 1; }
+    echo "ok: $rom selects $want and keeps the DMG faceplate"
+done
+
+# THE WONDERSWAN'S TWO EXTRA DISCS, end to end, with the .ngp run as the
+# control. beetle-wswan's rotated key map puts the console's own A and B on
+# JOYPAD_L / JOYPAD_R, so without these two a portrait title cannot be
+# started -- measured: `Kaze no Klonoa - Moonlight Museum` in portrait
+# responds to START and JOYPAD_L and to nothing else. config.c decides them
+# and chrome.c draws them, both unit tested, but main.c has to ASK.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.ws" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: .ws faceplate run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: faceplate DMG, extra buttons: L1 R1" \
+    || { echo "FAIL: a .ws did not get the L1/R1 pair"; rm -rf "$d"; exit 1; }
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.ngp" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: .ngp faceplate run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "extra buttons" \
+    && { echo "FAIL: a .ngp grew extra face buttons"; rm -rf "$d"; exit 1; }
+echo "ok: .ws gets L1/R1 and .ngp gets neither"
 
 # ------------------------------------------- battery saves, for a NES cart
 #

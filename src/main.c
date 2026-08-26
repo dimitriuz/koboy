@@ -928,9 +928,9 @@ int main(int argc, char **argv)
     cfg.layout_mode = config_layout_for_rom(cfg.rom_path);
     /* And the button complement, from the same extension and for the same
        reasons -- see config.h. Must come before config_resolve_profile too:
-       chrome_controls_top counts a C button when there is one, and the
+       chrome_controls_top counts the extra discs when there are any, and the
        profile is resolved against what that returns. */
-    config_face_c_for_rom(&cfg.layout, cfg.rom_path);
+    config_extra_buttons_for_rom(&cfg.layout, cfg.rom_path);
 
     if (!cfg.core_explicit) {
         const char *want = config_core_for_rom(cfg.rom_path);
@@ -942,7 +942,7 @@ int main(int argc, char **argv)
             snprintf(cfg.core_path, sizeof cfg.core_path, "%s", want);
     }
 
-    /* Logged, not silent: four cores ship now and "which one did it pick?" is
+    /* Logged, not silent: six cores ship now and "which one did it pick?" is
        otherwise unanswerable on a device with no terminal, where the only
        symptom of a wrong pick is a core that rejects the ROM. */
     say("koboy: core %s\n", cfg.core_path);
@@ -951,8 +951,21 @@ int main(int argc, char **argv)
        lines later; the only symptom of this file forgetting to ask for it is
        a button that quietly is not there, which is indistinguishable from a
        system that never had one. tests/smoke_host.sh reads this line. */
-    say("koboy: faceplate %s%s\n", layout_name(cfg.layout_mode),
-        cfg.layout.c_r > 0 ? ", with a C button" : "");
+    {
+        /* Every extra disc by NAME, not a yes/no: two systems now add discs
+           and they add different ones, so "with a C button" could no longer
+           tell a WonderSwan's L1/R1 pair from a missing pair. Built into one
+           buffer so the line stays one say() call, which is what
+           tests/smoke_host.sh matches against. */
+        char extras[64] = "";
+        for (int i = 0; i < KOBOY_MAX_EXTRA_BTNS; i++)
+            if (cfg.layout.extra[i].r > 0) {
+                size_t n = strlen(extras);
+                snprintf(extras + n, sizeof extras - n, "%s%s",
+                         n ? " " : ", extra buttons: ", cfg.layout.extra[i].label);
+            }
+        say("koboy: faceplate %s%s\n", layout_name(cfg.layout_mode), extras);
+    }
 
     char err[512];
     koboy_core *core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);

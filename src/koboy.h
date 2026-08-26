@@ -145,23 +145,53 @@ typedef struct {
     uint32_t wfm_fast, wfm_gray, wfm_full;
 } koboy_profile;
 
+/* One EXTRA disc on the DMG faceplate: a control the Game Boy did not have,
+   drawn only for the systems that do.
+
+   `r == 0` means "this slot is empty", which is what every consumer --
+   chrome_controls_top, the DMG renderer, input.c's hit test -- guards on, so
+   a zero is never a degenerate zero-radius control sitting at the panel
+   origin (in_circle uses <=, and (0,0) is a coordinate a real finger can
+   produce).
+
+   This started as one hardcoded c_cx/c_cy/c_r triple for the Pokemon Mini's
+   third face button and became an array the moment a second system needed a
+   different set: WonderSwan needs TWO, and they are not a "C". A table
+   rather than a widening row of parallel fields, for the reason
+   config_core_for_rom's table gives -- every extra button needs a position, a
+   bit AND a label, and a struct keeps those three together where a reviewer
+   can see that they agree.
+
+   `bit` is a KOBOY_BTN_* mask and is read off the CORE's own input
+   descriptors, never chosen: the Pokemon Mini core advertises its C as
+   RETRO_DEVICE_ID_JOYPAD_R, and beetle-wswan advertises the WonderSwan's A
+   and B as JOYPAD_L / JOYPAD_R in its rotated key map. `label` is what the
+   disc says, which is not always what the bit is called -- a Pokemon Mini's
+   R1 disc says "C" because that is what is moulded on the hardware. */
+typedef struct {
+    int      cx, cy, r;      /* permille, like every other control here */
+    uint16_t bit;            /* KOBOY_BTN_*: what a press reports */
+    char     label[4];       /* drawn inside the disc */
+} koboy_extra_btn;
+
+/* Two, because that is what the widest system so far (WonderSwan: L1 and R1)
+   needs and because the DMG faceplate has room for exactly two more discs
+   without moving the Game Boy's own controls or pushing chrome_controls_top
+   up into the game rect. Raising it means finding more space, not just
+   changing this number. */
+#define KOBOY_MAX_EXTRA_BTNS 2
+
 /* Control geometry in permille of the panel, so one layout fits every device.
 
-   c_* is the THIRD face button, and c_r == 0 means the loaded system does not
-   have one -- which is every system but the Pokemon Mini, so the DMG
-   faceplate a Game Boy sees is unchanged pixel for pixel. It is set from the
-   ROM's extension by config_face_c_for_rom, the same way the core and the
-   layout mode are, and it exists because the Pokemon Mini genuinely has an A,
-   a B and a C: the core binds C to RETRO_DEVICE_ID_JOYPAD_R, and a hardware
-   button koboy cannot reach is the exact bug the Game & Watch layout was just
-   fixed for. Every consumer -- chrome_controls_top, the DMG renderer, input.c's
-   hit test -- is guarded on c_r > 0, so a zero here is "absent", never a
-   degenerate zero-radius control. */
+   `extra` is filled from the ROM's extension by config_extra_buttons_for_rom,
+   the same way the core and the layout mode are, and it is empty for the Game
+   Boy -- so the DMG faceplate a Game Boy sees is unchanged pixel for pixel,
+   which tests/test_chrome.c's golden image is what actually proves. */
 typedef struct {
     int dpad_cx, dpad_cy, dpad_r;
     int a_cx, a_cy, a_r;
     int b_cx, b_cy, b_r;
-    int c_cx, c_cy, c_r;
+    koboy_extra_btn extra[KOBOY_MAX_EXTRA_BTNS];
     int start_cx, start_cy, start_w, start_h;
     int select_cx, select_cy, select_w, select_h;
     int menu_cx, menu_cy, menu_w, menu_h;

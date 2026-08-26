@@ -97,6 +97,47 @@ TEST_MAIN({
        would offer a row that cannot load. */
     CHECK_EQ_INT(romlist_is_rom("Super Mario Bros. 2 (Japan) (En).fds"), 0);
 
+    /* .ws/.wsc and .ngp/.ngc, and the negatives matter here more than
+       anywhere else in this list because the four extensions overlap each
+       other: ".ws" is a strict PREFIX of ".wsc", and ".ngp" and ".ngc" differ
+       by one character from each other and from ".ng". A matcher that
+       compared too few characters, or that tested ".ws" before ".wsc" with a
+       shared length, passes half of these and fails the other half. */
+    CHECK_EQ_INT(romlist_is_rom("GunPey (Japan).ws"), 1);
+    CHECK_EQ_INT(romlist_is_rom("GUNPEY (JAPAN).WS"), 1);
+    CHECK_EQ_INT(romlist_is_rom("GunPey (Japan).Ws"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Final Fantasy (Japan).wsc"), 1);
+    CHECK_EQ_INT(romlist_is_rom("FINAL FANTASY (JAPAN).WSC"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Final Fantasy (Japan).WsC"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Samurai Shodown! (Japan, Europe) (En,Ja).ngp"), 1);
+    CHECK_EQ_INT(romlist_is_rom("SAMURAI SHODOWN!.NGP"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Metal Slug - 1st Mission (World) (En,Ja).ngc"), 1);
+    CHECK_EQ_INT(romlist_is_rom("METAL SLUG - 1ST MISSION.NGC"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Metal Slug.NgC"), 1);
+    /* boot.rom is already ruled out above; boot1.rom sits beside it in BOTH
+       of the author's WonderSwan directories and is the one a `.rom` rule
+       written from a single example would miss. */
+    CHECK_EQ_INT(romlist_is_rom("boot1.rom"), 0);
+    /* Superstring, prefix, and the three extensions the cores accept but
+       koboy deliberately does not list (.pc2, .ngpc, .npc -- no collection
+       the author has uses them, and a row that has never been loaded is an
+       untested claim). */
+    CHECK_EQ_INT(romlist_is_rom("GunPey.wsx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("GunPey.w"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Final Fantasy.wscx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.ngpx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.ng"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.ngcx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Something.pc2"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Something.ngpc"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Something.npc"), 0);
+    /* The flash saves the Neo Geo Pocket cores write next to nothing in
+       particular -- RACE emits "<rom>.ngf" and beetle-ngp "<rom>.flash" into
+       the save directory, which on a default install IS the install
+       directory. Neither may ever list as a game. */
+    CHECK_EQ_INT(romlist_is_rom("Samurai Shodown!.ngf"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Samurai Shodown!.flash"), 0);
+
     /* The short-name guard's failure mode, made deterministic instead of
        ASan-only: if ends_with_ci's `if (lx > ls) return false;` is removed,
        the backward read for suffix ".gb" walks off the front of "b" -- but

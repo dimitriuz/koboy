@@ -31,23 +31,33 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    /* One list, four systems. .mgw is Game & Watch content for gw-libretro,
+    /* One list, six systems. .mgw is Game & Watch content for gw-libretro,
        .nes is a NES cartridge for fceumm, .min is a Pokemon Mini cartridge
-       for PokeMini; none of them is a Game Boy ROM. The browser lists them
-       all because the core is chosen from the extension at load time
-       (config_core_for_rom, whose table this list must stay in step with),
-       so a mixed roms/ directory is one list, not two.
+       for PokeMini, .ws/.wsc are WonderSwan and WonderSwan Color for
+       beetle-wswan, .ngp/.ngc are Neo Geo Pocket and Pocket Color for RACE;
+       none of them is a Game Boy ROM. The browser lists them all because the
+       core is chosen from the extension at load time (config_core_for_rom,
+       whose table this list must stay in step with), so a mixed roms/
+       directory is one list, not two.
+
+       Case-insensitive, and not hypothetically: the device partition is
+       FAT32, and the author's own Game Gear directory carries both .gg and
+       .GG. Any of these six can arrive in any case.
 
        What is NOT here matters as much as what is. A real NES collection
        carries .pal palette files beside the ROMs (262 of them in the
-       author's, against 5263 .nes) and a Pokemon Mini one carries boot.rom;
-       neither is content, both would list as selectable "games", and both
-       are excluded by this being an allowlist of extensions rather than a
-       blocklist of the ones seen so far. */
+       author's, against 5263 .nes); a Pokemon Mini one carries boot.rom; and
+       BOTH a WonderSwan and a Neo Geo Pocket collection carry boot.rom and
+       boot1.rom (five such files across the author's four directories). None
+       is content, all would list as selectable "games", and all are excluded
+       by this being an allowlist of extensions rather than a blocklist of the
+       ones seen so far. */
     return ends_with_ci(name, ".gb") || ends_with_ci(name, ".gbc")
         || ends_with_ci(name, ".mgw")
         || ends_with_ci(name, ".nes")
-        || ends_with_ci(name, ".min");
+        || ends_with_ci(name, ".min")
+        || ends_with_ci(name, ".ws")  || ends_with_ci(name, ".wsc")
+        || ends_with_ci(name, ".ngp") || ends_with_ci(name, ".ngc");
 }
 
 /* Row order, in one place: kind first (the enum's own order -- ".." above

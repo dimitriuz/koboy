@@ -146,11 +146,12 @@ void config_defaults(koboy_config *c)
 
 /* ------------------------------------------------------ core by extension
  *
- * koboy ships four cores now, and which one a file needs is knowable from its
+ * koboy ships six cores now, and which one a file needs is knowable from its
  * name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats .min,
- * and gambatte eats everything else this project lists. The browser hands
- * main.c a path long after the config was read, so this cannot live in
- * config_load -- it is a pure function of the ROM name, called at load time.
+ * beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, and gambatte eats
+ * everything else this project lists. The browser hands main.c a path long
+ * after the config was read, so this cannot live in config_load -- it is a
+ * pure function of the ROM name, called at load time.
  *
  * Its own case-insensitive suffix match rather than strcasecmp, and rather
  * than borrowing romlist.c's: config is the lower layer of the two (romlist
@@ -182,6 +183,18 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
     { ".mgw", "gw_libretro.so"       },   /* Game & Watch, gw-libretro   */
     { ".nes", "fceumm_libretro.so"   },   /* NES, libretro-fceumm        */
     { ".min", "pokemini_libretro.so" },   /* Pokemon Mini, libretro/PokeMini */
+    /* One core per SYSTEM FAMILY, not per extension: beetle-wswan reports
+       `ws|wsc|pc2` and RACE reports `ngp|ngc|ngpc|npc`, so the mono and the
+       Color halves of each family are the same .so. Two rows each rather
+       than a prefix match, because this table is the thing a reviewer reads
+       against romlist_is_rom's list and a wildcard would break that
+       correspondence. .pc2/.ngpc/.npc are left out for the same reason .fds
+       is: no evidence anyone's collection uses them, and an extension the
+       browser lists but nobody has ever loaded is an untested claim. */
+    { ".ws",  "mednafen_wswan_libretro.so" }, /* WonderSwan, beetle-wswan */
+    { ".wsc", "mednafen_wswan_libretro.so" }, /* WonderSwan Color         */
+    { ".ngp", "race_libretro.so"       },  /* Neo Geo Pocket, libretro/RACE */
+    { ".ngc", "race_libretro.so"       },  /* Neo Geo Pocket Color        */
 };
 
 const char *config_core_for_rom(const char *rom_path)
@@ -205,53 +218,110 @@ int config_layout_for_rom(const char *rom_path)
        ROM has been chosen, and it is also the layout every UI screen (MAIN
        MENU, RECENT, ALL GAMES) is drawn over.
 
-       .mgw is still the ONLY LCD extension, and the new systems are
-       deliberately not in that company: a NES pad and a Pokemon Mini are
-       both d-pad + face buttons + START/SELECT machines whose buttons are
-       physical, not drawn into the artwork, which is exactly what the DMG
-       faceplate already draws and hit-tests. LCD exists because a Game &
-       Watch unit draws its own controls; neither of these does. */
+       .mgw is still the ONLY LCD extension, and none of the systems added
+       since is in that company: a NES pad, a Pokemon Mini, a WonderSwan and
+       a Neo Geo Pocket are all d-pad + face buttons + START/SELECT machines
+       whose buttons are physical, not drawn into the artwork, which is
+       exactly what the DMG faceplate already draws and hit-tests. LCD exists
+       because a Game & Watch unit draws its own controls; none of these
+       does. */
     if (!rom_path || !*rom_path) return KOBOY_LAYOUT_DMG;
     return ends_with_ext(rom_path, ".mgw") ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
 }
 
-void config_face_c_for_rom(koboy_layout *l, const char *rom_path)
+void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
 {
     if (!l) return;
     /* Cleared, not left alone, on every call: this runs once per ROM load and
        the config it edits outlives a single game (MENU -> CHOOSE ROM reuses
-       it), so "set it for .min" without "clear it for everything else" would
-       leave a C button drawn and live on the next Game Boy. */
-    l->c_cx = l->c_cy = l->c_r = 0;
+       it), so "set them for .min" without "clear them for everything else"
+       would leave a C button drawn and live on the next Game Boy. */
+    memset(l->extra, 0, sizeof l->extra);
     if (!rom_path || !*rom_path) return;
-    if (!ends_with_ext(rom_path, ".min")) return;
 
-    /* The one position on the DMG faceplate that fits a third disc, and it is
-       tight enough to be worth writing down. A and B are fixed (they are the
-       Game Boy's, and this must not move them), the Start/Select/MENU row owns
-       everything from 892 permille down, and the panel needs
-       KOBOY_CHROME_MARGIN clear on the right. That leaves the pocket below A
-       and right of B, and only at a smaller radius than A/B's 85.
+    /* The two positions on the DMG faceplate that fit another disc, and they
+       are tight enough to be worth writing down once here rather than twice
+       in the tables below.
 
-       Checked on all four supported panels at once -- gap to the A disc, gap
-       to the MENU pill above the row, and the right margin:
+       SLOT R -- (905, 790) r 70, the pocket below A and right of B. A and B
+       are fixed (they are the Game Boy's, and this must not move them), the
+       Start/Select/MENU row owns everything from 892 permille down, and the
+       panel needs KOBOY_CHROME_MARGIN clear on the right. That leaves this
+       pocket, and only at a smaller radius than A/B's 85. Checked on all four
+       supported panels -- gap to the A disc, gap to the MENU pill, right
+       margin:
          Clara  1072x1448  A-gap 25px  MENU-gap 75px  right margin 27px
          Libra2 1264x1680  A-gap 28    MENU-gap 84    right margin 33
          Elipsa 1404x1872  A-gap 30    MENU-gap 95    right margin 36
          Sage   1440x1920  A-gap 32    MENU-gap 98    right margin 37
-       It also leaves chrome_controls_top exactly where it was on all four
-       (879 / 1018 / 1135 / 1164), so a Pokemon Mini gets the same game rect
-       and the same resolved scale it would have got without a C button,
-       and tests/test_chrome.c re-derives those clearances rather than
+
+       SLOTS L/R-STACKED -- (470, 700) and (470, 830), both r 62, the column
+       between the d-pad's right edge and B's left edge. Two discs need two
+       places and the pocket above holds one, so the WonderSwan pair goes
+       here instead of splitting across the faceplate. Clearances at the
+       WORST panel of the four (1072x1448, the narrowest): 40px to the d-pad,
+       47px to B, 56px between the two discs, 26px to the START row.
+
+       Neither slot becomes chrome_controls_top's binding minimum on any of
+       the four panels (the minimum stays 879 / 1018 / 1135 / 1164, set by the
+       A disc), which is what lets these systems get the same game rect and
+       resolved scale they would have got with no extra buttons at all.
+       tests/test_chrome.c re-derives every one of those numbers rather than
        trusting this comment.
 
-       The label goes INSIDE this disc, not below it like A and B: at 790
-       permille there is no case band under it to put one in -- the MENU row
-       starts 30 permille further down. chrome.c reuses the LCD strip's
-       draw_face_button for exactly that reason. */
-    l->c_cx = 905;
-    l->c_cy = 790;
-    l->c_r  = 70;
+       Labels go INSIDE these discs, not below them like A and B: there is no
+       case band under any of the three to put one in. chrome.c reuses the LCD
+       strip's draw_face_button for exactly that reason. */
+
+    /* A Pokemon Mini genuinely has an A, a B and a C, and the core binds C to
+       RETRO_DEVICE_ID_JOYPAD_R -- bit 11, KOBOY_BTN_R1 -- and advertises it as
+       "C" in its own input descriptors. The mapping is read off the core, not
+       chosen. */
+    if (ends_with_ext(rom_path, ".min")) {
+        l->extra[0] = (koboy_extra_btn){ 905, 790, 70, KOBOY_BTN_R1, "C" };
+        return;
+    }
+
+    /* A WonderSwan needs TWO, and it needs them because of the ROTATION, not
+       because the hardware has six face buttons. The console has two 4-way
+       cursors (X1-X4, Y1-Y4) plus A, B and START, and many titles are played
+       with the unit turned on its side -- beetle-wswan's default
+       `wswan_rotate_display = manual` toggles that on SELECT, which the DMG
+       faceplate already has, and `wswan_rotate_keymap = auto` swaps the
+       retropad map to match.
+
+       In that ROTATED map (third_party/wswan/libretro.c, map[1]) the retropad
+       d-pad drives the Y cursor -- the one under the thumb in that grip, so
+       koboy's d-pad is right -- but the WonderSwan's own A and B move to
+       JOYPAD_L and JOYPAD_R. MEASURED, not read: `Kaze no Klonoa - Moonlight
+       Museum` in portrait responds to exactly two inputs, START and JOYPAD_L,
+       and JOYPAD_L is the hardware's A button. Without these two discs that
+       title cannot be started at all -- the same "a button that exists in the
+       hardware and is unreachable on koboy" bug the Game & Watch layout and
+       then the Pokemon Mini each spent a round on.
+
+       L1 above R1 because that is where they sit once the console is turned:
+       A ends up above B. What is still NOT reachable is the rotated map's
+       X-cursor up/right, which land on JOYPAD_Y and JOYPAD_X -- there is no
+       room for two more discs, and no title measured so far needs them. */
+    if (ends_with_ext(rom_path, ".ws") || ends_with_ext(rom_path, ".wsc")) {
+        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_L1, "L1" };
+        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_R1, "R1" };
+        return;
+    }
+
+    /* A Neo Geo Pocket has a stick, A, B and OPTION and nothing else, so it
+       needs NO extra disc -- recorded here as a deliberate empty case rather
+       than left to the fall-through, because "we checked and it needs none"
+       and "we never looked" are indistinguishable otherwise.
+
+       RACE binds OPTION to JOYPAD_START, and the two face buttons CROSSED:
+       NGP A -> JOYPAD_B, NGP B -> JOYPAD_A (third_party/race/libretro/
+       libretro.c's descriptors say so in as many words). That reads like a
+       bug and is not one. On the hardware A is the LEFT button and B the
+       right; on koboy's faceplate the B disc is left of the A disc, exactly
+       as on a Game Boy. So the crossing puts each label where the finger
+       expects it, and undoing it would be the bug. */
 }
 
 /* ------------------------------------------------- install-relative paths

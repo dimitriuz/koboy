@@ -699,15 +699,60 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("METROID.ne"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("TETRIS.minx"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("TETRIS.mi"), "gambatte_libretro.so") == 0);
-        /* The four cores are four DISTINCT files. A table whose entries had
+        /* .ws/.wsc -> beetle-wswan, .ngp/.ngc -> RACE. TWO extensions each,
+           because both systems have a mono and a Color half that one core
+           covers, and the pair has to answer the SAME file -- a table row
+           copy-pasted with the wrong .so would still satisfy every
+           per-extension assertion on its own. The uppercase variants are not
+           decoration either: the device partition is FAT32 and the author's
+           own collections carry mixed case. */
+        CHECK(strcmp(config_core_for_rom("GUNPEY.ws"),
+                     "mednafen_wswan_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("GUNPEY.WS"),
+                     "mednafen_wswan_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/wonderswancolor/Final Fantasy (Japan).wsc"),
+                     "mednafen_wswan_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("FF.WSC"),
+                     "mednafen_wswan_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("GUNPEY.ws"), config_core_for_rom("FF.wsc")) == 0);
+
+        CHECK(strcmp(config_core_for_rom("SONIC.ngp"), "race_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("SONIC.NGP"), "race_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/ngpc/Metal Slug - 1st Mission (World) (En,Ja).ngc"),
+                     "race_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("MS.NGC"), "race_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ngp"), config_core_for_rom("A.ngc")) == 0);
+
+        /* Superstring and prefix for all four, same trap as above. `.ngc` and
+           `.ngp` are one character apart from each other AND from `.ng`, and
+           `.ws` is a strict prefix of `.wsc` -- the case a suffix matcher gets
+           wrong by comparing too few characters. */
+        CHECK(strcmp(config_core_for_rom("A.wsx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.w"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.wscx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ngpx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ng"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ngcx"), "gambatte_libretro.so") == 0);
+        /* Not the WonderSwan's third extension, nor the Neo Geo Pocket's
+           other two: the cores accept .pc2/.ngpc/.npc but no collection the
+           author has uses them, and an extension the browser lists but nobody
+           has ever loaded is an untested claim. Asserted so that adding one
+           later is a deliberate act. */
+        CHECK(strcmp(config_core_for_rom("A.pc2"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ngpc"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.npc"),  "gambatte_libretro.so") == 0);
+
+        /* The six cores are six DISTINCT files. A table whose entries had
            been copy-pasted with one name left unchanged would satisfy every
            individual assertion above and still ship a .min to fceumm. */
-        CHECK(strcmp(config_core_for_rom("A.nes"), config_core_for_rom("A.min")) != 0);
-        CHECK(strcmp(config_core_for_rom("A.nes"), config_core_for_rom("A.mgw")) != 0);
-        CHECK(strcmp(config_core_for_rom("A.min"), config_core_for_rom("A.mgw")) != 0);
-        CHECK(strcmp(config_core_for_rom("A.nes"), config_core_for_rom("A.gb")) != 0);
-        CHECK(strchr(config_core_for_rom("A.nes"), '/') == NULL);
-        CHECK(strchr(config_core_for_rom("A.min"), '/') == NULL);
+        static const char *distinct[] = { "A.gb", "A.mgw", "A.nes", "A.min",
+                                          "A.ws", "A.ngp" };
+        for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
+            for (size_t j = i + 1; j < sizeof distinct / sizeof distinct[0]; j++)
+                CHECK(strcmp(config_core_for_rom(distinct[i]),
+                             config_core_for_rom(distinct[j])) != 0);
+        for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
+            CHECK(strchr(config_core_for_rom(distinct[i]), '/') == NULL);
 
         /* The result must stay SLASHLESS. config_join_sibling passes any name
            containing a slash through verbatim, so a "cores/gw_libretro.so"

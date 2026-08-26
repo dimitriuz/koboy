@@ -191,67 +191,115 @@ TEST_MAIN({
         input_destroy(fy);
     }
 
-    /* THE THIRD FACE BUTTON, on the DMG faceplate. A Pokemon Mini has A, B
-       and C, and the core maps C to RETRO_DEVICE_ID_JOYPAD_R -- bit 11,
-       KOBOY_BTN_R1 (third_party/pokemini/libretro/libretro.c, which also
-       advertises it as "C" in its own input descriptors). The whole button
-       word is compared each time, not just the bit under test: a zone that
-       also fires its neighbour is worse than one that fires nothing. */
+    /* THE EXTRA DISCS, on the DMG faceplate. Two systems have controls the
+       Game Boy did not, and each disc's BIT is read off its core's own input
+       descriptors rather than chosen here: the Pokemon Mini's C is
+       RETRO_DEVICE_ID_JOYPAD_R -- bit 11, KOBOY_BTN_R1
+       (third_party/pokemini/libretro/libretro.c), and beetle-wswan's rotated
+       key map puts the WonderSwan's A and B on JOYPAD_L / JOYPAD_R -- bits 10
+       and 11 (third_party/wswan/libretro.c, map[1]). The whole button word is
+       compared each time, not just the bit under test: a zone that also fires
+       its neighbour is worse than one that fires nothing. */
     {
-        koboy_config c; config_defaults(&c);
-        config_face_c_for_rom(&c.layout, "/roms/Pokemon Tetris.min");
-        koboy_profile p;
-        /* 96x64: the Pokemon Mini's real geometry with the core's internal
-           video scale at 1x, measured through scripts/probe_core.c. */
-        CHECK(config_resolve_profile(&p, &c, 1264, 1680, 96, 64, 96, 64));
-        const int W = p.panel_w, H = p.panel_h;
+        /* One system per row, with the geometry its core really reports: the
+           Pokemon Mini's 96x64 (internal video scale at 1x, measured through
+           scripts/probe_core.c) and the WonderSwan's square 224x224 max. */
+        static const struct { const char *rom; int n, gw, gh; uint16_t bits[2]; } sys[] = {
+            { "/roms/Pokemon Tetris.min", 1,  96,  64, { KOBOY_BTN_R1, 0 } },
+            { "/roms/GunPey.ws",          2, 224, 224, { KOBOY_BTN_L1, KOBOY_BTN_R1 } },
+        };
 
-        int ccx = c.layout.c_cx * W / 1000;
-        int ccy = c.layout.c_cy * H / 1000;
-        int cr  = c.layout.c_r  * W / 1000;
+        for (size_t si = 0; si < sizeof sys / sizeof sys[0]; si++) {
+            koboy_config c; config_defaults(&c);
+            config_extra_buttons_for_rom(&c.layout, sys[si].rom);
+            koboy_profile p;
+            CHECK(config_resolve_profile(&p, &c, 1264, 1680,
+                                         sys[si].gw, sys[si].gh,
+                                         sys[si].gw, sys[si].gh));
+            const int W = p.panel_w, H = p.panel_h;
 
-        koboy_input *ci = input_create(&c, &p);
-        CHECK(ci != NULL);
-        input_set_touch_transform(ci, W - 1, H - 1, false, false, false);
+            koboy_input *ci = input_create(&c, &p);
+            CHECK(ci != NULL);
+            input_set_touch_transform(ci, W - 1, H - 1, false, false, false);
 
-        /* The centre, and each of the four extremes one pixel inside the rim.
-           A centre-only probe passes against a zone hit-tested from the wrong
-           radius, or from A's centre with a bigger radius -- the rim is what
-           pins the geometry. */
-        CHECK_EQ_INT(touch_probe(ci, ccx, ccy), KOBOY_BTN_R1);
-        CHECK_EQ_INT(touch_probe(ci, ccx - cr + 1, ccy), KOBOY_BTN_R1);
-        CHECK_EQ_INT(touch_probe(ci, ccx + cr - 1, ccy), KOBOY_BTN_R1);
-        CHECK_EQ_INT(touch_probe(ci, ccx, ccy - cr + 1), KOBOY_BTN_R1);
-        CHECK_EQ_INT(touch_probe(ci, ccx, ccy + cr - 1), KOBOY_BTN_R1);
-        /* Just outside is nothing at all -- not A, not B, not MENU. */
-        CHECK_EQ_INT(touch_probe(ci, ccx + cr + 2, ccy), 0);
-        CHECK_EQ_INT(touch_probe(ci, ccx, ccy - cr - 2), 0);
-        /* And A still answers A: a C zone that swallowed its neighbour would
-           be a regression dressed as a feature. */
-        CHECK_EQ_INT(touch_probe(ci, c.layout.a_cx * W / 1000,
-                                     c.layout.a_cy * H / 1000), KOBOY_BTN_A);
-        CHECK_EQ_INT(touch_probe(ci, c.layout.b_cx * W / 1000,
-                                     c.layout.b_cy * H / 1000), KOBOY_BTN_B);
-        input_destroy(ci);
+            for (int e = 0; e < sys[si].n; e++) {
+                CHECK_EQ_INT(c.layout.extra[e].bit, sys[si].bits[e]);
+                int ccx = c.layout.extra[e].cx * W / 1000;
+                int ccy = c.layout.extra[e].cy * H / 1000;
+                int cr  = c.layout.extra[e].r  * W / 1000;
+                uint16_t want = sys[si].bits[e];
 
-        /* THE CONTROL, and it is the one that matters most: on a system with
-           no C button the SAME coordinate must report nothing. A zero-radius
-           circle at (0,0) is not the answer either -- in_circle uses <=, so an
-           unguarded zone would report R1 for a touch at exactly the panel
-           origin, which is a real coordinate a real finger can produce. Both
-           are checked. */
-        koboy_config g; config_defaults(&g);
-        config_face_c_for_rom(&g.layout, "/roms/Metroid.nes");
-        CHECK_EQ_INT(g.layout.c_r, 0);
-        koboy_profile gp;
-        CHECK(config_resolve_profile(&gp, &g, 1264, 1680,
-                                     KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
-        koboy_input *gi = input_create(&g, &gp);
-        CHECK(gi != NULL);
-        input_set_touch_transform(gi, W - 1, H - 1, false, false, false);
-        CHECK_EQ_INT(touch_probe(gi, ccx, ccy) & KOBOY_BTN_R1, 0);
-        CHECK_EQ_INT(touch_probe(gi, 0, 0) & KOBOY_BTN_R1, 0);
-        input_destroy(gi);
+                /* The centre, and each of the four extremes one pixel inside
+                   the rim. A centre-only probe passes against a zone hit-
+                   tested from the wrong radius, or from A's centre with a
+                   bigger radius -- the rim is what pins the geometry. */
+                CHECK_EQ_INT(touch_probe(ci, ccx, ccy), want);
+                CHECK_EQ_INT(touch_probe(ci, ccx - cr + 1, ccy), want);
+                CHECK_EQ_INT(touch_probe(ci, ccx + cr - 1, ccy), want);
+                CHECK_EQ_INT(touch_probe(ci, ccx, ccy - cr + 1), want);
+                CHECK_EQ_INT(touch_probe(ci, ccx, ccy + cr - 1), want);
+                /* Just outside is nothing at all -- not A, not B, not MENU,
+                   and not the OTHER extra disc. */
+                CHECK_EQ_INT(touch_probe(ci, ccx + cr + 2, ccy), 0);
+            }
+
+            /* A and B still answer A and B: an extra zone that swallowed a
+               neighbour would be a regression dressed as a feature. */
+            CHECK_EQ_INT(touch_probe(ci, c.layout.a_cx * W / 1000,
+                                         c.layout.a_cy * H / 1000), KOBOY_BTN_A);
+            CHECK_EQ_INT(touch_probe(ci, c.layout.b_cx * W / 1000,
+                                         c.layout.b_cy * H / 1000), KOBOY_BTN_B);
+            input_destroy(ci);
+
+            /* THE CONTROL, and it is the one that matters most: on a system
+               with no extra discs the SAME coordinates must report nothing. A
+               zero-radius circle at (0,0) is not the answer either -- in_circle
+               uses <=, so an unguarded zone would report its bit for a touch at
+               exactly the panel origin, which is a real coordinate a real
+               finger can produce. Both are checked. */
+            koboy_config g; config_defaults(&g);
+            config_extra_buttons_for_rom(&g.layout, "/roms/Metroid.nes");
+            CHECK_EQ_INT(g.layout.extra[0].r, 0);
+            CHECK_EQ_INT(g.layout.extra[1].r, 0);
+            koboy_profile gp;
+            CHECK(config_resolve_profile(&gp, &g, 1264, 1680,
+                                         KOBOY_GB_W, KOBOY_GB_H,
+                                         KOBOY_GB_W, KOBOY_GB_H));
+            koboy_input *gi = input_create(&g, &gp);
+            CHECK(gi != NULL);
+            input_set_touch_transform(gi, W - 1, H - 1, false, false, false);
+            for (int e = 0; e < sys[si].n; e++) {
+                int ccx = c.layout.extra[e].cx * W / 1000;
+                int ccy = c.layout.extra[e].cy * H / 1000;
+                CHECK_EQ_INT(touch_probe(gi, ccx, ccy) & sys[si].bits[e], 0);
+            }
+            CHECK_EQ_INT(touch_probe(gi, 0, 0) & (KOBOY_BTN_L1 | KOBOY_BTN_R1), 0);
+            input_destroy(gi);
+        }
+
+        /* r == 0 MEANS ABSENT, whatever else the slot says -- and this is the
+           only place that contract can be broken on purpose. Now that each
+           disc carries its own bit, an empty slot cleared by
+           config_extra_buttons_for_rom also carries bit 0, so dropping the
+           guard in input.c reports nothing anyway and the guard looks dead.
+           It is not: a slot with a bit but no radius is one forgotten
+           assignment away, and in_circle uses <= -- so a zero-radius zone at
+           (0,0) would fire for a touch at exactly the panel origin, which is
+           a real coordinate a real finger can produce. Built by hand here
+           because no ROM extension can produce it. */
+        koboy_config m; config_defaults(&m);
+        config_extra_buttons_for_rom(&m.layout, "/roms/Metroid.nes");
+        m.layout.extra[0].bit = KOBOY_BTN_R1;   /* bit set, radius left 0 */
+        koboy_profile mp;
+        CHECK(config_resolve_profile(&mp, &m, 1264, 1680,
+                                     KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W, KOBOY_GB_H));
+        koboy_input *mi = input_create(&m, &mp);
+        CHECK(mi != NULL);
+        input_set_touch_transform(mi, mp.panel_w - 1, mp.panel_h - 1,
+                                  false, false, false);
+        CHECK_EQ_INT(touch_probe(mi, 0, 0), 0);
+        input_destroy(mi);
     }
 
     /* The MENU zone: a tap reports once and then clears, and it is NOT a

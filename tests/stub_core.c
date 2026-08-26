@@ -26,6 +26,23 @@ char stub_pm_palette[64] = "";
 int stub_saw_can_dupe = 0;
 int stub_unknown_option_refused = 0;
 
+/* What koboy answered for the two directory queries, and whether it answered
+   at all. Recorded as the STRINGS for the same reason the option answers
+   above are: a bool would pass against a frontend that returned true and left
+   the pointer alone.
+
+   This is not decoration. Neo Geo Pocket cartridges save into FLASH, not
+   into RETRO_MEMORY_SAVE_RAM -- measured: retro_get_memory_size(SAVE_RAM) is
+   0 for every one of the author's ten .ngp titles, on BOTH available cores --
+   and RACE writes that flash itself, as "<rom>.ngf" in whatever directory the
+   frontend answers GET_SAVE_DIRECTORY with. So for that whole system this
+   answer IS the save path, and a frontend that refused the query would lose
+   every save while looking exactly like one that worked. */
+char stub_save_dir[256] = "";
+char stub_system_dir[256] = "";
+int  stub_save_dir_answered = 0;
+int  stub_system_dir_answered = 0;
+
 /* Exported, not static: the test used to inspect these under gdb, which meant
    the assertions they existed for were never actually made. dlsym-able flags
    are real assertions. */
@@ -108,6 +125,22 @@ void retro_set_environment(retro_environment_t cb)
     if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vp) && vp.value) {
         strncpy(stub_pm_palette, vp.value, sizeof stub_pm_palette - 1);
         stub_pm_palette[sizeof stub_pm_palette - 1] = 0;
+    }
+
+    /* The directory queries, asked exactly the way the real cores ask them.
+       RACE asks in retro_init and beetle-ngp in retro_load_game; WHERE has
+       never been the question, WHAT koboy answers is. */
+    const char *sd = NULL;
+    if (env_cb(RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY, &sd) && sd) {
+        stub_save_dir_answered = 1;
+        strncpy(stub_save_dir, sd, sizeof stub_save_dir - 1);
+        stub_save_dir[sizeof stub_save_dir - 1] = 0;
+    }
+    const char *yd = NULL;
+    if (env_cb(RETRO_ENVIRONMENT_GET_SYSTEM_DIRECTORY, &yd) && yd) {
+        stub_system_dir_answered = 1;
+        strncpy(stub_system_dir, yd, sizeof stub_system_dir - 1);
+        stub_system_dir[sizeof stub_system_dir - 1] = 0;
     }
 
     /* A key koboy has no opinion about must come back REFUSED, not

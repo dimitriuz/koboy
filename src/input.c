@@ -306,16 +306,20 @@ static void recompute(koboy_input *in)
         int x = in->st.touch[s].x, y = in->st.touch[s].y;
         if (in_circle(x, y, perm(l->a_cx, W), perm(l->a_cy, H), perm(l->a_r, W))) b |= KOBOY_BTN_A;
         if (in_circle(x, y, perm(l->b_cx, W), perm(l->b_cy, H), perm(l->b_r, W))) b |= KOBOY_BTN_B;
-        /* C -> R1, and the mapping is the CORE's, not a choice made here:
-           third_party/pokemini/libretro/libretro.c binds PM_BUTTON_C to
-           RETRO_DEVICE_ID_JOYPAD_R (and advertises it as "C" in its own input
-           descriptors), which is bit 11, KOBOY_BTN_R1. Guarded on c_r the same
-           way chrome.c's draw is: with no C button the zone would be a
-           zero-radius circle at (0,0), and in_circle's <= would then report a
-           hit for a touch at exactly the panel origin. */
-        if (l->c_r > 0 &&
-            in_circle(x, y, perm(l->c_cx, W), perm(l->c_cy, H), perm(l->c_r, W)))
-            b |= KOBOY_BTN_R1;
+        /* The extra discs. Which BIT each one reports is the CORE's decision,
+           not one made here -- the Pokemon Mini core binds its C to
+           RETRO_DEVICE_ID_JOYPAD_R and beetle-wswan binds the WonderSwan's
+           A and B to JOYPAD_L / JOYPAD_R in its rotated key map -- so the bit
+           travels in the layout beside the geometry (koboy.h) and this loop
+           just reports it. Guarded on r the same way chrome.c's draw is: an
+           empty slot would otherwise be a zero-radius circle at (0,0), and
+           in_circle's <= would report a hit for a touch at exactly the panel
+           origin, which is a real coordinate a real finger can produce. */
+        for (int e = 0; e < KOBOY_MAX_EXTRA_BTNS; e++)
+            if (l->extra[e].r > 0 &&
+                in_circle(x, y, perm(l->extra[e].cx, W), perm(l->extra[e].cy, H),
+                          perm(l->extra[e].r, W)))
+                b |= l->extra[e].bit;
         if (in_rect(x, y, perm(l->start_cx, W), perm(l->start_cy, H),
                     perm(l->start_w, W), perm(l->start_h, H))) b |= KOBOY_BTN_START;
         if (in_rect(x, y, perm(l->select_cx, W), perm(l->select_cy, H),

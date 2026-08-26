@@ -111,14 +111,15 @@ const char *config_core_for_rom(const char *rom_path);
    right answer for it. */
 int config_layout_for_rom(const char *rom_path);
 
-/* Enable or clear the DMG faceplate's THIRD face button for this ROM -- see
-   the c_* fields in koboy.h. A third function rather than more return values
+/* Fill or clear the DMG faceplate's EXTRA discs for this ROM -- see
+   koboy_extra_btn in koboy.h. A third function rather than more return values
    from the two above for the same reason those two are separate: the core can
    be overridden by `core=` or --core, and neither the layout nor the physical
    button complement may follow that override. A Pokemon Mini cartridge has a
-   C button whatever shared object ends up interpreting it. Idempotent, and
-   it CLEARS as well as sets, because the config outlives one game. */
-void config_face_c_for_rom(koboy_layout *l, const char *rom_path);
+   C button, and a WonderSwan an A and a B that land on L1/R1 once the screen
+   is rotated, whatever shared object ends up interpreting them. Idempotent,
+   and it CLEARS as well as sets, because the config outlives one game. */
+void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path);
 
 bool config_join_sibling(char *out, size_t n, const char *name, const char *dir);
 bool config_exe_dir(char *out, size_t n);
