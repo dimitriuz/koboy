@@ -72,6 +72,17 @@ typedef struct {
     int      scale;
     int      game_x, game_y, game_w, game_h;
     int      panel_w, panel_h;
+    /* The core's geometry (retro_get_system_av_info, queried once at ROM
+       load -- see core_get_geometry's comment in core.h). base_w/base_h is
+       what the core is rendering right now; max_w/max_h is the upper bound
+       any single frame will report without a fresh load, and is what
+       game_w/game_h and video's intermediate buffer are actually sized
+       against, precisely so a frame anywhere in [1, max] fits inside the
+       reserved rect without ever spilling onto the chrome or the touch
+       controls drawn around it. For the Game Boy, base and max are both
+       always 160x144, which is why this generalisation changes nothing
+       about existing Game Boy behaviour. */
+    int      base_w, base_h, max_w, max_h;
     bool     has_hw_buttons;
     uint32_t wfm_fast, wfm_gray, wfm_full;
 } koboy_profile;

@@ -375,7 +375,13 @@ koboy_video *video_create(const koboy_profile *p, bool force_dither)
     size_t n = (size_t)v->stride * (size_t)p->game_h;
     v->cur  = calloc(1, n);
     v->prev = calloc(1, n);
-    v->gray = calloc(1, (size_t)KOBOY_GB_W * KOBOY_GB_H);
+    /* Sized to the core's max geometry, not a constant -- a core is free to
+       submit any frame up to max_w x max_h (video_pipeline_run's bounds
+       check below is what actually enforces the ceiling), and this buffer
+       has to hold the largest one without a realloc mid-session. For the
+       Game Boy, base and max are both always 160x144, so this allocates
+       exactly what the old KOBOY_GB_W*KOBOY_GB_H constant did. */
+    v->gray = calloc(1, (size_t)p->max_w * (size_t)p->max_h);
     if (!v->cur || !v->prev || !v->gray) { video_destroy(v); return NULL; }
     video_gray_lut_build(v->lut);
     /* prev starts as an impossible value so the first frame is fully dirty */
@@ -401,18 +407,32 @@ void video_invalidate(koboy_video *v)
 }
 
 /* Convert/scale/quantise-or-dither one core frame into v->cur. Returns false
-   (and touches nothing) for the two frames that carry no pixels at all: a
-   duplicate signalled by a NULL src, and a size mismatch. Split out of
-   video_submit_rects so the dirty-diff and prev-copy below it are the only
-   thing that differs between the single-rect and multi-rect entry points. */
+   (and touches nothing) for frames that carry no pixels this pipeline can
+   honestly handle: a duplicate signalled by a NULL src, and a size the core
+   had no business sending. Split out of video_submit_rects so the
+   dirty-diff and prev-copy below it are the only thing that differs between
+   the single-rect and multi-rect entry points. */
 static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int src_h,
                                size_t src_pitch, koboy_pixfmt fmt)
 {
     if (!src) return false;                        /* core signalled a duplicate */
-    if (src_w != KOBOY_GB_W || src_h != KOBOY_GB_H) return false;
+    /* LIVE GUARD: v->gray and v->cur are allocated at v->p.max_w x max_h (see
+       video_create) and v->p.max_w*v->p.max_h*scale respectively -- a frame
+       outside [1, max] is either nothing to draw (<= 0, which a well-behaved
+       core never sends outside the duplicate-frame NULL convention already
+       handled above) or bigger than what those buffers were sized for, and
+       writing it would walk off the end of v->gray a row or a column past
+       its real width. Rejecting it here, before a single byte is touched, is
+       what makes "video_submit accepts any size up to the core's maximum"
+       true instead of "any size the core claims, trusted on faith." A core
+       reporting geometry it then contradicts on the very next frame is a
+       broken core, not a koboy bug, and dropping the frame is the correct
+       response -- the alternative is scribbling into whatever memory follows
+       the buffer. */
+    if (src_w < 1 || src_h < 1 || src_w > v->p.max_w || src_h > v->p.max_h) return false;
 
     for (int y = 0; y < src_h; y++) {
-        uint8_t *d = v->gray + (size_t)y * KOBOY_GB_W;
+        uint8_t *d = v->gray + (size_t)y * v->p.max_w;
         if (fmt == KOBOY_PIXFMT_RGB565) {
             const uint16_t *s = (const uint16_t *)((const uint8_t *)src + (size_t)y * src_pitch);
             for (int x = 0; x < src_w; x++) d[x] = v->lut[s[x]];
@@ -422,9 +442,28 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
         }
     }
 
-    video_scale_gray(v->cur, v->stride, v->gray, KOBOY_GB_W, KOBOY_GB_H,
-                     KOBOY_GB_W, v->p.scale);
+    /* Scaled into the top-left corner of v->cur at the frame's ACTUAL size,
+       not v->p.max_w/max_h -- a core legitimately rendering smaller than its
+       maximum (every Game & Watch title against the "Multi Screen" core's
+       max, per the design doc) fills less than the whole reserved rect, and
+       nothing here needs to know that; video_scale_gray only ever touches
+       the src_w*scale x src_h*scale it is told to. */
+    video_scale_gray(v->cur, v->stride, v->gray, src_w, src_h,
+                     v->p.max_w, v->p.scale);
 
+    /* Quantise/dither still run over the FULL reserved rect (v->p.game_w x
+       game_h = max_w*scale x max_h*scale), exactly as before generalisation.
+       For the Game Boy that is exactly the area video_scale_gray just wrote,
+       so this is unchanged behaviour bit for bit. For a core whose current
+       frame is smaller than its max, the area outside the just-scaled
+       corner is whatever was quantised into it last -- v->cur/prev start
+       life zero-filled (video_create's calloc), which quantises to the
+       darkest of the four levels, and nothing here paints over that until a
+       frame actually reaches that pixel. That is a known rough edge for a
+       shrinking-frame core, not something this task's target (fixed-size
+       Game & Watch artwork per title) exercises, and is called out rather
+       than silently accepted -- see the video_submit_rects comment on the
+       matching dirty-rect tradeoff. */
     if (v->dither)
         video_dither_1bit(v->cur, v->p.game_w, v->p.game_h, v->stride,
                           v->p.game_x, v->p.game_y);
@@ -446,6 +485,15 @@ int video_submit_rects(koboy_video *v, const void *src, int src_w, int src_h,
     if (!out) return 0;
     if (!video_pipeline_run(v, src, src_w, src_h, src_pitch, fmt)) return 0;
 
+    /* Diffed over the FULL reserved rect (game_w x game_h), not the current
+       frame's own src_w*scale x src_h*scale -- the matching tradeoff to the
+       one noted in video_pipeline_run. Keeping this at game_w/game_h rather
+       than tracking a shrinking frame's smaller extent is what makes a
+       Game Boy frame (src always == max) diff exactly as before; it also
+       means a core that submits a smaller frame after a bigger one leaves
+       the now-uncovered remainder exactly as it last was, in both cur and on
+       the panel, rather than forcing it blank -- ghosting-adjacent, but not
+       incorrect: nothing was asked to change there, so nothing needed to. */
     int n = video_split_dirty(v->prev, v->cur, v->p.game_w, v->p.game_h, v->stride,
                               fixed_tiles, out, max_out);
     /* cur holds the frame the caller will blit; prev becomes the baseline for

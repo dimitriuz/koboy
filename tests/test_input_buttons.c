@@ -36,7 +36,7 @@ static void hat_at(koboy_input *in, int x, int y)
 TEST_MAIN({
     koboy_config c; config_defaults(&c);
     c.key_a = 193; c.key_b = 194;
-    koboy_profile p; config_resolve_profile(&p, &c, 1264, 1680);
+    koboy_profile p; config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
     koboy_input *in = input_create(&c, &p);
     input_set_touch_transform(in, 1264, 1680, false, false, false);
 

@@ -57,6 +57,16 @@
 #define RETRO_ENVIRONMENT_SET_PIXEL_FORMAT        10
 #define RETRO_ENVIRONMENT_GET_VARIABLE            15
 #define RETRO_ENVIRONMENT_GET_SAVE_DIRECTORY      31
+/* A core that does not know its real geometry at retro_load_game time (the
+   Game & Watch core, measured: retro_get_system_av_info reports a 128x128
+   placeholder right after load, on every title, and only resolves the real
+   canvas from inside its first retro_run()) uses one of these two to
+   announce it later. SET_SYSTEM_AV_INFO carries a full retro_system_av_info
+   (geometry AND timing); SET_GEOMETRY carries just the geometry half. Both
+   are handled in core.c's env_cb -- see core_get_geometry's comment in
+   core.h for how koboy reacts. */
+#define RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO      32
+#define RETRO_ENVIRONMENT_SET_GEOMETRY            37
 #define RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE  (47 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 
 #define RETRO_DEVICE_JOYPAD    1

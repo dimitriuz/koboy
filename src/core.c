@@ -41,12 +41,33 @@ struct koboy_core {
     bool   (*serialize)(void *, size_t);
     bool   (*unserialize)(const void *, size_t);
     bool    game_loaded;
+    /* Set by core_load_rom from retro_get_system_av_info, and kept live
+       afterwards by env_cb's SET_GEOMETRY/SET_SYSTEM_AV_INFO handling; 0
+       until a ROM has loaded. See core_get_geometry's comment in core.h for
+       why this is not a load-once value. */
+    int     base_w, base_h, max_w, max_h;
+    /* See core_geometry_changed. Left false by the initial core_load_rom
+       query on purpose -- only env_cb's two geometry commands set it. */
+    bool    geom_dirty;
 };
 
 /* libretro's callbacks are plain C function pointers with no user data, so the
    active core is reachable through this single static. koboy runs exactly one
    core at a time, which makes that safe. */
 static koboy_core *g_active;
+
+/* Shared by core_load_rom's initial query and the SET_SYSTEM_AV_INFO
+   handler below: both hand over a FULL, authoritative retro_game_geometry
+   (as opposed to SET_GEOMETRY's partial update, handled separately in
+   env_cb), so both apply the same "0 means same as base" convention and
+   trust the numbers outright rather than only ever growing them. */
+static void apply_full_geometry(koboy_core *c, const struct retro_game_geometry *g)
+{
+    c->base_w = (int)g->base_width;
+    c->base_h = (int)g->base_height;
+    c->max_w  = g->max_width  ? (int)g->max_width  : c->base_w;
+    c->max_h  = g->max_height ? (int)g->max_height : c->base_h;
+}
 
 static bool env_cb(unsigned cmd, void *data)
 {
@@ -78,6 +99,46 @@ static bool env_cb(unsigned cmd, void *data)
             v->value = "disabled"; return true;
         }
         v->value = NULL; return false;
+    }
+    case RETRO_ENVIRONMENT_SET_GEOMETRY: {
+        /* A PARTIAL update, by libretro convention: only base_width/height
+           (and aspect_ratio, which koboy does not use) are meant to change
+           here, and max_width/max_height in the payload are conventionally
+           left 0 to mean "unchanged" -- unlike SET_SYSTEM_AV_INFO's full
+           reset below, a 0 here must NOT collapse an already-known max down
+           to base. Trusted (not merely floored) when non-zero: a shrink is
+           as legitimate an announcement as a grow (a Multi Screen title
+           folding back down, say), and the guard belongs to whoever is
+           about to size a buffer against it (video.c's own bounds check),
+           not to this callback second-guessing the core. */
+        const struct retro_game_geometry *g = data;
+        g_active->base_w = (int)g->base_width;
+        g_active->base_h = (int)g->base_height;
+        if (g->max_width)  g_active->max_w = (int)g->max_width;
+        if (g->max_height) g_active->max_h = (int)g->max_height;
+        /* Invariant regardless of source: base can never legitimately
+           exceed max, so a core that grew base without also mentioning a
+           bigger max here gets max raised to match rather than left to lie. */
+        if (g_active->max_w < g_active->base_w) g_active->max_w = g_active->base_w;
+        if (g_active->max_h < g_active->base_h) g_active->max_h = g_active->base_h;
+        g_active->geom_dirty = true;
+        return true;
+    }
+    case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
+        /* The FULL reset: geometry AND timing. Timing (fps/sample_rate) is
+           read from `av->timing` by nothing in this codebase -- src/pacing.c
+           still paces every core at the fixed KOBOY_FRAME_US the Game Boy
+           measured (koboy.h), which is a real, deliberately out-of-scope gap
+           for this task (video resolution, not frame timing): pacing a core
+           whose fps this call changes is future work, tracked the same way
+           the rest of this project tracks a known-but-deferred item rather
+           than silently dropped. Geometry, which IS this task's scope, is
+           applied in full via the same helper the initial load-time query
+           uses. */
+        const struct retro_system_av_info *av = data;
+        apply_full_geometry(g_active, &av->geometry);
+        g_active->geom_dirty = true;
+        return true;
     }
     default:
         return false;                      /* unknown calls: false is correct */
@@ -259,6 +320,27 @@ bool core_load_rom(koboy_core *c, const char *rom_path, char *err, size_t errlen
         return false;
     }
     c->game_loaded = true;
+
+    /* Queried here, once per load, as a STARTING point -- not the final
+       word: retro_get_system_av_info is only meaningful once a game is
+       loaded (the libretro spec says so, and an unloaded gambatte answers
+       with whatever it was last built with, which is not "no answer" the
+       way a NULL would be), so this is the earliest correct moment to call
+       it. But "earliest correct" is not "trustworthy": the Game & Watch core
+       answers this exact call with a 128x128 placeholder on every one of 59
+       measured titles, and only reports the real canvas later, from inside
+       its first retro_run(), via env_cb's SET_GEOMETRY/SET_SYSTEM_AV_INFO
+       handling above -- which is why those two, not just this query, keep
+       base_w/base_h/max_w/max_h current for as long as the ROM stays
+       loaded. geom_dirty is deliberately NOT set here: a caller that wants
+       this initial (possibly-placeholder) answer calls core_get_geometry
+       directly right after core_load_rom returns, unconditionally, and does
+       not need a change flag to tell it something it is about to read
+       anyway -- see core_geometry_changed's comment in core.h. */
+    struct retro_system_av_info av;
+    c->get_system_av_info(&av);
+    apply_full_geometry(c, &av.geometry);
+    c->geom_dirty = false;
     return true;
 }
 
@@ -330,6 +412,24 @@ uint8_t *core_sram(koboy_core *c, size_t *len)
 koboy_pixfmt core_pixfmt(const koboy_core *c)
 {
     return c->fmt;
+}
+
+bool core_get_geometry(const koboy_core *c, int *base_w, int *base_h,
+                       int *max_w, int *max_h)
+{
+    if (!c || !c->game_loaded) return false;   /* nothing honest to report yet */
+    if (base_w) *base_w = c->base_w;
+    if (base_h) *base_h = c->base_h;
+    if (max_w)  *max_w  = c->max_w;
+    if (max_h)  *max_h  = c->max_h;
+    return true;
+}
+
+bool core_geometry_changed(koboy_core *c)
+{
+    if (!c || !c->geom_dirty) return false;
+    c->geom_dirty = false;   /* read-and-clear: each change reported once */
+    return true;
 }
 
 void core_close(koboy_core *c)

@@ -7,7 +7,7 @@
 
 static int render(koboy_config *c, int W, int H, uint8_t *fb, koboy_profile *p)
 {
-    config_resolve_profile(p, c, W, H);
+    config_resolve_profile(p, c, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
     memset(fb, 0x7F, (size_t)W * H);
     chrome_render(fb, W, p, &c->layout);
     return 1;
@@ -336,7 +336,7 @@ TEST_MAIN({
             koboy_config cc; config_defaults(&cc);
             cc.scale = scales[si];
             koboy_profile q;
-            CHECK(config_resolve_profile(&q, &cc, W, H));
+            CHECK(config_resolve_profile(&q, &cc, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
             combos++;
 
             memset(fb, 0x7F, (size_t)W * H);
@@ -575,7 +575,7 @@ TEST_MAIN({
         koboy_profile p;
         const int W = 1264, H = 1680;
         static uint8_t fb2[1264 * 1680];
-        config_resolve_profile(&p, &c, W, H);
+        config_resolve_profile(&p, &c, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
         memset(fb2, 0x7F, (size_t)W * H);
         chrome_render(fb2, W, &p, &c.layout);
 
@@ -608,7 +608,7 @@ TEST_MAIN({
         koboy_profile p;
         const int W = 1264, H = 1680;
         static uint8_t a[1264 * 1680], b[1264 * 1680];
-        config_resolve_profile(&p, &c, W, H);
+        config_resolve_profile(&p, &c, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
 
         memset(a, 0xFF, (size_t)W * H);
         chrome_render(a, W, &p, &c.layout);
@@ -701,7 +701,7 @@ TEST_MAIN({
                 koboy_config cc; config_defaults(&cc);
                 cc.scale = sweep_scales[si];
                 koboy_profile q;
-                if (!config_resolve_profile(&q, &cc, W, H)) continue;
+                if (!config_resolve_profile(&q, &cc, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H)) continue;
                 checked++;
 
                 int bad = 0;
@@ -769,7 +769,7 @@ TEST_MAIN({
         for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
             int W = panels[pi][0], H = panels[pi][1];
             koboy_profile p;
-            CHECK(config_resolve_profile(&p, &c, W, H));
+            CHECK(config_resolve_profile(&p, &c, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
             memset(fb, 0x7F, (size_t)W * H);
             chrome_render(fb, W, &p, &c.layout);
 

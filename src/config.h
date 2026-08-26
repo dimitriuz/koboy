@@ -34,8 +34,20 @@ typedef struct {
 
 void config_defaults(koboy_config *c);
 bool config_load(koboy_config *c, const char *path);
+
+/* base_w/base_h/max_w/max_h come from core_get_geometry (src/core.h), queried
+   once after retro_load_game -- config.c has no core.h dependency of its own
+   (layering: config is lower-level than core), so the caller resolves the
+   query and passes the four numbers through as plain ints rather than this
+   header taking on a struct koboy_core it does not otherwise need. max_w and
+   max_h drive the scale search and the resulting game rect (see the
+   koboy_profile comment in koboy.h for why max, not base); both must be >= 1
+   or this returns false the same way an impossibly small panel already does.
+   base_w/base_h are carried into the profile unchanged, for callers that want
+   to know what the core is actually rendering right now. */
 bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
-                            int panel_w, int panel_h);
+                            int panel_w, int panel_h,
+                            int base_w, int base_h, int max_w, int max_h);
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b);
 
 /* Should a frame whose dirty rect covers dirty_px of a whole_px game rect be

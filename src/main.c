@@ -534,8 +534,18 @@ int main(int argc, char **argv)
        piece of this task's groundwork that actually gets consumed, below. */
     (void)rom_from_argv;
 
+    /* A PLACEHOLDER profile, resolved against the Game Boy's fixed 160x144
+       rather than any real core's geometry: no ROM has been chosen yet at
+       this point (MODE_MAIN sends the user to a menu first), and a core's
+       geometry is only meaningful after retro_load_game -- there is nothing
+       else honest to lay chrome/calibration/the menu out against. Once a ROM
+       is actually loaded, below, this gets re-resolved against
+       core_get_geometry's answer and the faceplate is redrawn if that
+       changed anything; for the Game Boy it never does, which is what keeps
+       this generalisation a no-op for the only core wired up today. */
     koboy_profile prof;
-    if (!config_resolve_profile(&prof, &cfg, pw, ph)) {
+    if (!config_resolve_profile(&prof, &cfg, pw, ph,
+                                KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H)) {
         fatal("panel %dx%d is too small for a 1x game rect", pw, ph);
         pf->shutdown(pf->ctx);
         return 1;
@@ -788,33 +798,18 @@ int main(int argc, char **argv)
        final status line does not call a menu-driven quit "stopped by
        signal". */
 
-    /* --------------------------------------------------- video, input, core */
-    koboy_video *vid = video_create(&prof, cfg.force_dither);
-    koboy_input *in  = input_create(&cfg, &prof);
-    if (!vid || !in) {
-        fatal("out of memory");
-        video_destroy(vid); input_destroy(in); free(panel);
-        pf->shutdown(pf->ctx); return 1;
-    }
-#ifdef KOBOY_PLATFORM_KOBO
-    /* The device's touch layer has its own raw range and is mounted rotated;
-       only the backend knows by how much, so it installs the transform. */
-    platform_kobo_setup_touch(pf, in);
-#else
-    /* The desktop mouse already reports panel coordinates: no transposition,
-       no flips, raw range == panel range. */
-    input_set_touch_transform(in, pw, ph, false, false, false);
-#endif
-
+    /* --------------------------------------------------------- core, ROM */
+    /* Opened, and the ROM loaded, BEFORE video_create/input_create below:
+       the real game rect depends on the core's geometry (config_resolve_profile
+       call further down), which libretro only answers honestly once a game is
+       loaded -- so the buffers that rect sizes have to wait for it too. */
     char err[512];
     koboy_core *core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);
     if (!core) {
         fatal("%s", err);
-        video_destroy(vid); input_destroy(in); free(panel);
+        free(panel);
         pf->shutdown(pf->ctx); return 1;
     }
-    core_set_frame_cb(core, on_frame, NULL);
-    core_set_input_fn(core, on_input, in);
 
     /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
        every compiler that matters here, but Linaro GCC 4.9 (the ARM cross
@@ -826,9 +821,64 @@ int main(int argc, char **argv)
     if (!load_rom_into(core, &cfg, &sb, err, sizeof err)) {
         fatal("%s", err);
         core_close(core);
-        video_destroy(vid); input_destroy(in); free(panel);
+        free(panel);
         pf->shutdown(pf->ctx); return 1;
     }
+
+    /* --------------------------------------------- re-fit for real geometry */
+    /* `prof` above is still the Game-Boy-shaped placeholder. Re-resolve it
+       against what the just-loaded ROM's core actually reports, and only
+       redraw the faceplate (an extra full-panel refresh, so worth avoiding
+       when nothing changed) when that answer differs from the placeholder --
+       which for the Game Boy it never does, since base and max are both
+       always 160x144 and the placeholder above was seeded with the same
+       numbers. This is what keeps `bash tests/smoke_host.sh` and the video
+       goldens byte-identical for the one core wired up today. */
+    {
+        int rbw, rbh, rmw, rmh;
+        if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
+            (rbw != prof.base_w || rbh != prof.base_h ||
+             rmw != prof.max_w  || rmh != prof.max_h)) {
+            koboy_profile real_prof;
+            if (!config_resolve_profile(&real_prof, &cfg, pw, ph, rbw, rbh, rmw, rmh)) {
+                fatal("panel %dx%d is too small for this core's %dx%d game rect",
+                     pw, ph, rmw, rmh);
+                core_close(core);
+                free(panel);
+                pf->shutdown(pf->ctx); return 1;
+            }
+            prof = real_prof;
+            say("koboy: core geometry %dx%d (max %dx%d), rescaled to scale %d, "
+                "game %dx%d at (%d,%d)\n", rbw, rbh, rmw, rmh,
+                prof.scale, prof.game_w, prof.game_h, prof.game_x, prof.game_y);
+            /* The rect chrome/calibration/the menu were drawn against just
+               changed shape or position -- put the faceplate back before any
+               game pixel lands on the panel. */
+            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+        }
+    }
+
+    /* ------------------------------------------------------- video, input */
+    koboy_video *vid = video_create(&prof, cfg.force_dither);
+    koboy_input *in  = input_create(&cfg, &prof);
+    if (!vid || !in) {
+        fatal("out of memory");
+        video_destroy(vid); input_destroy(in);
+        core_close(core);
+        free(panel);
+        pf->shutdown(pf->ctx); return 1;
+    }
+#ifdef KOBOY_PLATFORM_KOBO
+    /* The device's touch layer has its own raw range and is mounted rotated;
+       only the backend knows by how much, so it installs the transform. */
+    platform_kobo_setup_touch(pf, in);
+#else
+    /* The desktop mouse already reports panel coordinates: no transposition,
+       no flips, raw range == panel range. */
+    input_set_touch_transform(in, pw, ph, false, false, false);
+#endif
+    core_set_frame_cb(core, on_frame, NULL);
+    core_set_input_fn(core, on_input, in);
 
     /* Tetris is cartridge type 0x00: no battery-backed SRAM at all, so this is
        NULL/0 on the development ROM and must not be dereferenced. */
@@ -1037,6 +1087,19 @@ int main(int argc, char **argv)
                 if (!picked) {
                     mode = MODE_QUIT;
                 } else {
+                    /* KNOWN LIMITATION, not a regression: unlike the
+                       startup load above, this mid-session load does not
+                       re-query core_get_geometry or re-fit prof/vid to it.
+                       Every ROM this core (koboy is still one core per
+                       session) can load reports the same fixed 160x144
+                       geometry today, so there is nothing to re-fit and the
+                       gap is invisible. A future core whose geometry varies
+                       ROM to ROM within one session -- plausible for a
+                       multi-title Game & Watch core -- would need this path
+                       to redo the video_create/redraw_chrome dance the
+                       startup path now does, or frames outside the
+                       already-allocated buffer's max would be silently
+                       dropped by video_pipeline_run's bounds guard. */
                     char lerr[512];
                     if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
                         fatal("%s", lerr);
@@ -1082,6 +1145,65 @@ int main(int argc, char **argv)
         uint64_t t0 = pf->now_us(pf->ctx);
         core_run_frame(core);
         stats_add(&stats, KOBOY_STAGE_CORE, pf->now_us(pf->ctx) - t0);
+
+        /* Some cores do not know their real geometry until INSIDE a
+           retro_run() -- measured: the Game & Watch core reports a 128x128
+           placeholder from retro_get_system_av_info called right after
+           retro_load_game, on every one of 59 measured titles, and only
+           resolves the real canvas (Parachute 658x395, Mario Bros. 973x532,
+           Donkey Kong 606x748, ...) from inside its FIRST retro_run(), via
+           the SET_GEOMETRY/SET_SYSTEM_AV_INFO environment calls core.c now
+           handles. Checked after EVERY retro_run(), not just the first: a
+           core may call either command again later too (a Multi Screen
+           title toggling between a folded and an unfolded view is the
+           plausible case for this exact core), and polling
+           core_geometry_changed() here is the one mechanism that covers
+           "resolves late, once" and "changes again mid-session" without
+           special-casing either. For a core that never touches either
+           command -- the Game Boy core, still the only one that does not
+           need any of this -- core_geometry_changed() is always false, so
+           this costs one cheap boolean check per frame and changes nothing
+           else about existing Game Boy behaviour. */
+        if (core_geometry_changed(core)) {
+            int rbw, rbh, rmw, rmh;
+            if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
+                (rbw != prof.base_w || rbh != prof.base_h ||
+                 rmw != prof.max_w  || rmh != prof.max_h)) {
+                koboy_profile real_prof;
+                if (!config_resolve_profile(&real_prof, &cfg, pw, ph, rbw, rbh, rmw, rmh)) {
+                    fatal("panel %dx%d is too small for this core's %dx%d game rect",
+                         pw, ph, rmw, rmh);
+                    mode = MODE_QUIT;
+                    goto sram_check;
+                }
+                prof = real_prof;
+                say("koboy: core geometry settled at %dx%d (max %dx%d), "
+                    "rescaled to scale %d, game %dx%d at (%d,%d)\n",
+                    rbw, rbh, rmw, rmh, prof.scale, prof.game_w, prof.game_h,
+                    prof.game_x, prof.game_y);
+                /* The faceplate drawn against the old (possibly placeholder)
+                   rect no longer matches -- redraw it before this frame's
+                   pixels land on the panel. */
+                redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+                /* video_create's buffer was sized for the OLD geometry;
+                   video_submit_rects' bounds guard would just drop a bigger
+                   frame rather than corrupt memory, so without this the game
+                   would render nothing from here on. Rebuilding is the only
+                   way to grow it. The diff history the old buffer carried is
+                   not a loss: the new one is being shown for the first time
+                   (video_create seeds prev to force a full-dirty first
+                   submit), and the panel does not yet show anything from it
+                   either way. */
+                video_destroy(vid);
+                vid = video_create(&prof, cfg.force_dither);
+                if (!vid) {
+                    fatal("out of memory");
+                    mode = MODE_QUIT;
+                    goto sram_check;
+                }
+            }
+        }
+
         bool present = pacer_tick(&pace);
         if (!present) goto sram_check;
 

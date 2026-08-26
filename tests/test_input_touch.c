@@ -40,7 +40,7 @@ static uint16_t touch_probe(koboy_input *in, int x, int y)
 
 TEST_MAIN({
     koboy_config c; config_defaults(&c);
-    koboy_profile p; config_resolve_profile(&p, &c, 1264, 1680);
+    koboy_profile p; config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
     koboy_input *in = input_create(&c, &p);
     CHECK(in != NULL);
 
@@ -94,7 +94,7 @@ TEST_MAIN({
     {
         koboy_config c; config_defaults(&c);
         koboy_profile p;
-        config_resolve_profile(&p, &c, 1264, 1680);
+        config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
 
         const int W = p.panel_w, H = p.panel_h;
         int dcx = c.layout.dpad_cx * W / 1000;
@@ -132,7 +132,7 @@ TEST_MAIN({
         koboy_config c; config_defaults(&c);
         c.dpad_mode = KOBOY_DPAD_CROSS;
         koboy_profile p;
-        config_resolve_profile(&p, &c, 1264, 1680);
+        config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
         const int W = p.panel_w, H = p.panel_h;
 
         int acx = c.layout.a_cx * W / 1000;
@@ -168,7 +168,7 @@ TEST_MAIN({
     {
         koboy_config c; config_defaults(&c);
         koboy_profile p;
-        config_resolve_profile(&p, &c, 1264, 1680);
+        config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
         const int W = p.panel_w, H = p.panel_h;
 
         koboy_input *in2 = input_create(&c, &p);
@@ -199,7 +199,7 @@ TEST_MAIN({
     {
         koboy_config c; config_defaults(&c);
         koboy_profile p;
-        config_resolve_profile(&p, &c, 1264, 1680);
+        config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
         const int W = p.panel_w, H = p.panel_h;
 
         koboy_input *in3 = input_create(&c, &p);

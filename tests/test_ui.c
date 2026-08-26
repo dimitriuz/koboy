@@ -275,7 +275,7 @@ TEST_MAIN({
         const int W = 1264, H = 1680;
         koboy_config c; config_defaults(&c);
         koboy_profile prof;
-        CHECK(config_resolve_profile(&prof, &c, W, H));
+        CHECK(config_resolve_profile(&prof, &c, W, H, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
 
         koboy_input *in = input_create(&c, &prof);
         CHECK(in != NULL);

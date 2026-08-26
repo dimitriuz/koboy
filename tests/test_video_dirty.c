@@ -47,7 +47,7 @@ TEST_MAIN({
     {
         koboy_profile p; koboy_config c;
         config_defaults(&c);
-        config_resolve_profile(&p, &c, 1264, 1680);
+        config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H);
         koboy_video *v = video_create(&p, false);
         CHECK(v != NULL);
 

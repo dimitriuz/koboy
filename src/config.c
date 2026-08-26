@@ -327,11 +327,19 @@ bool config_load(koboy_config *c, const char *path)
 }
 
 bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
-                            int panel_w, int panel_h)
+                            int panel_w, int panel_h,
+                            int base_w, int base_h, int max_w, int max_h)
 {
     memset(p, 0, sizeof *p);
-    int fit_w = panel_w / KOBOY_GB_W;
-    int fit_h = panel_h / KOBOY_GB_H;
+    /* LIVE GUARD: a core (or a hand-built test profile) reporting a
+       non-positive geometry has nothing this function can scale -- dividing
+       by max_w/max_h below would be a division by zero or a negative divisor,
+       not merely a "too big to fit" case like max_fit < 1 already handles.
+       Refusing here keeps that division safe without every caller having to
+       re-derive the same check. */
+    if (max_w < 1 || max_h < 1) return false;
+    int fit_w = panel_w / max_w;
+    int fit_h = panel_h / max_h;
     int max_fit = fit_w < fit_h ? fit_w : fit_h;
     if (max_fit < 1) return false;
     int s = c->scale > 0 ? c->scale : max_fit;
@@ -351,8 +359,8 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
     int ctrl_top = chrome_controls_top(&c->layout, panel_w, panel_h);
 
     while (s > 1) {
-        int game_w = KOBOY_GB_W * s;
-        int game_h = KOBOY_GB_H * s;
+        int game_w = max_w * s;
+        int game_h = max_h * s;
         int game_x = (panel_w - game_w) / 2;
         int game_y = panel_h / 20;
         int left_margin   = game_x;
@@ -370,17 +378,32 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
         s--;
     }
     /* The floor stays 1 rather than becoming a failure: at scale 1 the rect is
-       160x144 and every panel spec §3 supports (>= 1072x1448) clears the control
-       band by hundreds of pixels, so this is unreachable there -- and on some
-       hypothetical tiny panel, running with a slightly overlapped control band
-       still beats refusing to start. chrome_render clamps its own writes either
-       way; it does not rely on this loop. */
+       max_w x max_h and every panel spec §3 supports (>= 1072x1448) clears the
+       control band by hundreds of pixels for the shipped Game Boy core's
+       160x144 (this is unreachable there) -- and on some hypothetical tiny
+       panel, or a core whose max geometry is itself large, running with a
+       slightly overlapped control band still beats refusing to start.
+       chrome_render clamps its own writes either way; it does not rely on
+       this loop. */
 
     p->scale   = s;
     p->panel_w = panel_w;
     p->panel_h = panel_h;
-    p->game_w  = KOBOY_GB_W * s;
-    p->game_h  = KOBOY_GB_H * s;
+    p->base_w  = base_w;
+    p->base_h  = base_h;
+    p->max_w   = max_w;
+    p->max_h   = max_h;
+    /* game_w/game_h -- and therefore the reserved rect chrome lays out
+       around -- come from max_w/max_h, not base_w/base_h. video_submit
+       accepts any frame up to the core's max, so sizing the rect (and, in
+       video_create, the buffer) off max is what guarantees a legitimately
+       larger-than-base frame still lands entirely inside the reserved area
+       instead of spilling onto the chrome or a live touch control -- the
+       exact bug class the ctrl_top reservation above was already added to
+       stop, now for a resolution axis that did not exist when that fix
+       landed. */
+    p->game_w  = max_w * s;
+    p->game_h  = max_h * s;
     p->game_x  = (panel_w - p->game_w) / 2;
     p->game_y  = panel_h / 20;           /* small top margin, chrome fills the rest */
     return true;

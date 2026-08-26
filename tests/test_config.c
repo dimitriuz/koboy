@@ -3,6 +3,7 @@
    src/config.c, tests/test_romlist.c and tests/test_uiscript.c. */
 #define _DEFAULT_SOURCE
 #include "test.h"
+#include "chrome.h"          /* chrome_controls_top, for the new-geometry sweep below */
 #include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
@@ -89,10 +90,10 @@ TEST_MAIN({
 
     /* 5x fits every supported panel */
     koboy_profile p;
-    CHECK(config_resolve_profile(&p, &c, 1264, 1680));
+    CHECK(config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
     CHECK_EQ_INT(p.scale, 5);
     CHECK_EQ_INT(p.game_x, (1264 - 800) / 2);
-    CHECK(config_resolve_profile(&p, &c, 1072, 1448));
+    CHECK(config_resolve_profile(&p, &c, 1072, 1448, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
     CHECK_EQ_INT(p.scale, 5);
     CHECK_EQ_INT(p.game_x, (1072 - 800) / 2);
 
@@ -101,7 +102,7 @@ TEST_MAIN({
        6x would clear the bezel margin on this panel with 176 px to spare and
        still bury the A button and the d-pad, so the answer is 5. */
     c.scale = 99;
-    CHECK(config_resolve_profile(&p, &c, 1072, 1448));
+    CHECK(config_resolve_profile(&p, &c, 1072, 1448, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
     CHECK_EQ_INT(p.scale, 5);
 
     /* PINS the design spec's property that 5x fits every supported panel with
@@ -124,12 +125,112 @@ TEST_MAIN({
         };
         for (size_t i = 0; i < sizeof panels / sizeof panels[0]; i++) {
             koboy_profile pp;
-            CHECK(config_resolve_profile(&pp, &dc, panels[i].w, panels[i].h));
+            CHECK(config_resolve_profile(&pp, &dc, panels[i].w, panels[i].h, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
             if (pp.scale != 5)
                 fprintf(stderr, "  %s %dx%d: scale %d, expected 5\n",
                         panels[i].name, panels[i].w, panels[i].h, pp.scale);
             CHECK_EQ_INT(pp.scale, 5);
         }
+    }
+
+    /* Extends the sweep above past the one resolution the Game Boy core can
+       ever report. A sweep that only ever exercised 160x144 would leave the
+       entire point of this task -- deriving scale/the game rect from the
+       CORE's geometry instead of KOBOY_GB_W/KOBOY_GB_H -- unguarded: every
+       assertion above would pass identically whether or not
+       config_resolve_profile's fitting loop actually reads base_w/max_w/h
+       or silently still used the compiled-in Game Boy constants.
+
+       Three of the four cases are REAL geometry, measured by running the
+       actual gw-libretro core (build/gw_libretro_host.so) against titles
+       from a real 59-title Game & Watch collection -- Parachute, Mario
+       Bros., and Donkey Kong -- not values transcribed from the design doc.
+       The fourth is a synthetic base != max case (a plausible "folds to a
+       smaller view" shape for a multi-screen title, not a reproduction of
+       any specific title's behaviour observed here) to exercise the one
+       field pairing item 3 of the task exists to distinguish: game_w/game_h
+       come from max_w/max_h, not base_w/base_h, which base == max in the
+       first three cases cannot tell apart.
+
+       want_scale[] is MEASURED the same way the Game Boy's "5" above is --
+       by running config_resolve_profile itself against the shipped
+       defaults -- so a fitting-loop change that quietly picks a different
+       (even if still valid) scale still fails this test, not just an
+       out-of-range one. */
+    {
+        koboy_config dc; config_defaults(&dc);
+        static const struct { int w, h; const char *name; } panels[] = {
+            { 1072, 1448, "Clara"  },
+            { 1264, 1680, "Libra2" },
+            { 1404, 1872, "Elipsa" },
+            { 1440, 1920, "Sage"   },
+        };
+        static const struct {
+            int base_w, base_h, max_w, max_h;
+            int want_scale[4];       /* Clara, Libra2, Elipsa, Sage */
+            const char *name;
+        } geoms[] = {
+            { 658, 395, 658, 395, { 1, 1, 2, 2 }, "Parachute (measured)"   },
+            { 973, 532, 973, 532, { 1, 1, 1, 1 }, "Mario Bros. (measured)" },
+            { 606, 748, 606, 748, { 1, 1, 1, 1 }, "Donkey Kong (measured)" },
+            { 431, 322, 692, 759, { 1, 1, 1, 1 }, "synthetic base!=max"    },
+        };
+
+        for (size_t g = 0; g < sizeof geoms / sizeof geoms[0]; g++) {
+            for (size_t i = 0; i < sizeof panels / sizeof panels[0]; i++) {
+                koboy_profile pp;
+                CHECK(config_resolve_profile(&pp, &dc, panels[i].w, panels[i].h,
+                                             geoms[g].base_w, geoms[g].base_h,
+                                             geoms[g].max_w, geoms[g].max_h));
+                if (pp.scale != geoms[g].want_scale[i])
+                    fprintf(stderr, "  %s %s %dx%d: scale %d, expected %d\n",
+                            geoms[g].name, panels[i].name, panels[i].w, panels[i].h,
+                            pp.scale, geoms[g].want_scale[i]);
+                CHECK_EQ_INT(pp.scale, geoms[g].want_scale[i]);
+
+                /* game_w/game_h come from max_w/max_h, not base_w/base_h --
+                   asserted directly, not just implied by the scale matching,
+                   because a config_resolve_profile that silently sized the
+                   rect off base while still reporting the max-derived scale
+                   would pass a scale-only check. The first three geometries
+                   (base == max) cannot distinguish this at all; only the
+                   fourth actually exercises it. */
+                CHECK_EQ_INT(pp.game_w, geoms[g].max_w * pp.scale);
+                CHECK_EQ_INT(pp.game_h, geoms[g].max_h * pp.scale);
+                CHECK_EQ_INT(pp.base_w, geoms[g].base_w);
+                CHECK_EQ_INT(pp.base_h, geoms[g].base_h);
+                CHECK_EQ_INT(pp.max_w,  geoms[g].max_w);
+                CHECK_EQ_INT(pp.max_h,  geoms[g].max_h);
+
+                /* The rect must clear the control band -- the exact
+                   invariant config_resolve_profile's own comment says this
+                   loop exists to keep, now checked against a rect shaped
+                   nothing like the Game Boy's 800x720 (5x 160x144), so this
+                   is not merely re-running the GB sweep's arithmetic under a
+                   new label. */
+                int ctrl_top = chrome_controls_top(&dc.layout, panels[i].w, panels[i].h);
+                CHECK(pp.game_y + pp.game_h <= ctrl_top);
+
+                /* And the bezel margin, the same four sides as the Sage
+                   regression below, swept here across every geometry rather
+                   than only the compiled-in default. */
+                int left   = pp.game_x;
+                int right  = panels[i].w - pp.game_x - pp.game_w;
+                int top    = pp.game_y;
+                int bottom = panels[i].h - pp.game_y - pp.game_h;
+                CHECK(left   >= KOBOY_CHROME_MARGIN);
+                CHECK(right  >= KOBOY_CHROME_MARGIN);
+                CHECK(top    >= KOBOY_CHROME_MARGIN);
+                CHECK(bottom >= KOBOY_CHROME_MARGIN);
+            }
+        }
+
+        /* A degenerate geometry (a caller error, or a core that answered
+           retro_get_system_av_info with nothing before this ever runs) must
+           be refused, not fed to a division. */
+        koboy_profile bad;
+        CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 0, 0, 0, 0));
+        CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 100, 100, -1, 50));
     }
 
     /* ini overrides defaults; unknown keys are ignored, not fatal */
@@ -240,7 +341,7 @@ TEST_MAIN({
        on all sides so the bezel doesn't write outside the buffer. */
     config_defaults(&c);
     c.scale = 0;  /* auto */
-    CHECK(config_resolve_profile(&p, &c, 1440, 1920));
+    CHECK(config_resolve_profile(&p, &c, 1440, 1920, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
     int left   = p.game_x;
     int right  = 1440 - p.game_x - p.game_w;
     int top    = p.game_y;
@@ -252,7 +353,7 @@ TEST_MAIN({
 
     /* Same constraint with explicit scale=9 */
     c.scale = 9;
-    CHECK(config_resolve_profile(&p, &c, 1440, 1920));
+    CHECK(config_resolve_profile(&p, &c, 1440, 1920, KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H));
     left   = p.game_x;
     right  = 1440 - p.game_x - p.game_w;
     top    = p.game_y;
