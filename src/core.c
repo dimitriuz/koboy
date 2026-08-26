@@ -102,6 +102,42 @@ static bool env_cb(unsigned cmd, void *data)
         if (!strcmp(v->key, "gambatte_gbc_color_correction")) {
             v->value = "disabled"; return true;
         }
+        /* PokeMini renders its 96x64 panel through an INTERNAL upscaler,
+           default 4x, and bakes a "Dot Matrix" LCD filter into the result at
+           any scale above 1. Both are wrong here, and MEASURED so:
+
+             - at 4x the core reports 384x256, which the DMG scale search
+               then multiplies again (scale 3 on the verified 1264x1680
+               panel: 1152x768 destination pixels, ~23 ms of video_submit by
+               the device's own cost model). At 1x it reports 96x64 and
+               koboy's own integer scaler does the enlarging for free inside
+               a block copy it was already doing.
+             - the dot-matrix grid is a one-pixel-period pattern. Quantised
+               to four greys it survives as full-rect high-frequency noise
+               over every frame -- rendered and looked at, not guessed.
+           The core's own option text says the filter is disabled outright at
+           1x, so one answer fixes both.
+
+           The palette is the e-ink half of the same problem: the default
+           paints the panel 83% BLACK (measured mean luma 0.174, and 0.104
+           for "Monochrome"). E-ink is reflective paper -- a mostly-black
+           game rect is both unreadable in the light this device is for and
+           the worst case for its waveforms. "Monochrome Vector" is the same
+           two shades inverted, mean 0.868: dark ink on white, exactly like
+           the Game Boy content this faceplate was drawn for.
+
+           pokemini_lcdmode was considered here and deliberately left at the
+           core's default: "analog" mimics the real LCD's ghosting, which
+           sounds like gambatte_mix_frames' dirty-rect problem above, but
+           measured against 3shades/2shades on a static screen it moved the
+           changed-pixel count by 3 pixels in 6144 (13.88% vs 13.83%). It is
+           not the mix_frames case, so it is not koboy's business. */
+        if (!strcmp(v->key, "pokemini_video_scale")) {
+            v->value = "1x"; return true;
+        }
+        if (!strcmp(v->key, "pokemini_palette")) {
+            v->value = "Monochrome Vector"; return true;
+        }
         v->value = NULL; return false;
     }
     case RETRO_ENVIRONMENT_SET_GEOMETRY: {

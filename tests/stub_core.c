@@ -15,7 +15,16 @@ static retro_audio_sample_batch_t batch_cb;
 static uint16_t fb[STUB_FB_MAX];
 static uint8_t  sram[8];
 int stub_saw_mix_frames_disabled = 0;
+/* What koboy answered when asked for the two Pokemon Mini options core.c
+   overrides. Recorded as the ANSWER, not as a bool, so a test can assert the
+   exact string: "koboy replied something" would pass against a frontend that
+   handed back the core's own default and undo the whole point of the
+   override (a 4x internally-upscaled, dot-matrix-filtered, 83%-black panel
+   -- see core.c). Empty means the key was refused. */
+char stub_pm_video_scale[32] = "";
+char stub_pm_palette[64] = "";
 int stub_saw_can_dupe = 0;
+int stub_unknown_option_refused = 0;
 
 /* Exported, not static: the test used to inspect these under gdb, which meant
    the assertions they existed for were never actually made. dlsym-able flags
@@ -84,6 +93,29 @@ void retro_set_environment(retro_environment_t cb)
     struct retro_variable v = { "gambatte_mix_frames", NULL };
     if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &v) && v.value &&
         strcmp(v.value, "disabled") == 0) stub_saw_mix_frames_disabled = 1;
+
+    /* The real PokeMini core reads these in retro_load_game; the stub asks
+       here because that is where it already asks for its other variable, and
+       WHERE koboy is asked has never been the question -- WHAT it answers is.
+       Asked with the same struct shape and the same key strings the real core
+       uses (third_party/pokemini/libretro/libretro.c). */
+    struct retro_variable vs = { "pokemini_video_scale", NULL };
+    if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vs) && vs.value) {
+        strncpy(stub_pm_video_scale, vs.value, sizeof stub_pm_video_scale - 1);
+        stub_pm_video_scale[sizeof stub_pm_video_scale - 1] = 0;
+    }
+    struct retro_variable vp = { "pokemini_palette", NULL };
+    if (env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vp) && vp.value) {
+        strncpy(stub_pm_palette, vp.value, sizeof stub_pm_palette - 1);
+        stub_pm_palette[sizeof stub_pm_palette - 1] = 0;
+    }
+
+    /* A key koboy has no opinion about must come back REFUSED, not
+       answered: env_cb returning true with a stale v.value is how a core
+       ends up acting on whatever happened to be in the struct. */
+    struct retro_variable vu = { "stub_unknown_option", (const char *)0x1 };
+    stub_unknown_option_refused = !env_cb(RETRO_ENVIRONMENT_GET_VARIABLE, &vu)
+                                 && vu.value == NULL;
 }
 void retro_set_video_refresh(retro_video_refresh_t cb) { video_cb = cb; }
 void retro_set_audio_sample(retro_audio_sample_t cb) { (void)cb; }

@@ -203,6 +203,35 @@ TEST_MAIN({
     CHECK(was_reset != NULL);
     CHECK(ser_calls != NULL);
 
+    /* THE POKEMON MINI CORE OPTIONS koboy answers, read back as the strings
+       the core actually received. Both are corrections for the medium, not
+       taste, and both are argued at length in core.c's env_cb:
+         video_scale 1x        -- the core's default 4x makes it report
+                                  384x256 and bakes a dot-matrix LCD filter
+                                  into every frame; quantised to four greys
+                                  that filter is full-rect noise, and the
+                                  upscaling is work koboy's own integer
+                                  scaler does for free.
+         palette Monochrome Vector -- the default paints the game rect 83%
+                                  black (measured mean luma 0.174). E-ink is
+                                  reflective paper.
+       Asserted as exact strings, because these are matched by strcmp inside
+       the real core: "video_scale = 1" or "monochrome vector" would be
+       silently ignored and the core would keep its default, which is
+       precisely the failure this pins. */
+    const char *pm_scale   = (const char *)dlsym(so, "stub_pm_video_scale");
+    const char *pm_palette = (const char *)dlsym(so, "stub_pm_palette");
+    int *unknown_refused   = (int *)dlsym(so, "stub_unknown_option_refused");
+    CHECK(pm_scale != NULL);
+    CHECK(pm_palette != NULL);
+    CHECK(unknown_refused != NULL);
+    if (pm_scale)   CHECK(strcmp(pm_scale, "1x") == 0);
+    if (pm_palette) CHECK(strcmp(pm_palette, "Monochrome Vector") == 0);
+    /* And a key koboy has no opinion about is REFUSED with v.value cleared.
+       Without this, "koboy answers the two keys above" is equally consistent
+       with a frontend that answers every key with something. */
+    if (unknown_refused) CHECK_EQ_INT(*unknown_refused, 1);
+
     /* Save states round-trip through the core. Deltas, not absolute values:
        the stub's counters are process-wide statics, so an absolute == 1
        would be fragile against test order/reruns within the same binary. */
