@@ -18,7 +18,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 22 binaries, 913 checks. Runs on x86_64.
+make test        # host suite: 25 binaries, 1457 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -89,6 +89,15 @@ src/safefile.c        temp-file/fsync/rename write + all-or-nothing read,
                       discipline; used by both now
 src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
+
+-- multi-system: koboy is no longer Game-Boy-only ------------------------
+scripts/build-gw-core.sh  cross/host build of gw-libretro (Game & Watch).
+                      Closure is SMALLER than gambatte's -- libm+libc only,
+                      pure C, no libdl, no libgcc_s.
+scripts/probe_core.c  standalone: dlopens ANY core with no koboy code in the
+                      way and reports geometry BEFORE and AFTER the first
+                      retro_run(). This is how the 128x128 placeholder was
+                      found; ask it of every new core.
 src/text.c            the 5x7 bitmap font, lifted out of main.c because v2
                       has three screens that render arbitrary strings
 ```
@@ -141,6 +150,19 @@ spec's appendices are the record; the short version:
   time scales ~4.7 ms + 20.7 ns/px). v2-core's multi-rect work optimised
   `refresh`, already the cheapest stage; `video_submit` is where the next
   optimisation belongs. See `docs/FOLLOWUPS.md` #23.
+- **A libretro core's geometry is discovered, not queried.** `gw-libretro`
+  answers `retro_get_system_av_info` with a 128x128 placeholder on every one
+  of 59 titles until its first `retro_run()`, then announces the real canvas
+  via `SET_GEOMETRY`/`SET_SYSTEM_AV_INFO`. Sizing buffers from the post-load
+  query -- what the libretro docs imply -- renders a 973x532 game into a
+  128x128 box. `main.c` polls `core_geometry_changed()` every frame, which
+  also covers a mid-session ROM switch: measured, three titles loaded
+  back-to-back into one core instance each re-announced.
+- **G&W is CHEAPER than the Game Boy, not more expensive.** `video_submit`
+  scales with DESTINATION pixels (~4.7 ms + 20.7 ns/px), and the Game Boy is
+  upscaled 160x144 -> 800x720 = 576k px = 16.6 ms. G&W runs at 1x: Parachute
+  260k px (10.1 ms), Mario Bros. 518k px (15.4 ms). Comparing G&W's canvas to
+  the Game Boy's 160x144 *source* suggests a 20x cost blowup and is wrong.
 - Scale 5 with a procedural faceplate, not full-width 7x.
 - `viewVertOrigin` is **not** a blit offset.
 - "Grab the buttons but not power" is impossible: they share `gpio-keys`.

@@ -1115,19 +1115,30 @@ int main(int argc, char **argv)
                 if (!picked) {
                     mode = MODE_QUIT;
                 } else {
-                    /* KNOWN LIMITATION, not a regression: unlike the
-                       startup load above, this mid-session load does not
-                       re-query core_get_geometry or re-fit prof/vid to it.
-                       Every ROM this core (koboy is still one core per
-                       session) can load reports the same fixed 160x144
-                       geometry today, so there is nothing to re-fit and the
-                       gap is invisible. A future core whose geometry varies
-                       ROM to ROM within one session -- plausible for a
-                       multi-title Game & Watch core -- would need this path
+                    /* This mid-session load deliberately does NOT re-query
+                       core_get_geometry, and that is not the gap it looks
+                       like. core_load_rom clears geom_dirty (core.c), the new
+                       ROM's first retro_run re-announces via
+                       SET_GEOMETRY/SET_SYSTEM_AV_INFO, and the per-frame
+                       core_geometry_changed() poll below re-fits prof, the
+                       faceplate and the video buffer. MEASURED, not assumed:
+                       three .mgw titles loaded back-to-back into ONE
+                       gw-libretro instance each re-announced (Parachute
+                       658x395, Mario Bros. 973x532, Donkey Kong Circus
+                       498x771 -- 2 env calls per load, every load). An
+                       earlier version of this comment named a multi-title
+                       Game & Watch core as the case that would need work
+                       here; that is exactly the case the poll already
+                       handles, so the warning pointed at the wrong thing.
+
+                       The residual gap is narrower and nothing in scope hits
+                       it: a core that varies geometry per ROM AND reports it
+                       only from retro_get_system_av_info at load time, never
+                       via either environment command. gambatte is fixed
+                       160x144, so it cannot. Such a core would need this path
                        to redo the video_create/redraw_chrome dance the
-                       startup path now does, or frames outside the
-                       already-allocated buffer's max would be silently
-                       dropped by video_pipeline_run's bounds guard. */
+                       startup path does, or frames past the allocated max
+                       would be silently dropped by the bounds guard. */
                     char lerr[512];
                     if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
                         fatal("%s", lerr);

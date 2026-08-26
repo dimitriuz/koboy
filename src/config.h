@@ -2,6 +2,12 @@
 #define KOBOY_CONFIG_H
 #include "koboy.h"
 
+/* What v1 shipped uncommented in config/koboy.ini, back when gambatte was the
+   only core. An ini that names exactly this is indistinguishable from one that
+   was never edited, so config.c does NOT treat it as an explicit pick. See the
+   long comment at the `core=` parse site. */
+#define KOBOY_CORE_LEGACY_DEFAULT "gambatte_libretro.so"
+
 typedef struct {
     int      scale;              /* 0 = pick the largest that fits */
     int      present_divisor;    /* core frames per presented frame */

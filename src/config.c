@@ -358,8 +358,24 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "waveform_fast"))
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
         /* An ini `core=` is an explicit choice and outranks the ROM's
-           extension -- see core_explicit in config.h. */
-        else if (!strcmp(k, "core"))             { snprintf(c->core_path, sizeof c->core_path, "%s", v); c->core_explicit = true; }
+           extension -- see core_explicit in config.h. WITH ONE EXCEPTION,
+           and it is not a special case so much as a dated one: every koboy.ini
+           written before this feature existed carries a literal
+           `core = gambatte_libretro.so`, because that is what v1 shipped
+           uncommented when gambatte was the only core there was. That line
+           records PACKAGING, not preference -- nobody chose it -- so honouring
+           it as a pin would silently disable choice-by-extension for every
+           existing install, and present as ".mgw files are listed but refuse
+           to load". A redeploy overwrites koboy.ini and would fix it, but
+           docs/device-workflow.md tells the user to carry values forward from
+           their backup, which is exactly how the dead line comes back.
+           So: the historical default value alone does not mark intent.
+           `--core` on the command line is exempt from the exemption -- it is
+           typed deliberately, now, and can mean nothing else. */
+        else if (!strcmp(k, "core")) {
+            snprintf(c->core_path, sizeof c->core_path, "%s", v);
+            c->core_explicit = strcmp(v, KOBOY_CORE_LEGACY_DEFAULT) != 0;
+        }
         else if (!strcmp(k, "save_dir"))         snprintf(c->save_dir,  sizeof c->save_dir,  "%s", v);
         else if (!strcmp(k, "menu_cx"))          c->layout.menu_cx = atoi(v);
         else if (!strcmp(k, "menu_cy"))          c->layout.menu_cy = atoi(v);

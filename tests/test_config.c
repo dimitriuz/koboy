@@ -558,6 +558,34 @@ TEST_MAIN({
         CHECK(strcmp(c.core_path, "gambatte_libretro.so") == 0);
         CHECK(!c.core_explicit);
 
+        /* THE UPGRADE CASE, and the reason this is not just a duplicate of
+           the "explicit" case above. Every koboy.ini written before
+           choice-by-extension existed carries a literal
+           `core = gambatte_libretro.so`, because v1 shipped that line
+           uncommented. It records what was packaged, not what anyone chose,
+           so it must NOT pin the core -- otherwise every pre-existing install
+           lists .mgw files and then refuses to load them, with nothing in the
+           unit suite going red.
+
+           core_path is stomped with a sentinel between config_defaults and
+           config_load ON PURPOSE. config_defaults writes the legacy value
+           itself, so asserting core_path == legacy after loading a
+           `core = <legacy>` line would hold whether or not config_load read
+           the key at all -- a check that cannot fail is not a check. The
+           sentinel makes the assertion mean "the line was parsed and its
+           value honoured", which is the half that must keep working while
+           the flag half deliberately does not. */
+        snprintf(path, sizeof path, "%s/legacy.ini", dir);
+        f = fopen(path, "w");
+        CHECK(f != NULL);
+        fputs("core = " KOBOY_CORE_LEGACY_DEFAULT "\n", f);
+        fclose(f);
+        config_defaults(&c);
+        snprintf(c.core_path, sizeof c.core_path, "sentinel_not_a_core.so");
+        CHECK(config_load(&c, path));
+        CHECK(strcmp(c.core_path, KOBOY_CORE_LEGACY_DEFAULT) == 0);
+        CHECK(!c.core_explicit);
+
         char cmd[1024];
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
         if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");

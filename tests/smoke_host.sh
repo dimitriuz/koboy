@@ -4,6 +4,16 @@
 set -e
 : "${ROM:=build/fake.gb}"
 [ -f "$ROM" ] || printf '\0' > "$ROM"
+# Build first, and this is load-bearing rather than convenience. Every check
+# below runs ./build/koboy, which `make test` does NOT rebuild -- it builds the
+# test binaries only. A source edit followed by a bare `sh tests/smoke_host.sh`
+# therefore exercises the PREVIOUS binary, silently: observed while adding the
+# legacy-ini check below, which "failed" against a build predating the change
+# it was written for and passed the moment the binary caught up. A smoke test
+# that can report on code that is not in the binary is worse than no smoke
+# test, because it is believed. Set SMOKE_NO_BUILD=1 to skip (for a caller
+# that has already built, or is testing a binary on purpose).
+[ -n "${SMOKE_NO_BUILD:-}" ] || make host >/dev/null
 # Explicit rc capture rather than a bare `out=$(...)`, for the reason spelled
 # out at length further down: under `set -e` a nonzero exit inside a command
 # substitution assignment aborts the script AT THIS LINE, before the echo or
@@ -255,5 +265,25 @@ echo "$out"
 echo "$out" | grep -qx "koboy: core $d/explicit_core.so" \
     || { echo "FAIL: ini core= lost to the .mgw extension"; rm -rf "$d"; exit 1; }
 echo "ok: ini core= beats the extension"
+
+# THE UPGRADE CASE. Every koboy.ini written before choice-by-extension existed
+# carries a literal `core = gambatte_libretro.so`, because v1 shipped that line
+# uncommented. It records packaging, not preference, so it must NOT pin the
+# core -- otherwise a .mgw is listed and then handed to gambatte, which is the
+# failure the user would actually hit after redeploying and carrying their old
+# ini forward (docs/device-workflow.md tells them to). Asserted end to end
+# here, and not only in tests/test_config.c, because the flag is read in
+# src/main.c: config.c could get the flag right and main.c still ignore it.
+cat > "$d/legacy.ini" <<EOF
+core = gambatte_libretro.so
+EOF
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --config "$d/legacy.ini" \
+        --rom "$d/GAME.mgw" --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: legacy ini run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/gw_libretro.so" \
+    || { echo "FAIL: a stale 'core = gambatte_libretro.so' pinned the core"; rm -rf "$d"; exit 1; }
+echo "ok: a legacy ini core= does not pin the core"
 
 rm -rf "$d"
