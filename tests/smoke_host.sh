@@ -291,8 +291,12 @@ d="$(mktemp -d)"
 cp build/koboy       "$d/koboy"
 cp build/stub_core.so "$d/gambatte_libretro.so"
 cp build/stub_core.so "$d/gw_libretro.so"
+cp build/stub_core.so "$d/fceumm_libretro.so"
+cp build/stub_core.so "$d/pokemini_libretro.so"
 printf '\0' > "$d/GAME.mgw"
 printf '\0' > "$d/GAME.gb"
+printf '\0' > "$d/GAME.nes"
+printf '\0' > "$d/GAME.min"
 
 # .mgw with no --core: the Game & Watch core, resolved beside the binary.
 rc=0
@@ -317,6 +321,70 @@ echo "$out"
 echo "$out" | grep -qx "koboy: core $d/gambatte_libretro.so" \
     || { echo "FAIL: .gb no longer selects gambatte"; rm -rf "$d"; exit 1; }
 echo "ok: .gb still selects gambatte_libretro.so"
+
+# .nes and .min, the two systems added after the .mgw pair above. Same shape,
+# same reason it has to be end to end: config_core_for_rom's table is unit
+# tested, but only a real run proves main.c joined the name against
+# /proc/self/exe's directory and dlopen was handed the result.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.nes" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .nes run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/fceumm_libretro.so" \
+    || { echo "FAIL: .nes did not select the NES core"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "LCD layout" \
+    && { echo "FAIL: a .nes was given the LCD layout"; rm -rf "$d"; exit 1; }
+echo "ok: .nes selects fceumm_libretro.so and keeps the DMG faceplate"
+
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.min" \
+        --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .min run exited $rc"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d/pokemini_libretro.so" \
+    || { echo "FAIL: .min did not select the Pokemon Mini core"; rm -rf "$d"; exit 1; }
+echo "$out" | grep -q "LCD layout" \
+    && { echo "FAIL: a .min was given the LCD layout"; rm -rf "$d"; exit 1; }
+echo "ok: .min selects pokemini_libretro.so and keeps the DMG faceplate"
+
+# ------------------------------------------- battery saves, for a NES cart
+#
+# NES cartridges have battery-backed SRAM and koboy already has a save path
+# that was verified on hardware against a Zelda Game Boy cartridge -- but
+# "the wiring carries over" is exactly the assumption that, if wrong, looks
+# identical to a working save until someone loses a playthrough. So this
+# drives the whole chain for a .nes: core_sram -> the periodic/final
+# sram_save -> a file on disk with the CORE's bytes in it.
+#
+# The stub core writes A0..A7 into its save RAM on every retro_run
+# (tests/stub_core.c), which is what makes this an assertion rather than an
+# existence check: an empty or zero-filled .srm would be indistinguishable
+# from a file the shell created, and od(1) below names the exact bytes.
+sd="$(mktemp -d)"
+[ -e "$sd/GAME.srm" ] && { echo "FAIL: save dir was not clean"; rm -rf "$d" "$sd"; exit 1; }
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.nes" \
+        --save-dir "$sd" --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .nes save run exited $rc"; rm -rf "$d" "$sd"; exit 1; }
+[ -f "$sd/GAME.srm" ] \
+    || { echo "FAIL: a .nes run wrote no .srm at all"; rm -rf "$d" "$sd"; exit 1; }
+bytes=$(od -An -tx1 "$sd/GAME.srm" | tr -s ' ' | sed 's/^ //;s/ $//')
+[ "$bytes" = "a0 a1 a2 a3 a4 a5 a6 a7" ] \
+    || { echo "FAIL: .srm holds '$bytes', not the core's save RAM"; \
+         rm -rf "$d" "$sd"; exit 1; }
+# And it comes back: the same path, read whole, is what a second session does.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d/koboy" --rom "$d/GAME.nes" \
+        --save-dir "$sd" --panel 1264x1680 --frames 10 2>&1) || rc=$?
+echo "$out"
+[ "$rc" -eq 0 ] || { echo "FAIL: .nes reload run exited $rc"; rm -rf "$d" "$sd"; exit 1; }
+echo "$out" | grep -q "loaded $sd/GAME.srm" \
+    || { echo "FAIL: the second session did not load the .srm back"; \
+         rm -rf "$d" "$sd"; exit 1; }
+rm -rf "$sd"
+echo "ok: a .nes battery save is written and read back"
 
 # --core beats the extension. A .mgw ROM with an explicit core must open THAT
 # core -- and the explicit path is deliberately a THIRD file, distinguishable

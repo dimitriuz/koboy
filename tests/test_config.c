@@ -259,6 +259,15 @@ TEST_MAIN({
         CHECK_EQ_INT(config_layout_for_rom("mickey.MgW"), KOBOY_LAYOUT_LCD);
         CHECK_EQ_INT(config_layout_for_rom("tetris.gb"), KOBOY_LAYOUT_DMG);
         CHECK_EQ_INT(config_layout_for_rom("zelda.gbc"), KOBOY_LAYOUT_DMG);
+        /* The two systems added after the LCD layout existed. Both are
+           d-pad + face buttons + START/SELECT machines with PHYSICAL buttons,
+           so both get the DMG faceplate -- .mgw stays the only extension that
+           earns LCD, and a layout picker that keyed off "not a Game Boy"
+           rather than off ".mgw" would fail exactly here. */
+        CHECK_EQ_INT(config_layout_for_rom("metroid.nes"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("METROID.NES"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("tetris.min"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("TETRIS.MIN"), KOBOY_LAYOUT_DMG);
         /* Not a suffix match on "mgw" anywhere in the name, and not fooled by
            a name shorter than the extension -- the same two traps
            ends_with_mgw's own guard exists for. */
@@ -670,6 +679,35 @@ TEST_MAIN({
         /* Superstring and prefix, same trap as the browser filter. */
         CHECK(strcmp(config_core_for_rom("BALL.mgwx"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("BALL.mg"), "gambatte_libretro.so") == 0);
+
+        /* .nes -> fceumm, .min -> PokeMini. The gambatte assertions above are
+           what make these mean something: a table that answered the LAST
+           matching entry for everything, or a fall-through that stopped
+           falling through, would break one of the two halves. */
+        CHECK(strcmp(config_core_for_rom("METROID.nes"), "fceumm_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("METROID.NES"), "fceumm_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("METROID.NeS"), "fceumm_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/mnt/onboard/.adds/koboy/roms/NES/Metroid (USA).nes"),
+                     "fceumm_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("TETRIS.min"), "pokemini_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("TETRIS.MIN"), "pokemini_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("TETRIS.MiN"), "pokemini_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/PokemonMini/Pokemon Tetris (Europe) (En,Ja,Fr).min"),
+                     "pokemini_libretro.so") == 0);
+        /* Superstring and prefix for both new extensions. */
+        CHECK(strcmp(config_core_for_rom("METROID.nesx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("METROID.ne"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("TETRIS.minx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("TETRIS.mi"), "gambatte_libretro.so") == 0);
+        /* The four cores are four DISTINCT files. A table whose entries had
+           been copy-pasted with one name left unchanged would satisfy every
+           individual assertion above and still ship a .min to fceumm. */
+        CHECK(strcmp(config_core_for_rom("A.nes"), config_core_for_rom("A.min")) != 0);
+        CHECK(strcmp(config_core_for_rom("A.nes"), config_core_for_rom("A.mgw")) != 0);
+        CHECK(strcmp(config_core_for_rom("A.min"), config_core_for_rom("A.mgw")) != 0);
+        CHECK(strcmp(config_core_for_rom("A.nes"), config_core_for_rom("A.gb")) != 0);
+        CHECK(strchr(config_core_for_rom("A.nes"), '/') == NULL);
+        CHECK(strchr(config_core_for_rom("A.min"), '/') == NULL);
 
         /* The result must stay SLASHLESS. config_join_sibling passes any name
            containing a slash through verbatim, so a "cores/gw_libretro.so"

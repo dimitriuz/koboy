@@ -147,6 +147,14 @@ bool retro_unserialize(const void *data, size_t size)
 void retro_run(void)
 {
     if (poll_cb) poll_cb();
+    /* A RECOGNISABLE SAVE-RAM SIGNATURE, written every frame. The size stays
+       8 bytes (test_core.c pins that), but the CONTENT stops being all-zero,
+       and that is what lets tests/smoke_host.sh assert a battery save really
+       travelled core -> koboy -> disk: a .srm of eight zero bytes is
+       indistinguishable from a file someone created with `: >`, whereas
+       A0..A7 can only have come from here. retro_load_game still zeroes it,
+       so "loaded, never run" remains distinguishable from "ran". */
+    for (unsigned i = 0; i < sizeof sram; i++) sram[i] = (uint8_t)(0xA0 + i);
     uint16_t bits = 0;
     for (unsigned id = 0; id < 16; id++)
         if (state_cb && state_cb(0, RETRO_DEVICE_JOYPAD, 0, id)) bits |= (uint16_t)(1u << id);

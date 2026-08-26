@@ -937,7 +937,7 @@ int main(int argc, char **argv)
             snprintf(cfg.core_path, sizeof cfg.core_path, "%s", want);
     }
 
-    /* Logged, not silent: two cores ship now and "which one did it pick?" is
+    /* Logged, not silent: four cores ship now and "which one did it pick?" is
        otherwise unanswerable on a device with no terminal, where the only
        symptom of a wrong pick is a core that rejects the ROM. */
     say("koboy: core %s\n", cfg.core_path);

@@ -59,6 +59,44 @@ TEST_MAIN({
     CHECK_EQ_INT(romlist_is_rom("BALL.mg"), 0);
     CHECK_EQ_INT(romlist_is_rom("BALL.gw"), 0);
 
+    /* .nes and .min, same one-list reasoning as .mgw above. The negatives
+       here are the point: a real NES collection ships .pal palette files
+       beside the ROMs (262 of them against 5263 .nes in the author's), and a
+       Pokemon Mini one ships boot.rom -- neither is content, and both would
+       list as selectable "games" under a filter that matched loosely or that
+       simply forgot them. */
+    CHECK_EQ_INT(romlist_is_rom("Metroid (USA).nes"), 1);
+    CHECK_EQ_INT(romlist_is_rom("METROID (USA).NES"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Metroid (USA).NeS"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Pokemon Tetris (Europe) (En,Ja,Fr).min"), 1);
+    CHECK_EQ_INT(romlist_is_rom("POKEMON TETRIS.MIN"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Pokemon Tetris.MiN"), 1);
+    /* A dumped BIOS is a .min and IS listed. Deliberate, and the choice is
+       argued in the task report: this filter is an allowlist of EXTENSIONS
+       and nothing else, so a name-prefix rule for "[BIOS] " would also hide
+       a homebrew that happened to be named that way, and would be a second,
+       invisible rule for a user to discover when their file vanished. The
+       core needs no BIOS anyway (it links a free one), so the file is
+       inert, not load-bearing. */
+    CHECK_EQ_INT(romlist_is_rom("[BIOS] Nintendo Pokemon Mini (World).min"), 1);
+    /* The files that must NOT be listed. */
+    CHECK_EQ_INT(romlist_is_rom("NES-Classic.pal"), 0);
+    CHECK_EQ_INT(romlist_is_rom("nes-classic.PAL"), 0);
+    CHECK_EQ_INT(romlist_is_rom("boot.rom"), 0);
+    CHECK_EQ_INT(romlist_is_rom("gamelist.xml"), 0);
+    /* Superstring and prefix, the same trap the .mgw block above rules out.
+       ".ne" matters more than it looks: a three-character compare against
+       ".nes" would accept it. */
+    CHECK_EQ_INT(romlist_is_rom("Metroid.nesx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Metroid.ne"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Tetris.minx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Tetris.mi"), 0);
+    /* A Famicom Disk System image sits in the same directories and fceumm
+       does accept .fds -- but koboy does not list it, on purpose: the FDS
+       needs a BIOS koboy has no system directory to hand it, so listing it
+       would offer a row that cannot load. */
+    CHECK_EQ_INT(romlist_is_rom("Super Mario Bros. 2 (Japan) (En).fds"), 0);
+
     /* The short-name guard's failure mode, made deterministic instead of
        ASan-only: if ends_with_ci's `if (lx > ls) return false;` is removed,
        the backward read for suffix ".gb" walks off the front of "b" -- but

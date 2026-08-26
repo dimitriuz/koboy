@@ -146,11 +146,11 @@ void config_defaults(koboy_config *c)
 
 /* ------------------------------------------------------ core by extension
  *
- * koboy now ships two cores, and which one a file needs is knowable from its
- * name alone: gw-libretro eats .mgw, gambatte eats everything else this
- * project lists. The browser hands main.c a path long after the config was
- * read, so this cannot live in config_load -- it is a pure function of the
- * ROM name, called at load time.
+ * koboy ships four cores now, and which one a file needs is knowable from its
+ * name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats .min,
+ * and gambatte eats everything else this project lists. The browser hands
+ * main.c a path long after the config was read, so this cannot live in
+ * config_load -- it is a pure function of the ROM name, called at load time.
  *
  * Its own case-insensitive suffix match rather than strcasecmp, and rather
  * than borrowing romlist.c's: config is the lower layer of the two (romlist
@@ -158,10 +158,9 @@ void config_defaults(koboy_config *c)
  * is the kind of host-dependent header this project keeps out of portable
  * code. Six lines is cheaper than either coupling.
  */
-static bool ends_with_mgw(const char *s)
+static bool ends_with_ext(const char *s, const char *ext)
 {
-    static const char ext[] = ".mgw";
-    size_t ls = strlen(s), lx = sizeof ext - 1;
+    size_t ls = strlen(s), lx = strlen(ext);
     /* LIVE GUARD: a name shorter than the suffix ("a.gb" is fine, "gb" is
        not) would make s + ls - lx read before the string. */
     if (lx > ls) return false;
@@ -169,18 +168,34 @@ static bool ends_with_mgw(const char *s)
     for (size_t i = 0; i < lx; i++) {
         char c = tail[i];
         if (c >= 'A' && c <= 'Z') c += 32;
-        if (c != ext[i]) return false;
+        if (c != ext[i]) return false;   /* ext is written lowercase below */
     }
     return true;
 }
+
+/* A table rather than a chain of ifs, because the chain is what silently
+   grows a hole: every new system needs an entry in BOTH this map and
+   romlist_is_rom, and a table makes the pair reviewable side by side.
+   Extensions are lowercase because ends_with_ext lowercases only the
+   candidate, not the pattern. */
+static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
+    { ".mgw", "gw_libretro.so"       },   /* Game & Watch, gw-libretro   */
+    { ".nes", "fceumm_libretro.so"   },   /* NES, libretro-fceumm        */
+    { ".min", "pokemini_libretro.so" },   /* Pokemon Mini, libretro/PokeMini */
+};
 
 const char *config_core_for_rom(const char *rom_path)
 {
     /* No name at all still answers gambatte: the caller writes the result
        into core_path unconditionally, and a NULL return would be a crash
-       where the old unconditional default was merely useless. */
+       where the old unconditional default was merely useless. Gambatte also
+       stays the fall-through for an unlisted extension, for the same reason
+       it was the unconditional answer before this table existed. */
     if (!rom_path || !*rom_path) return "gambatte_libretro.so";
-    return ends_with_mgw(rom_path) ? "gw_libretro.so" : "gambatte_libretro.so";
+    for (size_t i = 0; i < sizeof g_core_by_ext / sizeof *g_core_by_ext; i++)
+        if (ends_with_ext(rom_path, g_core_by_ext[i].ext))
+            return g_core_by_ext[i].core;
+    return "gambatte_libretro.so";
 }
 
 int config_layout_for_rom(const char *rom_path)
@@ -188,9 +203,16 @@ int config_layout_for_rom(const char *rom_path)
     /* No name at all is the DMG faceplate, matching the sibling above: this
        is the answer for the placeholder profile main.c resolves before any
        ROM has been chosen, and it is also the layout every UI screen (MAIN
-       MENU, RECENT, ALL GAMES) is drawn over. */
+       MENU, RECENT, ALL GAMES) is drawn over.
+
+       .mgw is still the ONLY LCD extension, and the new systems are
+       deliberately not in that company: a NES pad and a Pokemon Mini are
+       both d-pad + face buttons + START/SELECT machines whose buttons are
+       physical, not drawn into the artwork, which is exactly what the DMG
+       faceplate already draws and hit-tests. LCD exists because a Game &
+       Watch unit draws its own controls; neither of these does. */
     if (!rom_path || !*rom_path) return KOBOY_LAYOUT_DMG;
-    return ends_with_mgw(rom_path) ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
+    return ends_with_ext(rom_path, ".mgw") ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
 }
 
 /* ------------------------------------------------- install-relative paths

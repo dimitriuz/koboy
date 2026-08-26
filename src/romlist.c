@@ -31,12 +31,23 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    /* .mgw is Game & Watch content for gw-libretro, not a Game Boy ROM; the
-       browser lists both because the core is chosen from the extension at
-       load time (config_core_for_rom), so a mixed roms/ directory is one
-       list, not two. */
+    /* One list, four systems. .mgw is Game & Watch content for gw-libretro,
+       .nes is a NES cartridge for fceumm, .min is a Pokemon Mini cartridge
+       for PokeMini; none of them is a Game Boy ROM. The browser lists them
+       all because the core is chosen from the extension at load time
+       (config_core_for_rom, whose table this list must stay in step with),
+       so a mixed roms/ directory is one list, not two.
+
+       What is NOT here matters as much as what is. A real NES collection
+       carries .pal palette files beside the ROMs (262 of them in the
+       author's, against 5263 .nes) and a Pokemon Mini one carries boot.rom;
+       neither is content, both would list as selectable "games", and both
+       are excluded by this being an allowlist of extensions rather than a
+       blocklist of the ones seen so far. */
     return ends_with_ci(name, ".gb") || ends_with_ci(name, ".gbc")
-        || ends_with_ci(name, ".mgw");
+        || ends_with_ci(name, ".mgw")
+        || ends_with_ci(name, ".nes")
+        || ends_with_ci(name, ".min");
 }
 
 /* Row order, in one place: kind first (the enum's own order -- ".." above
