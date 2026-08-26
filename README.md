@@ -1,8 +1,11 @@
 # koboy
 
-A Game Boy emulator for Kobo e-readers. It runs a libretro core (gambatte),
-renders the DMG's four greys straight onto the e-ink panel through FBInk, and
-reads the page-turn buttons and the touchscreen directly from evdev.
+A retro emulator for Kobo e-readers, built Game-Boy-first. It runs a libretro
+core picked from the ROM's own extension --- gambatte for `.gb`/`.gbc`,
+gw-libretro for Game & Watch `.mgw`, fceumm for NES `.nes`, PokeMini for
+Pokemon Mini `.min` --- renders four greys straight onto the e-ink panel
+through FBInk, and reads the page-turn buttons and the touchscreen directly
+from evdev. No BIOS file is needed for any of them.
 
 It is built around what the hardware can actually do rather than around what a
 desktop emulator expects: each refresh lets the panel controller pick its own
@@ -20,10 +23,13 @@ Game Boy.
 - NickelMenu or KFMon, to launch it. koboy will not run without one; see
   "Launching" below for why that is a hard requirement.
 - **Your own ROMs.** None are included, and none ever will be. Either point
-  `rom=` in `koboy.ini` at a specific `.gb`/`.gbc` file, or drop several into
-  `.adds/koboy/roms/` (the `rom_dir` default, searched recursively -- a
-  `gbc/` subfolder works) and pick one from koboy's own on-panel menu at
-  launch -- see "Playing" below.
+  `rom=` in `koboy.ini` at a specific `.gb`/`.gbc`/`.mgw`/`.nes`/`.min` file,
+  or drop several into `.adds/koboy/roms/` (the `rom_dir` default) and pick
+  one from koboy's own on-panel menu at launch -- see "Playing" below.
+  Subfolders work: the browser walks them one level at a time, which is what
+  makes a 1386-file NES collection usable. Files that are not ROMs are not
+  listed, so the `.pal` palettes and `boot.rom` a real collection carries
+  stay out of the way.
 
 ## Install
 
@@ -69,8 +75,8 @@ cannot damage the device identity; it just declines to start.
 
 - If `rom=` in `koboy.ini` is unset, koboy opens a MAIN MENU instead of going
   straight to a game: **RECENT** (the last few ROMs actually played, newest
-  first -- empty on a first run), **ALL GAMES** (every `.gb`/`.gbc` file under
-  `rom_dir`, default `roms` i.e. `.adds/koboy/roms/`, searched recursively),
+  first -- empty on a first run), **ALL GAMES** (the contents of `rom_dir`,
+  default `roms` i.e. `.adds/koboy/roms/`, one folder at a time),
   or **QUIT**. ALL GAMES pages with the page-turn buttons, jumps by starting
   letter with a tap on the right-edge strip or with both page-turn buttons
   together, and is picked with a tap; set `rom=` to a specific path to skip

@@ -1,8 +1,10 @@
 # koboy
 
-A Game Boy emulator for modern Kobo e-readers. No C++. It `dlopen`s
-gambatte-libretro, renders the DMG's four greys through FBInk to the e-ink
-panel, and reads the page-turn buttons and touchscreen straight from evdev.
+A retro emulator front-end for modern Kobo e-readers, built Game-Boy-first.
+No C++ of its own. It `dlopen`s a libretro core chosen from the ROM's
+extension — gambatte (.gb/.gbc), gw-libretro (.mgw), fceumm (.nes),
+PokeMini (.min) — renders four greys through FBInk to the e-ink panel, and
+reads the page-turn buttons and touchscreen straight from evdev.
 
 **v1 is merged and verified on real hardware** (a Kobo Libra 2, playing Tetris
 and an action platformer, exiting to a working Nickel without a reboot).
@@ -18,7 +20,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 25 binaries, 1457 checks. Runs on x86_64.
+make test        # host suite: 25 binaries, 2505 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -77,11 +79,14 @@ scripts/koboy.sh      the launcher. Its environment gate is load-bearing.
 -- v2 additions: the ROM browser, in-game MENU and save states -----------
 src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
                       browser and the in-game MENU (MODE_BROWSE / MODE_MENU)
-src/romlist.c         lists ONE directory of rom_dir (.gb/.gbc/.mgw) at a
-                      time -- folders sort first, then files, with a ".."
-                      row below the root; feeds ui.c's list widget. It does
-                      NOT recurse: the flatten it replaced put the same
-                      "Game and Watch/" prefix on 59 rows
+src/romlist.c         lists ONE directory of rom_dir at a time -- folders
+                      sort first, then files, with a ".." row below the root;
+                      feeds ui.c's list widget. It does NOT recurse: the
+                      flatten it replaced put the same "Game and Watch/"
+                      prefix on 59 rows. romlist_is_rom is an ALLOWLIST of
+                      extensions (.gb/.gbc/.mgw/.nes/.min) and must stay in
+                      step with config_core_for_rom's table -- a real NES
+                      collection ships .pal files beside the ROMs
 src/uiscript.c        replays a synthetic input script (tap/key/idle) into
                       the ROM BROWSER only -- --ui-script, for bounded
                       unattended runs. MODE_MENU is not scripted; a run whose
@@ -95,15 +100,36 @@ src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
 
 -- multi-system: koboy is no longer Game-Boy-only ------------------------
-scripts/build-gw-core.sh  cross/host build of gw-libretro (Game & Watch).
-                      Closure is SMALLER than gambatte's -- libm+libc only,
-                      pure C, no libdl, no libgcc_s.
+Four cores ship. Extension -> core -> layout, all decided in config.c:
+  .gb/.gbc  gambatte_libretro.so    DMG faceplate
+  .mgw      gw_libretro.so          LCD strip (the unit draws its own buttons)
+  .nes      fceumm_libretro.so      DMG faceplate
+  .min      pokemini_libretro.so    DMG faceplate + a THIRD face button, C
+Adding a system is a build script plus four wiring points: the table in
+config_core_for_rom, romlist_is_rom, a non-phony $(CORE_*_SO) rule in the
+Makefile, and the generated roms/README.txt.
+
+scripts/build-gw-core.sh      gw-libretro (Game & Watch)
+scripts/build-fceumm-core.sh  libretro-fceumm (NES). Three non-default make
+                      switches, each justified in the script's header; the
+                      headline is WANT_32BPP=0, which gets RGB565 instead of
+                      XRGB8888 and halves what video_submit reads per frame.
+scripts/build-pokemini-core.sh  libretro/PokeMini (Pokemon Mini). NO BIOS
+                      SHIPS AND NONE IS NEEDED -- the core links its own free
+                      one, verified against an EMPTY system directory.
+All three are pure C: closure is libm+libc only, SMALLER than gambatte's --
+no libdl, no libgcc_s, no ld-linux-armhf.
 scripts/probe_core.c  standalone: dlopens ANY core with no koboy code in the
                       way and reports geometry BEFORE and AFTER the first
                       retro_run(). This is how the 128x128 placeholder was
                       found; ask it of every new core.
 src/text.c            the 5x7 bitmap font, lifted out of main.c because v2
                       has three screens that render arbitrary strings
+
+koboy_layout's c_cx/c_cy/c_r is the Pokemon Mini's third face button, with
+c_r == 0 meaning "this system has no C". Three consumers guard on it
+(chrome_controls_top, the DMG renderer, input.c's hit test) and each has a
+distinct failure if the guard goes -- see the commit and test_chrome.c.
 ```
 
 Path resolution is against `/proc/self/exe`'s directory — **`dlopen` never
@@ -120,7 +146,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 24 deferred findings (16 from v1, 8 from v2-core), ordered by what bites first. Start here for the next session's scope. |
+| `docs/FOLLOWUPS.md` | 38 deferred findings, ordered by what bites first. Start here for the next session's scope. **#33 is the live one: neither NES nor Pokemon Mini has run on hardware at all.** |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |

@@ -340,3 +340,73 @@ measured on a scrolling platformer -- does not apply to it at all. The
 shipped `3` was chosen against Darkwing Duck. A per-layout default would let
 Game & Watch present more often without touching the Game Boy's tuning.
 Config question, not a code one, until someone reports a title feeling slow.
+
+## NES and Pokemon Mini (added 2026-08-26)
+
+### 33. NEITHER NEW SYSTEM HAS RUN ON HARDWARE
+
+The highest-value item in this file. Everything about fceumm and PokeMini in
+this repo was measured on the x86_64 host with `scripts/probe_core.c` and a
+throwaway frame dumper; the ARM cores were cross-built and put through
+`scripts/verify-core.sh` (both pass with libm+libc alone), and nothing else.
+Not established on the device:
+
+| | |
+|---|---|
+| The ARM cores `dlopen` at all | not established |
+| Either system renders on the panel | not established |
+| Playable speed | not established -- see #34 |
+| The C button is reachable by a real finger | not established |
+| A NES battery save survives a real session | not established (the path is verified end to end on the host, and the same path was verified on the device for a Game Boy cartridge) |
+
+A `--frames` run over ssh, as the 2026-08-26 session did for the Game Boy,
+would settle the first three cheaply and without stopping Nickel.
+
+### 34. NES may not be fast enough, and the shipped scale is not the tuned one
+
+At the shipped `scale = 5` a 256x240 NES frame does not fit the Libra 2's
+1264x1680 panel, so the resolver demotes to 3: a 768x720 rect, 553k
+destination pixels, ~16.1 ms of `video_submit` by #23's model -- almost
+exactly the Game Boy's 16.6 ms. On the larger Elipsa/Sage panels it holds
+scale 4: 1024x960, 983k px, ~25 ms. So the presentation cost is in family,
+but fceumm's own emulation cost against gambatte's 2.3 ms is UNMEASURED, and
+the NES is a considerably bigger machine. `present_divisor` may want to move
+for it (#32 is the same question for Game & Watch).
+
+### 35. Pokemon Mini renders a postage stamp at the shipped scale
+
+96x64 at `scale = 5` is a 480x320 rect -- 38% of the panel width, and only
+154k destination pixels (~7.9 ms, by far the cheapest system koboy runs).
+`scale = 0` would auto-fit it to 13x, 1248x832, ~26 ms. Neither number is
+wrong; the shipped one is simply tuned for the Game Boy. A per-system scale
+default is the real answer and it is the same shape of question as #32.
+Until then the owner should set `scale = 0` in `koboy.ini` when playing
+Pokemon Mini, and the resolver will still demote for every other system.
+
+### 36. `[BIOS] ....min` is listed in the browser as a selectable game
+
+The Pokemon Mini core links its own free BIOS and needs no dumped one
+(verified against an empty system directory), so the `[BIOS] Nintendo Pokemon
+Mini (World).min` that ships in a normal collection is inert -- but it is a
+`.min`, so `romlist_is_rom` lists it. Deliberately not filtered: that
+predicate is an allowlist of EXTENSIONS, and a name-prefix rule would also
+hide a homebrew named that way and would be a second, invisible rule for a
+user to discover when their file vanished. Revisit only if someone actually
+selects it and is confused by what happens.
+
+### 37. `.fds` is accepted by fceumm and not listed by koboy
+
+fceumm's `valid_extensions` is `fds|nes|unf|unif`, and a real collection has
+a `3 Famicom Disk System/` folder in it. koboy does not list `.fds`, because
+the FDS needs `disksys.rom` in a system directory koboy has no concept of --
+measured: an `.fds` fails `retro_load_game` outright with an empty system
+directory. Supporting it means giving koboy a system directory, which is a
+design decision, not an extension entry.
+
+### 38. Frame pacing is still the Game Boy's for every system
+
+`KOBOY_FRAME_US` is 16742 us (59.7275 Hz). fceumm reports 60.0998 fps and
+PokeMini reports 72. Nothing reads `retro_system_timing` (core.c says so at
+the SET_SYSTEM_AV_INFO handler). With `present_divisor = 3` on an e-ink panel
+this is very unlikely to be visible, but it is now wrong for three of the
+four cores rather than one.

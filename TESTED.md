@@ -22,6 +22,46 @@ and slight ghosting the player was happy to live with. The earlier defaults
 (`450` / `60` / `3000`) were mitigations for a forced-DU4 pipeline and, once
 measured, turned out to cause every flash between them while fixing nothing.
 
+### NES and Pokemon Mini: NOT RUN ON THE DEVICE, 2026-08-26
+
+Both systems were added and wired on the same day and **neither has been on
+a Kobo**. Everything below was measured on the x86_64 dev host with
+`scripts/probe_core.c` against ROMs from a real collection; the ARM cores
+were cross-built and passed `scripts/verify-core.sh` (libm + libc only, for
+both), and that is the whole of the device-side evidence.
+
+| | NES (fceumm) | Pokemon Mini (PokeMini) |
+|---|---|---|
+| Geometry before the first `retro_run` | 256x240 | 96x64 at 1x (384x256 at the core's own 4x default) |
+| ...and after | unchanged | unchanged |
+| `SET_GEOMETRY` / `SET_SYSTEM_AV_INFO` at runtime | never | never |
+| Pixel format | RGB565 (with `WANT_32BPP=0`; XRGB8888 otherwise) | RGB565 |
+| Asks for a system directory | yes | yes |
+| Asks for a save directory | no | yes |
+| `valid_extensions` | `fds\|nes\|unf\|unif` | `min` |
+| `RETRO_MEMORY_SAVE_RAM` | 8192 for a battery cart, 0 without | 0 -- it writes its own `.eep` |
+| BIOS required | not for `.nes` (yes for `.fds`, which koboy does not list) | **no** -- the core links a free one, verified against an empty system dir |
+| ARM closure | `libm.so.6`, `libc.so.6` | `libm.so.6`, `libc.so.6` |
+| ARM size, stripped | 2.2 MB | 217 KB |
+
+Neither reports a placeholder geometry, unlike gw-libretro -- but that was
+established by asking, which is the only reason it is written here.
+
+Resolved presentation, from `config_resolve_profile` at the shipped
+`scale = 5`, with `video_submit` estimated from #23's 4.7 ms + 20.7 ns/px:
+
+| System | Panel | Scale | Rect | dst px | est. `submit` |
+|---|---|---|---|---|---|
+| NES 256x240 | 1264x1680 | 3 | 768x720 | 553k | 16.1 ms |
+| NES 256x240 | 1440x1920 | 4 | 1024x960 | 983k | 25.0 ms |
+| Pokemon Mini 96x64 | any | 5 | 480x320 | 154k | 7.9 ms |
+| (Game Boy, for scale) | 1264x1680 | 5 | 800x720 | 576k | 16.6 ms |
+
+NES lands almost exactly on the Game Boy's presentation cost. Pokemon Mini
+is by far the cheapest thing koboy renders and correspondingly small on the
+panel -- `scale = 0` auto-fits it to 13x (1248x832, ~26 ms). See
+`docs/FOLLOWUPS.md` #34 and #35.
+
 ### Game & Watch: VERIFIED on the device, 2026-08-26
 
 Confirmed working by the device owner on the Kobo Libra 2: a Game & Watch
