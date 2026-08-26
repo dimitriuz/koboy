@@ -113,8 +113,42 @@ output is natively black-on-grey. There is **no scrolling at all**, so #25 —
 the defect that makes scrolling platformers unplayable — simply does not
 apply. The 8x8 dirty-tile pass, which measured no benefit on Darkwing Duck
 (#27), is exactly the workload it was designed for.
-*Caveat:* the core renders at artwork resolution, which can be large; needs
-measuring against §2's budget rather than assuming.
+**MEASURED, 2026-08-26**, against a real 59-title `.mgw` collection. The format
+is bzip2 over a tar-like container of Madrigal BASIC scripts (`main.bs`,
+`unit1.bs`), RLE artwork (`im_background*.rle`, `im_number_*`, `btn_*`) and PCM
+audio. Artwork dimensions are a big-endian `u16` pair at the head of each RLE
+entry, and they are **smaller than feared**:
+
+| Type | Example | Artwork | submit @1x |
+|---|---|---|---|
+| Wide Screen | Parachute | 658x395 | 10.1 ms |
+| Table Top | Snoopy | 443x743 + 320x165 | 12.6 ms |
+| Multi Screen | Mario Bros. | 473x532 + 973x532 | 20.6 ms |
+| Panorama | Donkey Kong Jr. | 499x771 + 499x456 + 356x190 | 18.8 ms |
+
+Across the whole set: width 431–692, height 322–759 (a Multi Screen's *open*
+image reaches 973x532 or 606x748, being two LCDs side by side or stacked).
+**All 59 fit the §2 budget at 1:1, costing 8.7–21 ms — at or below the Game
+Boy's current 16.6 ms.**
+
+Three consequences worth deciding before implementing:
+
+- **Integer scaling is awkward here.** The artwork is too large to double
+  within the game-rect budget, so every title is stuck at 1x and occupies only
+  35–77% of the panel width. Doubling is possible for the *portrait* titles only
+  if the drawn faceplate is dropped (see below) — but at 32–42 ms of submit,
+  double the Game Boy's cost. 1x is the practical answer.
+- **The artwork already contains the device's own buttons.** koboy drawing its
+  DMG faceplate *around* a picture of a Game & Watch is redundant and slightly
+  absurd. The better design is chrome-less for this core, artwork centred, with
+  touch zones mapped onto the buttons drawn in the artwork itself. That also
+  frees the vertical budget.
+- **The artwork is colour** (a scan of the physical unit), so the surround
+  becomes greyscale. The gameplay elements — the LCD segments — are
+  black-on-grey and unaffected, which is the half that matters.
+
+Also note the PCM entries: these games are substantially about their beeps, and
+koboy has no audio. Worth saying out loud rather than discovering.
 
 **ScummVM.** Point-and-click adventures are static screens with occasional
 animation, and the native input is a **pointer** — which this device has, and
@@ -194,7 +228,10 @@ selects one, and the ROM browser could infer it from the file extension.
 
 ## 8. Open questions
 
-- Game & Watch artwork resolution against §2's budget — unmeasured.
+- ~~Game & Watch artwork resolution against §2's budget~~ — **measured, see
+  §4 Tier 1.** All 59 titles fit at 1:1 for 8.7–21 ms. Remaining sub-question:
+  whether to drop the drawn faceplate for this core and map touch onto the
+  artwork's own buttons.
 - Whether `SET_GEOMETRY` mid-run needs honouring, or load-time resolution is
   enough.
 - Whether four grey levels are usable for colour systems in practice. `video.c`
