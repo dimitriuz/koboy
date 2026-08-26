@@ -16,6 +16,18 @@ typedef struct { uint16_t type, code; int32_t value; } koboy_ev;
 #define KOBOY_ABS_MT_POSITION_Y  0x36
 #define KOBOY_ABS_MT_TRACKING_ID 0x39
 
+/* The d-pad on a Bluetooth gamepad. MEASURED on a real Xbox Wireless
+   Controller, 2026-08-26: it does NOT arrive as EV_KEY like the page-turn
+   buttons -- it is a hat switch, reported as two absolute axes each taking
+   exactly -1/0/+1. input.c decodes these directly into KOBOY_BTN_UP/DOWN/
+   LEFT/RIGHT; see the long comment there for why that decode needs none of
+   the touch thumb-pad's deadzone/hysteresis machinery.
+
+   ABS_X/ABS_Y (the analog stick, codes 0x00/0x01) are deliberately NOT
+   named or handled here -- see input.c's input_feed. */
+#define KOBOY_ABS_HAT0X 0x10
+#define KOBOY_ABS_HAT0Y 0x11
+
 typedef struct koboy_input koboy_input;
 
 koboy_input *input_create(const koboy_config *c, const koboy_profile *p);

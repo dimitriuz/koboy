@@ -29,6 +29,20 @@ void config_defaults(koboy_config *c)
        key. */
     c->key_a = KOBOY_KEY_PAGE_F23;
     c->key_b = KOBOY_KEY_PAGE_F24;
+    /* key_start/key_select have no page-turn-button equivalent to fall back
+       on the way key_a/key_b do -- a Kobo has exactly two hardware buttons,
+       already spent above. So unlike key_a/key_b, THIS default is a GUESS,
+       not a measurement of correctness: BTN_TL/BTN_TR (Xbox LB/RB) are a
+       reasonable pair because they are two buttons distinct from A/B/the
+       d-pad on the one real pad this project has measured (spec Appendix A,
+       2026-08-26), but nothing says every gamepad's user wants shoulder
+       buttons for Start/Select. Config-overridable, and first-run
+       calibration exists for exactly this reason -- see KOBOY_KEY_BTN_TL's
+       comment in koboy.h. On a touch-only or two-button Kobo with no pad,
+       these two codes simply never arrive and Start/Select stay reachable
+       only through the drawn faceplate, same as they always were. */
+    c->key_start = KOBOY_KEY_BTN_TL;
+    c->key_select = KOBOY_KEY_BTN_TR;
     c->present_divisor = 3;
     /* Ghosting mitigation, DISABLED BY DEFAULT, and the history matters
        because "off" looks like an oversight otherwise.
@@ -279,6 +293,8 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "dpad_mode"))        c->dpad_mode = strcmp(v,"cross") ? KOBOY_DPAD_RELATIVE : KOBOY_DPAD_CROSS;
         else if (!strcmp(k, "key_a"))            c->key_a = (uint16_t)atoi(v);
         else if (!strcmp(k, "key_b"))            c->key_b = (uint16_t)atoi(v);
+        else if (!strcmp(k, "key_start"))        c->key_start = (uint16_t)atoi(v);
+        else if (!strcmp(k, "key_select"))       c->key_select = (uint16_t)atoi(v);
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
         else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);

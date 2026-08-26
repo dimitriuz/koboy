@@ -23,6 +23,8 @@ typedef struct {
     int      dpad_deadzone;      /* px */
     int      dpad_hysteresis;    /* px */
     uint16_t key_a, key_b;       /* 0 = not yet calibrated */
+    uint16_t key_start, key_select; /* 0 = not yet calibrated; gamepad shoulder
+                                        buttons by default, see config_defaults */
     char     rom_path[512];
     char     rom_dir[512];       /* where the browser looks; install-relative */
     char     core_path[512];

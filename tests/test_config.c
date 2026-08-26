@@ -38,6 +38,16 @@ TEST_MAIN({
     CHECK_EQ_INT(c.key_b, 194);
     CHECK(c.key_a != KOBOY_KEY_POWER && c.key_b != KOBOY_KEY_POWER);
 
+    /* key_start/key_select: a GUESS (BTN_TL/BTN_TR, the Xbox pad's measured
+       shoulder buttons), unlike key_a/key_b's measured page-turn default --
+       asserted by value, same reasoning as key_a/key_b above, and never
+       KOBOY_KEY_POWER for the same quit-key reason. */
+    CHECK_EQ_INT(c.key_start, KOBOY_KEY_BTN_TL);
+    CHECK_EQ_INT(c.key_select, KOBOY_KEY_BTN_TR);
+    CHECK_EQ_INT(c.key_start, 310);
+    CHECK_EQ_INT(c.key_select, 311);
+    CHECK(c.key_start != KOBOY_KEY_POWER && c.key_select != KOBOY_KEY_POWER);
+
     /* The promotion DECISION, not just the stored threshold. Checking only that
        the default is 1000 would let a >= silently become a >, or the bounding
        box shrink by a pixel, and flashing would come back with every test still
@@ -133,6 +143,21 @@ TEST_MAIN({
     CHECK_EQ_INT(c.present_divisor, 2);
     CHECK(strcmp(c.rom_path, "/x/y.gb") == 0);
     CHECK(!c.grab_input);
+
+    /* key_start/key_select round-trip through the ini the same way key_a/
+       key_b already do -- the distinguishing part is that the file's values
+       (304/305, a real gamepad's A/B codes, deliberately DIFFERENT from the
+       310/311 shipped default) are what come back, not the default surviving
+       unnoticed. */
+    f = fopen("build/t2.ini", "w");
+    fprintf(f, "key_start = 304\nkey_select = 305\n");
+    fclose(f);
+    config_defaults(&c);
+    CHECK_EQ_INT(c.key_start, 310);   /* default, before load */
+    CHECK_EQ_INT(c.key_select, 311);
+    CHECK(config_load(&c, "build/t2.ini"));
+    CHECK_EQ_INT(c.key_start, 304);
+    CHECK_EQ_INT(c.key_select, 305);
 
     /* a missing file is not an error: defaults stand */
     config_defaults(&c);

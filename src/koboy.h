@@ -36,6 +36,20 @@ typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
 #define KOBOY_KEY_PAGE_F23 193
 #define KOBOY_KEY_PAGE_F24 194
 
+/* Gamepad button codes, MEASURED on a real Xbox Wireless Controller
+   (Bus=0005) paired over Bluetooth to the verified Libra 2, 2026-08-26 --
+   see docs/superpowers/plans/2026-08-25-koboy-v2-bluetooth.md. key_a/key_b
+   already have a working default above (the page-turn buttons, so a
+   touch-only Kobo is never stuck on first run); key_start/key_select have no
+   such page-turn equivalent to fall back on, so these two are what
+   config_defaults uses for them. A GUESS at which physical buttons a user
+   wants for Start/Select, not a measurement of correctness -- config
+   overridable, and first-run calibration exists for exactly this reason. */
+#define KOBOY_KEY_BTN_SOUTH 304   /* Xbox A -- what key_a becomes once calibrated with a pad */
+#define KOBOY_KEY_BTN_EAST  305   /* Xbox B -- likewise for key_b */
+#define KOBOY_KEY_BTN_TL    310   /* Xbox LB -- shipped default for key_start */
+#define KOBOY_KEY_BTN_TR    311   /* Xbox RB -- shipped default for key_select */
+
 /* libretro RETRO_DEVICE_ID_JOYPAD_* as bits */
 #define KOBOY_BTN_B      (1u << 0)
 #define KOBOY_BTN_SELECT (1u << 2)

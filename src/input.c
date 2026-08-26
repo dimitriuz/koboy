@@ -15,6 +15,7 @@ struct koboy_input {
     int      pad_slot, pad_ox, pad_oy;
     uint16_t held_dirs;      /* latched directions, for hysteresis */
     uint16_t key_bits;       /* from hardware keys */
+    uint16_t hat_bits;       /* from a gamepad's ABS_HAT0X/Y d-pad -- see recompute() */
 
     bool menu_latched;      /* set on a MENU tap, cleared by the taker */
     bool menu_touching;     /* edge state, so a held finger latches once */
@@ -104,7 +105,11 @@ static void recompute(koboy_input *in)
 {
     const koboy_layout *l = &in->cfg.layout;
     const int W = in->prof.panel_w, H = in->prof.panel_h;
-    uint16_t b = in->key_bits;
+    /* hat_bits MERGES with the hardware keys here, the same way the touch
+       d-pad and the on-screen A/B/Start/Select merge in below: a user may
+       have a pad connected and still tap the drawn cross, or press a
+       page-turn button, and none of those sources should shadow another. */
+    uint16_t b = in->key_bits | in->hat_bits;
 
     int dcx = perm(l->dpad_cx, W), dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
 
@@ -169,6 +174,8 @@ void input_feed_key(koboy_input *in, uint16_t code, bool pressed)
     uint16_t bit = 0;
     if (in->cfg.key_a && code == in->cfg.key_a) bit = KOBOY_BTN_A;
     else if (in->cfg.key_b && code == in->cfg.key_b) bit = KOBOY_BTN_B;
+    else if (in->cfg.key_start && code == in->cfg.key_start) bit = KOBOY_BTN_START;
+    else if (in->cfg.key_select && code == in->cfg.key_select) bit = KOBOY_BTN_SELECT;
     if (!bit) return;
     if (pressed) in->key_bits |= bit; else in->key_bits &= (uint16_t)~bit;
     recompute(in);
@@ -190,6 +197,35 @@ void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
         }
         if (e->type != KOBOY_EV_ABS) continue;
         switch (e->code) {
+        /* The hat needs no deadzone and no hysteresis, unlike the touch
+           thumb-pad above: the kernel already reports a clean three-state
+           axis (-1/0/+1, measured on a real Xbox Wireless Controller,
+           2026-08-26), so there is nothing left to filter. Copying the touch
+           pad's axis_bits() machinery onto it would only add latency a
+           digital switch does not have. Updated here, immediately, the same
+           way apply_transform() updates touch position immediately below --
+           both wait for the shared recompute() at SYN to become visible in
+           st.buttons. */
+        case KOBOY_ABS_HAT0X:
+            in->hat_bits &= (uint16_t)~(KOBOY_BTN_LEFT | KOBOY_BTN_RIGHT);
+            if (e->value < 0) in->hat_bits |= KOBOY_BTN_LEFT;
+            else if (e->value > 0) in->hat_bits |= KOBOY_BTN_RIGHT;
+            break;
+        case KOBOY_ABS_HAT0Y:
+            in->hat_bits &= (uint16_t)~(KOBOY_BTN_UP | KOBOY_BTN_DOWN);
+            if (e->value < 0) in->hat_bits |= KOBOY_BTN_UP;
+            else if (e->value > 0) in->hat_bits |= KOBOY_BTN_DOWN;
+            break;
+        /* ABS_X/ABS_Y (codes 0x00/0x01, the analog stick) are deliberately
+           NOT handled -- and not even named as constants, the same rule
+           in.h explains. MEASURED: the stick streams at ~100Hz even at rest
+           (fuzz 255, flat 4095 around a centred 32768), so decoding it here
+           would flood input_feed with noise for no gain -- the hat above is
+           already the d-pad a Game Boy needs. They fall through to `default`
+           and are silently ignored. Stick support, if ever added, needs the
+           measured `flat` value applied as a deadzone; it must NOT reuse
+           axis_bits() untouched, because that deadzone is in raw touch
+           pixels, not the stick's 0..65535 range. */
         case KOBOY_ABS_MT_SLOT:
             if (e->value >= 0 && e->value < KOBOY_MAX_TOUCH) in->slot = e->value;
             break;
