@@ -86,16 +86,37 @@ if (src_w != KOBOY_GB_W || src_h != KOBOY_GB_H) return false;
 system below and is worth doing on its own merits.
 
 `src/core.c` already binds `retro_get_system_av_info`, so the geometry can be
-*asked for* rather than assumed. The work:
+*asked for* rather than assumed — **but asking at the obvious moment gives the
+wrong answer.**
 
-- Query `base_width`/`base_height`/`max_width`/`max_height` after
-  `retro_load_game`, and carry them in `koboy_profile` beside `scale`.
-- Allocate `video`'s intermediate buffer at `max_*`, not at a constant.
+> **MEASURED, 2026-08-26 (`scripts/probe_core.c`), and it overturned this
+> section's original premise.** `retro_get_system_av_info` called right after
+> `retro_load_game` returns a **128x128 placeholder for every Game & Watch
+> title**. The real canvas is announced only from *inside the first
+> `retro_run()`*, via `SET_GEOMETRY` / `SET_SYSTEM_AV_INFO`. A pipeline sized
+> from the post-load query — which is what the libretro docs imply, and what
+> the first draft of this section specified — renders Mario Bros., a 973x532
+> game, into a 128x128 box.
+>
+> This is not a quirk to route around; it is the contract. Geometry is
+> **discovered, not queried**, and any core added later must be assumed to
+> behave this way until `probe_core` says otherwise.
+
+The work, as corrected:
+
+- Handle `SET_GEOMETRY` **and** `SET_SYSTEM_AV_INFO` in `core.c`'s environment
+  callback and keep geometry live for the ROM's lifetime; treat the
+  `video_refresh` callback's per-frame width/height as the reliable source.
+- Expose a `core_geometry_changed()` edge so the main loop can re-fit chrome
+  and video mid-session rather than only at load.
+- Allocate `video`'s intermediate buffer at `max_*`, not at `base_*` and not at
+  a constant. (Sizing from `base_*` is a heap overflow, not a cosmetic bug —
+  it was mutant-verified as one.)
 - Derive scale from the actual resolution in `config_resolve_profile`, keeping
   the existing rule that the rect must clear `chrome_controls_top()` — the
   guard that already stopped a game rect covering a live touch zone once.
-- Accept that a core may change geometry at runtime (`SET_GEOMETRY`); decide
-  whether to honour it or to re-resolve only on load, and say which.
+- Guard degenerate geometry (a zero dimension is a SIGFPE in the scale search;
+  also mutant-verified).
 
 **Risk to respect:** the scale-5-on-all-four-panels property (`tests/test_config.c`)
 was broken once already, by a chrome change that reserved a band. Any change to
@@ -126,8 +147,13 @@ entry, and they are **smaller than feared**:
 | Multi Screen | Mario Bros. | 473x532 + 973x532 | 20.6 ms |
 | Panorama | Donkey Kong Jr. | 499x771 + 499x456 + 356x190 | 18.8 ms |
 
-Across the whole set: width 431–692, height 322–759 (a Multi Screen's *open*
-image reaches 973x532 or 606x748, being two LCDs side by side or stacked).
+Across the whole set the *artwork entries* run width 431–692, height 322–759.
+What matters, though, is the **composited canvas the core actually reports**,
+which is larger because it stitches a Multi Screen's two LCDs into one
+framebuffer: **width 480–1073, height 312–777** (Parachute 658x395, Mario
+Bros. 973x532, Donkey Kong 606x748 — each matching its artwork exactly once
+composited). Size buffers against the reported canvas, never against the
+container's artwork entries.
 **All 59 fit the §2 budget at 1:1, costing 8.7–21 ms — at or below the Game
 Boy's current 16.6 ms.**
 
@@ -217,8 +243,10 @@ selects one, and the ROM browser could infer it from the file extension.
 
 ## 7. Build order
 
-1. **Resolution-agnostic pipeline** (§3). Prerequisite for everything, valuable
-   alone, and the piece with a real regression risk attached.
+1. ~~**Resolution-agnostic pipeline** (§3)~~ — **done, 554cc34.** Verified
+   against the real core rather than this document's numbers, which is how §3's
+   premise was caught. `make test` 1415 checks; the scale-5-on-all-four-panels
+   sweep stayed green.
 2. **One Tier-1 core end to end** — Game & Watch is the recommendation, because
    it is the only candidate where #25 does not apply, so it proves the device
    can be *good* at something rather than merely adequate.
@@ -232,8 +260,12 @@ selects one, and the ROM browser could infer it from the file extension.
   §4 Tier 1.** All 59 titles fit at 1:1 for 8.7–21 ms. Remaining sub-question:
   whether to drop the drawn faceplate for this core and map touch onto the
   artwork's own buttons.
-- Whether `SET_GEOMETRY` mid-run needs honouring, or load-time resolution is
-  enough.
+- ~~Whether `SET_GEOMETRY` mid-run needs honouring, or load-time resolution is
+  enough~~ — **answered, and not by choice: load-time resolution is not
+  available.** See §3. `SET_GEOMETRY`/`SET_SYSTEM_AV_INFO` handling is
+  mandatory for this core, and is implemented (554cc34). Still unverified on a
+  *live* re-announcement: a Multi Screen title that toggles screens mid-session
+  exercises the path only against the stub, never a real title.
 - Whether four grey levels are usable for colour systems in practice. `video.c`
   ships `video_dither_1bit` and a 4-level quantiser; **no colour system has ever
   been rendered on this device**, so the quality is genuinely unknown, and
