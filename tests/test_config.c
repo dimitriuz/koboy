@@ -811,4 +811,44 @@ TEST_MAIN({
         snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
         if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
     }
+
+    /* ---- the configured scale is the GAME BOY's, not every system's ---- */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+
+        /* THE GAME BOY, and it must not move: 5 is measured, and auto-fitting
+           it lands on 6 -- verified by mutating the is_game_boy branch off,
+           which turns this line and both chrome goldens red. So 5 is a
+           deliberate choice against the panel's maximum. */
+        CHECK(config_resolve_profile(&p, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W, KOBOY_GB_H));
+        CHECK_EQ_INT(p.scale, 5);
+        CHECK_EQ_INT(p.game_w, 800);
+        CHECK_EQ_INT(p.game_h, 720);
+
+        /* A POKEMON MINI, 96x64. Under the old rule this inherited the Game
+           Boy's 5 and rendered 480x320 -- a postage stamp on this panel, and
+           the same complaint the Game & Watch layout was rebuilt to answer.
+           It must now fit itself instead, which is far larger than 5. */
+        koboy_profile pm;
+        CHECK(config_resolve_profile(&pm, &c, 1264, 1680, 96, 64, 96, 64));
+        CHECK(pm.scale > 5);
+        CHECK(pm.game_w > 480);
+        /* Still inside the panel and still clear of the controls -- fitting
+           bigger must not mean fitting wrong. */
+        CHECK(pm.game_x >= 0 && pm.game_y >= 0);
+        CHECK(pm.game_x + pm.game_w <= 1264);
+        CHECK(pm.game_y + pm.game_h <= chrome_controls_top(c.layout_mode, &c.layout, 1264, 1680));
+
+        /* AN EXPLICIT SCALE STILL WINS, for a non-Game-Boy system: the point
+           is a better DEFAULT, not the loss of control. Asserted with a value
+           that is not the legacy 5, so it marks intent. */
+        koboy_config ec; config_defaults(&ec);
+        ec.scale = 3; ec.scale_explicit = true;
+        koboy_profile ep;
+        CHECK(config_resolve_profile(&ep, &ec, 1264, 1680, 96, 64, 96, 64));
+        CHECK_EQ_INT(ep.scale, 3);
+        CHECK_EQ_INT(ep.game_w, 288);
+    }
 })

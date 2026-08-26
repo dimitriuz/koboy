@@ -101,6 +101,13 @@ TEST_MAIN({
        equals max always equals the one frame size ever submitted. */
     {
         koboy_config gc; config_defaults(&gc);
+        /* Pinned explicitly, because this block is about the PIPELINE (buffers
+           sized from max, a smaller frame accepted) and not about scale
+           policy. Without the pin these numbers move whenever that policy
+           does: a non-Game-Boy geometry now auto-fits, so 200x150 chose 6 and
+           every hardcoded 1000x750 below failed. Pinning keeps the test
+           measuring its own subject. */
+        gc.scale_explicit = true;
         /* base != max on purpose (matches the config-level sweep in
            tests/test_config.c): the buffer is allocated at 200x150 (max),
            the first real frame submitted is smaller (100x75, base), and

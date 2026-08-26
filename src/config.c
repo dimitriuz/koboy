@@ -399,7 +399,13 @@ bool config_load(koboy_config *c, const char *path)
         *eq = 0;
         char *k = line, *v = eq + 1;
         trim(k); trim(v);
-        if      (!strcmp(k, "scale"))            c->scale = atoi(v);
+        /* See KOBOY_SCALE_LEGACY_DEFAULT: an ini naming exactly 5 is
+           indistinguishable from one that was never edited, so it does not
+           mark intent. Any other value does. */
+        if      (!strcmp(k, "scale")) {
+            c->scale = atoi(v);
+            c->scale_explicit = (c->scale != KOBOY_SCALE_LEGACY_DEFAULT);
+        }
         else if (!strcmp(k, "present_divisor"))  c->present_divisor = atoi(v);
         else if (!strcmp(k, "cleanup_interval")) c->cleanup_interval = atoi(v);
         else if (!strcmp(k, "cleanup_max_ms"))   c->cleanup_max_ms = atoi(v);
@@ -525,7 +531,25 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
     int fit_h = panel_h / max_h;
     int max_fit = fit_w < fit_h ? fit_w : fit_h;
     if (max_fit < 1) return false;
-    int s = c->scale > 0 ? c->scale : max_fit;
+    /* The configured scale is the GAME BOY's scale unless the user said
+       otherwise, and applying it to every system was wrong in a way only a
+       second system could reveal. 5 was measured for 160x144: it is what makes
+       800x720 sit inside the DMG faceplate, and the design spec explicitly
+       rejected a full-width Game Boy in favour of it. Auto-fitting the Game
+       Boy today lands on 6 (measured by mutating this very branch off: the
+       chrome goldens and test_config's sweep both go red at 6), so the 5 is a
+       deliberate choice against the panel's maximum, not a coincidence of the
+       arithmetic. None of that reasoning transfers. A Pokemon Mini is 96x64, so scale 5 is
+       480x320 -- a postage stamp on a 1264x1680 panel, and precisely the
+       complaint the Game & Watch layout was rebuilt to answer.
+
+       So: an explicitly configured scale still wins, for every system. Absent
+       one, the Game Boy keeps its measured 5 and every other system fits
+       itself to the panel. Keyed on the geometry rather than on the core,
+       because 5 was measured for that geometry and nothing else. */
+    bool is_game_boy = (max_w == KOBOY_GB_W && max_h == KOBOY_GB_H);
+    int want = (c->scale_explicit || is_game_boy) ? c->scale : 0;
+    int s = want > 0 ? want : max_fit;
     if (s > max_fit) s = max_fit;        /* configured scale does not fit */
 
     /* Two reservations, not one. KOBOY_CHROME_MARGIN keeps the bezel inside the

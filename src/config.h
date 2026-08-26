@@ -8,8 +8,21 @@
    long comment at the `core=` parse site. */
 #define KOBOY_CORE_LEGACY_DEFAULT "gambatte_libretro.so"
 
+/* The same trap, one field over. v1 shipped `scale = 5` uncommented when the
+   Game Boy was the only system, so an ini naming 5 records packaging rather
+   than preference and does NOT mark the scale explicit. See the `scale=` parse
+   site and config_resolve_profile. */
+#define KOBOY_SCALE_LEGACY_DEFAULT 5
+
 typedef struct {
     int      scale;              /* 0 = pick the largest that fits */
+    bool     scale_explicit;     /* the user named a scale, as opposed to
+                                    config_defaults' Game-Boy 5. Without this
+                                    a 96x64 Pokemon Mini rendered at 480x320 --
+                                    a postage stamp on a 1264x1680 panel --
+                                    because a number measured for the Game Boy
+                                    was being applied to every system. See
+                                    config_resolve_profile. */
     int      present_divisor;    /* core frames per presented frame */
     int      cleanup_interval;   /* presented frames between game-rect cleanups */
     int      cleanup_max_ms;     /* wall-clock ceiling between cleanups; <=0 off */
