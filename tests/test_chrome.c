@@ -751,86 +751,51 @@ TEST_MAIN({
        every side_t >= 3 (side_t floors at 5); and the d-pad's vertical
        arm at dr/2 above centre is always DPAD fill -- above the hub disc
        (radius arm/2 = dr/6) and below where the tip ridges start
-       (>= ~3*dr/4), for every dr > 0. */
-    {
-        koboy_config c; config_defaults(&c);
-        koboy_profile p;
-        const int W = 1264, H = 1680;
-        static uint8_t fb3[1264 * 1680];
-        config_resolve_profile(&p, &c, W, H);
-        memset(fb3, 0x7F, (size_t)W * H);
-        chrome_render(fb3, W, &p, &c.layout);
-
-        int case_v  = fb3[2 * W + 2];
-        int a_cx = c.layout.a_cx * W / 1000, a_cy = c.layout.a_cy * H / 1000;
-        int button_v = fb3[(size_t)a_cy * W + a_cx];
-        int bezel_x = p.game_x - 3, bezel_y = p.game_y + p.game_h / 2;
-        int bezel_v = fb3[(size_t)bezel_y * W + bezel_x];
-        int scx = c.layout.start_cx * W / 1000, scy = c.layout.start_cy * H / 1000;
-        int pill_v = fb3[(size_t)scy * W + scx];
-        int dcx = c.layout.dpad_cx * W / 1000, dcy = c.layout.dpad_cy * H / 1000;
-        int dr = c.layout.dpad_r * W / 1000;
-        int dpad_v = fb3[(size_t)(dcy - dr / 2) * W + dcx];
-
-        if (case_v - bezel_v <= 17 || bezel_v - dpad_v <= 17 ||
-            case_v - button_v <= 17 || pill_v <= button_v || case_v <= pill_v ||
-            dpad_v >= 64)
-            fprintf(stderr, "  case tone: dpad=%d bezel=%d button=%d pill=%d case=%d\n",
-                    dpad_v, bezel_v, button_v, pill_v, case_v);
-        CHECK(case_v - bezel_v > 17);   /* bezel clearly darker than the case        */
-        CHECK(bezel_v - dpad_v > 17);   /* d-pad clearly darker than the bezel too   */
-        CHECK(dpad_v < 64);             /* d-pad reads as near-black                 */
-        CHECK(case_v - button_v > 17);  /* A/B clearly darker than the case          */
-        CHECK(case_v > pill_v);         /* Start/Select/MENU a LITTLE darker...      */
-        CHECK(pill_v > button_v);       /* ...but nowhere near as dark as A/B        */
-    }
-
-    /* Speaker grille right margin, FOLLOWUPS #20 / task 15 item 4: `hline`
-       draws its two columns INCLUSIVELY, so clamping only the loop's own
-       bound against the margin still let the second, inclusive column land
-       ON the boundary -- 7px of clearance shipped where
-       KOBOY_CHROME_MARGIN requires 8. Swept over all four supported panels,
-       not just Libra 2, since the old bug's margin was panel-width
-       dependent (three of four panels showed it, per FOLLOWUPS).
-       The grille's own y-range is recomputed here from the layout, the same
-       independent-duplication style chrome_controls_top's guard uses below
-       and for the same reason: a pixel scan restricted to the WRONG rows
-       would either miss the grille or catch the bezel's unrelated DARK
-       bands, which are not held to this margin at all (side_t can exceed
-       KOBOY_CHROME_MARGIN by design). Detects DARK by sampling it fresh at
-       a known bezel pixel rather than hard-coding chrome.c's private macro
-       value, so a future palette retune cannot make this test silently
-       compare against a stale constant. */
+       (>= ~3*dr/4), for every dr > 0.
+       Swept over all four supported panels, matching the sibling
+       chrome_controls_top guard just above: the tones themselves are
+       panel-size-independent constants (BG/DARK/DPAD/BUTTON/PILL never vary
+       with W or H), so this was never a live coverage gap the way the
+       margin/invariant tests were -- but sampling only 1264x1680 left it the
+       one tonal check in this file that was not symmetric with the rest,
+       and a future change that made a tone panel-size-dependent by accident
+       would only be caught here if the sweep were already in place. */
     {
         static const int panels[][2] = {
             { 1072, 1448 }, { 1264, 1680 }, { 1404, 1872 }, { 1440, 1920 },
         };
         koboy_config c; config_defaults(&c);
-        static uint8_t gfb[1440 * 1920];
-        int total_violations = 0;
+
         for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
             int W = panels[pi][0], H = panels[pi][1];
             koboy_profile p;
             CHECK(config_resolve_profile(&p, &c, W, H));
-            memset(gfb, 0x7F, (size_t)W * H);
-            chrome_render(gfb, W, &p, &c.layout);
+            memset(fb, 0x7F, (size_t)W * H);
+            chrome_render(fb, W, &p, &c.layout);
 
-            int dark_v = gfb[(size_t)(p.game_y + p.game_h / 2) * W + (p.game_x - 3)];
+            int case_v  = fb[2 * W + 2];
+            int a_cx = c.layout.a_cx * W / 1000, a_cy = c.layout.a_cy * H / 1000;
+            int button_v = fb[(size_t)a_cy * W + a_cx];
+            int bezel_x = p.game_x - 3, bezel_y = p.game_y + p.game_h / 2;
+            int bezel_v = fb[(size_t)bezel_y * W + bezel_x];
+            int scx = c.layout.start_cx * W / 1000, scy = c.layout.start_cy * H / 1000;
+            int pill_v = fb[(size_t)scy * W + scx];
+            int dcx = c.layout.dpad_cx * W / 1000, dcy = c.layout.dpad_cy * H / 1000;
+            int dr = c.layout.dpad_r * W / 1000;
+            int dpad_v = fb[(size_t)(dcy - dr / 2) * W + dcx];
 
-            int mcy = c.layout.menu_cy * H / 1000, mh = c.layout.menu_h * H / 1000;
-            int gy0 = mcy + mh / 2 + 18 * H / 1000;   /* matches chrome.c's gap, round 2 */
-            int gy1 = H - KOBOY_CHROME_MARGIN;
-
-            int violation = 0;
-            for (int y = gy0; y < gy1; y++)
-                for (int x = W - KOBOY_CHROME_MARGIN; x < W; x++)
-                    if (gfb[(size_t)y * W + x] == dark_v) violation++;
-            if (violation)
-                fprintf(stderr, "  grille right margin painted: %dx%d -> %d px\n",
-                        W, H, violation);
-            total_violations += violation;
+            if (case_v - bezel_v <= 17 || bezel_v - dpad_v <= 17 ||
+                case_v - button_v <= 17 || pill_v <= button_v || case_v <= pill_v ||
+                dpad_v >= 64)
+                fprintf(stderr, "  case tone: %dx%d -> dpad=%d bezel=%d button=%d pill=%d case=%d\n",
+                        W, H, dpad_v, bezel_v, button_v, pill_v, case_v);
+            CHECK(case_v - bezel_v > 17);   /* bezel clearly darker than the case        */
+            CHECK(bezel_v - dpad_v > 17);   /* d-pad clearly darker than the bezel too   */
+            CHECK(dpad_v < 64);             /* d-pad reads as near-black                 */
+            CHECK(case_v - button_v > 17);  /* A/B clearly darker than the case          */
+            CHECK(case_v > pill_v);         /* Start/Select/MENU a LITTLE darker...      */
+            CHECK(pill_v > button_v);       /* ...but nowhere near as dark as A/B        */
         }
-        CHECK_EQ_INT(total_violations, 0);
     }
 
     /* NO NINTENDO MARKS. This is a public GPLv3 repo; the faceplate is an
@@ -849,5 +814,50 @@ TEST_MAIN({
         CHECK(strstr(src, "NINTENDO") == NULL);
         CHECK(strstr(src, "GAME BOY") == NULL);
         CHECK(strstr(src, "GAMEBOY") == NULL);
+    }
+
+    /* STRAPLINE WORDING. A deliberate honesty ruling: this build is silent
+       end to end, and the historic DMG strap's "DOT MATRIX WITH STEREO
+       SOUND" claim would be a false statement about the product if printed
+       on the faceplate (see STRAPLINE's own comment in chrome.c). Before
+       this check the wording was protected only indirectly, by the golden
+       pixel-diff -- a real gate, but not a direct one, and not one that
+       names what it is protecting against.
+       This cannot reuse the trademark check's shape exactly (scan the
+       WHOLE file, upper-cased, for the forbidden phrase): chrome.c's own
+       comment quotes "STEREO SOUND" by name to explain why it was rejected,
+       so a whole-file scan for that phrase would fail on the explanation
+       forever, not on a real regression -- unlike NINTENDO/GAME BOY/GAMEBOY,
+       which have no legitimate reason to appear anywhere in this file.
+       So this reads the STRAPLINE string literal itself, not the whole
+       file, and checks only what the faceplate actually prints: it must not
+       read the historic stereo-sound claim, and it must read the wording
+       this build ships. Case-sensitive and unmodified (no upper-casing),
+       since STRAPLINE is already all caps in source and an accidental
+       lower-case edit should also be caught. */
+    {
+        FILE *f = fopen("src/chrome.c", "rb");
+        CHECK(f != NULL);
+        static char src[200000];
+        size_t n = f ? fread(src, 1, sizeof src - 1, f) : 0;
+        if (f) fclose(f);
+        src[n] = 0;
+
+        const char *needle = "STRAPLINE[] = \"";
+        const char *start = strstr(src, needle);
+        CHECK(start != NULL);
+        if (start) {
+            start += strlen(needle);
+            const char *end = strchr(start, '"');
+            CHECK(end != NULL);
+            if (end && (size_t)(end - start) < 128) {
+                char strap[128];
+                size_t len = (size_t)(end - start);
+                memcpy(strap, start, len);
+                strap[len] = 0;
+                CHECK(strstr(strap, "STEREO SOUND") == NULL);
+                CHECK(strcmp(strap, "DOT MATRIX ON ELECTRONIC PAPER") == 0);
+            }
+        }
     }
 })

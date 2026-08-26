@@ -346,15 +346,20 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        at the corner, not just the DARK fill under it -- a square frame()
        drawn after the round would just redraw the sharp corner it was meant
        to remove. */
+    /* No ">0" guard here: side_t floors at 5 above, so corner_small = side_t/2
+       is at least 2 and corner_big = side_t is at least 5, for every panel
+       this file has ever been asked to draw. A guard that can never fire is
+       exactly what this file's own convention (see round_out_corner's and
+       chrome_bands' comments) says NOT to leave lying around without a note
+       explaining why it is still live -- and there is no such note to write
+       here truthfully, so the guard is removed rather than dressed up as
+       defensive. */
     int corner_small = side_t / 2;
     int corner_big   = side_t;         /* bottom-right: the photo's larger radius */
-    if (corner_small > 0) {
-        round_out_corner(fb, stride, W, H, bx0, by0, corner_small, +1, +1, BG);
-        round_out_corner(fb, stride, W, H, bx1, by0, corner_small, -1, +1, BG);
-        round_out_corner(fb, stride, W, H, bx0, by1, corner_small, +1, -1, BG);
-    }
-    if (corner_big > 0)
-        round_out_corner(fb, stride, W, H, bx1, by1, corner_big, -1, -1, BG);
+    round_out_corner(fb, stride, W, H, bx0, by0, corner_small, +1, +1, BG);
+    round_out_corner(fb, stride, W, H, bx1, by0, corner_small, -1, +1, BG);
+    round_out_corner(fb, stride, W, H, bx0, by1, corner_small, +1, -1, BG);
+    round_out_corner(fb, stride, W, H, bx1, by1, corner_big, -1, -1, BG);
 
     /* Two short accent rules flank the strapline on each side (one pair
        left, one pair right), echoing the real DMG's two colour rules either
@@ -421,16 +426,12 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        so it has no business in its chain (chrome.h's contract is explicit
        that the chain covers controls and touch zones only).
        koboy sits lower-left, like the original console's own logotype below
-       its screen, kept KOBOY_CHROME_MARGIN clear of the panel edge. The
-       speaker grille used to share this band (upper-right, level with the
-       wordmark) -- photo correction: it belongs lower-right, below the A/B
-       cluster, so it is drawn much further down, after MENU below, using
-       its own placement independent of chrome_controls_top. On the tightest
-       supported panel (Clara, 1072x1448) this band is under twenty pixels
-       tall at the shipped scale, so the wordmark sizes itself to whatever
-       room is actually there instead of assuming Libra 2 (1264x1680)
-       headroom, and the whole block is skipped -- not crushed into garbage
-       -- if some future layout leaves no room at all. */
+       its screen, kept KOBOY_CHROME_MARGIN clear of the panel edge. On the
+       tightest supported panel (Clara, 1072x1448) this band is under twenty
+       pixels tall at the shipped scale, so the wordmark sizes itself to
+       whatever room is actually there instead of assuming Libra 2
+       (1264x1680) headroom, and the whole block is skipped -- not crushed
+       into garbage -- if some future layout leaves no room at all. */
     int ctrl_top = chrome_controls_top(l, W, H);
     int deco_y0 = p->game_y + p->game_h + bot_t;
     int deco_y1 = ctrl_top;
@@ -552,55 +553,6 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        four, which is the one placement rule this element does not share with
        them. */
     text_draw_centred_at(fb, stride, W, H, mcx, mcy - TEXT_GLYPH_H * lbl_px / 2, "MENU", lbl_px, INK);
-
-    /* Speaker grille: six parallel diagonal slashes, LOWER RIGHT below the
-       A/B cluster -- photo correction: it shipped upper-right, level with A,
-       which is wrong. It draws below the Start/Select/MENU row rather than
-       sharing the band above chrome_controls_top with the wordmark: on a
-       real DMG the grille sits low, near the headphone jack, well below the
-       buttons, and koboy's drawn MENU zone already occupies the lower-right
-       spot a real DMG leaves empty for its grille -- so this waits for the
-       row below THAT instead. Decorative only, like the wordmark above: it
-       must never join chrome_controls_top's chain (that would cost every
-       panel headroom for a design element nobody can touch), and drawing
-       below the lowest control means it can never reach up toward the game
-       rect regardless of layout. Stepped a column at a time with hline --
-       there is no line primitive in this file and six short diagonals do
-       not justify adding one.
-
-       Anchored to MENU's own horizontal centre (gx0 = mcx) rather than a
-       fixed panel-width fraction, and given a full 18-permille vertical gap
-       below MENU's bottom edge (was 10) -- round 1's tighter gap and wider
-       box together read as running into MENU's own corner in review. mcx
-       keeps the grille visually "starting under the cluster, continuing
-       right" instead of floating in arbitrary panel space; the extra gap
-       is what actually fixes the crowding, since the two elements never
-       shared a row either way (gy0 is always below MENU's own bottom edge
-       by construction). gx1 is UNCHANGED at the true margin boundary
-       (W - KOBOY_CHROME_MARGIN) -- narrowing the box comes only from
-       raising gx0, not from padding gx1, so the right-margin regression
-       test below still exercises the real edge rather than a moved one. */
-    int gx1 = W - KOBOY_CHROME_MARGIN, gx0 = mcx;
-    int gy0 = mcy + mh / 2 + perm(18, H), gy1 = H - KOBOY_CHROME_MARGIN;
-    if (gx1 - gx0 > 12 && gy1 - gy0 > 6) {
-        int gw = gx1 - gx0, gh = gy1 - gy0;
-        int n = 6;
-        for (int i = 1; i <= n; i++) {
-            int glx0 = gx0 + (i * gw) / (n + 1);
-            int len = gh;
-            /* `hline` draws its two columns INCLUSIVELY (glx0+s, glx0+s+1),
-               so clamping only the loop's own bound against gx1 still lets
-               the second, inclusive column land ON gx1 -- the review found
-               1px right-margin overdraw this fixes (7px of clearance
-               instead of the required KOBOY_CHROME_MARGIN of 8; FOLLOWUPS
-               #20). Reserving one extra column here keeps the inclusive
-               second column inside gx1 too. */
-            if (glx0 + len + 1 > gx1) len = gx1 - glx0 - 1;
-            if (len < 0) len = 0;
-            for (int s = 0; s < len; s++)
-                hline(fb, stride, W, H, glx0 + s, glx0 + s + 1, gy0 + s, DARK);
-        }
-    }
 }
 
 /* One definition of the label and its scale, so the guard below cannot measure

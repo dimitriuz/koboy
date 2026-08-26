@@ -123,18 +123,27 @@ deliberately deferred, not a known live bug.
     only a term-by-term audit finds it.
 
 20. ~~**The speaker grille overdraws its right margin by 1px, on three of the
-    four tested panel sizes.**~~ FIXED, task 15. `src/chrome.c`, the grille's
-    slash loop. Each slash was drawn with `hline(..., glx0+s, glx0+s+1, ...)`
-    -- two columns per step -- and the length clamp (`if (glx0+len > gx1)
-    len = gx1-glx0`) only fired when the *unclamped* last column would
-    exceed `gx1`. When it landed exactly on `gx1` instead, the clamp never
-    triggered and the two-wide `hline`'s second column painted at `gx1`, one
-    column into the margin `gx1` exists to keep clear. The clamp now
-    reserves the inclusive second column too (`if (glx0+len+1 > gx1) len =
-    gx1-glx0-1`), and `tests/test_chrome.c` asserts the margin directly
-    (swept over all four supported panels) with a verified mutant -- see the
-    task 15 report. The grille itself also moved, lower-right below the A/B
-    cluster, matching the reference photo.
+    four tested panel sizes.**~~ FIXED, task 15, then the grille itself was
+    REMOVED, task 16 -- CLOSED as "removed, not fixed". `src/chrome.c`, the
+    grille's slash loop. Each slash was drawn with `hline(..., glx0+s,
+    glx0+s+1, ...)` -- two columns per step -- and the length clamp (`if
+    (glx0+len > gx1) len = gx1-glx0`) only fired when the *unclamped* last
+    column would exceed `gx1`. When it landed exactly on `gx1` instead, the
+    clamp never triggered and the two-wide `hline`'s second column painted at
+    `gx1`, one column into the margin `gx1` exists to keep clear. The clamp
+    was widened to reserve the inclusive second column too (`if
+    (glx0+len+1 > gx1) len = gx1-glx0-1`), and `tests/test_chrome.c` asserted
+    the margin directly (swept over all four supported panels) with a
+    verified mutant -- see the task 15 report. The grille itself also moved,
+    lower-right below the A/B cluster, matching the reference photo. Task 16
+    then removed the grille from the faceplate entirely at the user's
+    request (a purely aesthetic simplification -- it reclaims no vertical
+    space, since the grille's placement was independent of
+    `chrome_controls_top`), which took this fix's own code and its margin
+    test out with it. Left in the record rather than deleted, because the
+    inclusive-endpoint clamp bug it documents is a real class of mistake
+    (`hline`'s two-columns-per-call convention) that the next feature to use
+    the same pattern can still walk into.
 
 21. **`video_split_dirty`'s overflow fallbacks are untested.**
     `src/video.c:245` (tile grid larger than `KOBOY_SPLIT_MAX_TILES`) and
