@@ -42,6 +42,24 @@ dirties most of the screen most of the time: the pipeline pushes changed
 rectangles, and in a scrolling platformer the changed rectangle is nearly the
 whole picture.
 
+### v2-core: the UI layer verified by hand, 2026-08-26
+
+The player launched v2-core from NickelMenu and **exercised every in-game MENU
+action by hand, reporting all of them working**: the ROM browser, the MENU
+button, and the menu's actions. Two sessions exited `rc=0` with `restore: done`,
+Nickel restarted without a reboot, the framebuffer returned to 32bpp, and
+`/mnt/onboard/.kobo/version` stayed byte-identical with the real serial intact.
+
+That closes the gap this file has carried since v2 began: the takeover, the
+touch d-pad, the drawn MENU zone and the list widget's real touch input had
+never met a finger. They have now.
+
+**One thing to be precise about:** no `.stN` file exists in `saves/` afterwards,
+so while the menu's save-state *screens* were navigated, a state was not
+demonstrably written to and re-read from disk. `state.c` and `safefile.c` remain
+covered by host tests only. The cartridge-SRAM path is separately verified (see
+above) and does not depend on them.
+
 **Correction, 2026-08-26.** This section previously ended "It was judged good to
 play at that rate." That was too generous, and the player has since said so
 directly: on a horizontal scroll the picture degrades into heavy horizontal

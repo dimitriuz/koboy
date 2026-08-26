@@ -11,7 +11,8 @@ session ran `koboy` directly with `--frames` over ssh (never through
 `scripts/koboy.sh`, so Nickel stayed up), which verified the core, the
 cartridge-SRAM save path (including its destructive-truncation fix), and the
 ROM browser via `--ui-script`, plus real per-stage timing on a real panel.
-The takeover, touch d-pad, in-game MENU and save *states* have still not run
+The takeover, touch d-pad and in-game MENU have since been verified by hand
+(2026-08-26). Save *states* writing and re-reading a file have still not run
 on hardware. See "Known unfinished".
 
 ## Build and test
