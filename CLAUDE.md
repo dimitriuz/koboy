@@ -77,7 +77,11 @@ scripts/koboy.sh      the launcher. Its environment gate is load-bearing.
 -- v2 additions: the ROM browser, in-game MENU and save states -----------
 src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
                       browser and the in-game MENU (MODE_BROWSE / MODE_MENU)
-src/romlist.c         scans rom_dir for .gb/.gbc, feeds ui.c's list widget
+src/romlist.c         lists ONE directory of rom_dir (.gb/.gbc/.mgw) at a
+                      time -- folders sort first, then files, with a ".."
+                      row below the root; feeds ui.c's list widget. It does
+                      NOT recurse: the flatten it replaced put the same
+                      "Game and Watch/" prefix on 59 rows
 src/uiscript.c        replays a synthetic input script (tap/key/idle) into
                       the ROM BROWSER only -- --ui-script, for bounded
                       unattended runs. MODE_MENU is not scripted; a run whose
