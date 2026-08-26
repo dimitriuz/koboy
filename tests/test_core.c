@@ -97,5 +97,13 @@ TEST_MAIN({
     CHECK_EQ_INT(*unloaded, unload_before + 1);
     CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
 
+    /* The invariant load_rom_into (src/main.c) is built on: core_sram() must
+       be re-read after every load, never cached across an unload/load cycle,
+       because the pointer belongs to the freshly loaded cartridge. Pinned
+       here, headlessly, rather than trusted by inspection alone. */
+    size_t sl2 = 0;
+    CHECK(core_sram(c, &sl2) != NULL);
+    CHECK_EQ_INT(sl2, 8);
+
     core_close(c);
 })

@@ -18,6 +18,19 @@ void ui_list_init(koboy_ui_list *u, const char *title,
     u->count = count < 0 ? 0 : count;
     u->x = x; u->y = y; u->w = w; u->h = h;
 
+    /* A freshly created list assumes a finger may ALREADY be down, and so
+       requires a release before it will accept its first tap.
+
+       Without this, chaining screens breaks: selection happens on touch-down,
+       a real tap lasts ~100ms, and building the next screen takes far less
+       than that -- so the same still-down finger selects the same row index on
+       the new list. Measured consequence: SAVE STATE overwrote slot 1 with no
+       picker ever shown, and CHOOSE ROM loaded the 4th ROM after unloading the
+       current game.
+
+       Costs one poll cycle when no finger is down, which is imperceptible. */
+    u->prev_touch = true;
+
     /* One title row plus one footer row, so the divisor is rows + 2. Clamped
        to at least one row so a tiny region still produces usable geometry
        instead of a division that yields zero and a widget nothing can hit. */

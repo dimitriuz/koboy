@@ -691,7 +691,16 @@ int main(int argc, char **argv)
                 koboy_romlist rl;
                 int n = romlist_scan(&rl, cfg.rom_dir);
                 int pick = -1;
-                if (n > 0) {
+                if (n < 0) {
+                    /* Distinct from n == 0, matching the startup browser's two
+                       messages: romlist.h documents why they must stay
+                       distinguishable -- "your rom_dir is wrong" and "you
+                       have no ROMs" are different diagnoses to a user with no
+                       terminal, and this is the only diagnostic they get. */
+                    fatal("cannot read rom directory\n%s", cfg.rom_dir);
+                } else if (n == 0) {
+                    fatal("no .gb or .gbc files in\n%s", cfg.rom_dir);
+                } else {
                     koboy_ui_list list;
                     ui_list_init(&list, "CHOOSE A GAME", romlist_items(&rl), n,
                                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
@@ -700,6 +709,16 @@ int main(int argc, char **argv)
                     pick = run_list(pf, in, &list, panel, panel_stride,
                                     pw, ph, NULL, 0);
                 }
+                /* No "return to the game" option in any of the three failure
+                   cases (n < 0, n == 0, or pick < 0): the running game was
+                   already flushed and unloaded above so CHOOSE ROM could have
+                   the core to itself, and by the time rom_dir turns out empty
+                   or unreadable -- or the user backs out of the picker --
+                   there is nothing left to resume. Quitting, after telling
+                   the user why on the panel, is the only coherent option: the
+                   alternative is a black or frozen screen with no
+                   explanation, which this project's own constraint calls
+                   "indistinguishable from a crash". */
                 if (pick < 0) { mode = MODE_QUIT; }
                 else {
                     romlist_path(&rl, pick, cfg.rom_path, sizeof cfg.rom_path);
@@ -720,6 +739,18 @@ int main(int argc, char **argv)
             /* Whatever happened, the panel is now showing a menu. */
             redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
             video_invalidate(vid);
+            /* Drain, don't just ignore: every run_list/run_menu call above
+               polled input while a menu screen -- not the faceplate -- was on
+               the panel, and recompute() latches a MENU-zone tap regardless
+               of what is drawn there. At the default layout the zone
+               overlaps the list's page-forward arrow, so a tap made to page
+               a long list can latch a pending request that nothing here has
+               consumed yet. Left alone, the very next iteration's
+               input_take_menu_request() would see it and reopen the menu
+               immediately -- "the menu keeps reopening by itself". The
+               return value is discarded on purpose: this call exists only to
+               clear the latch, not to act on it. */
+            (void)input_take_menu_request(in);
             pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
             continue;
         }
@@ -763,14 +794,22 @@ int main(int argc, char **argv)
            compares our own output buffers, so it tracks what we sent, not what
            the panel shows. A region that ghosts and then stops changing is
            never revisited by this test at all. */
-        koboy_refresh_mode mode = KOBOY_REFRESH_FAST;
+        /* Named wfm, not mode: koboy_mode mode is the outer loop's live
+           control variable (MODE_PLAY/MODE_QUIT), declared far above this
+           point. Reusing "mode" here for the waveform shadowed it silently --
+           -Wshadow is not in this project's flags, so nothing caught it, and
+           the code was correct only by accident of line ordering: moving this
+           block above the outer mode's use, or adding a `mode = MODE_QUIT`
+           anywhere after this point in the loop, would have assigned a
+           waveform instead of ending the run. */
+        koboy_refresh_mode wfm = KOBOY_REFRESH_FAST;
         if (config_promote_full(&cfg, (long)r.w * (long)r.h,
                                 (long)prof.game_w * (long)prof.game_h)) {
-            mode = KOBOY_REFRESH_FULL;
+            wfm = KOBOY_REFRESH_FULL;
             big_refreshes++;
         }
         t0 = pf->now_us(pf->ctx);
-        pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, mode);
+        pf->refresh(pf->ctx, prof.game_x + r.x, prof.game_y + r.y, r.w, r.h, wfm);
         stats_add(&stats, KOBOY_STAGE_REFRESH, pf->now_us(pf->ctx) - t0);
         presented++;
 
