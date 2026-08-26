@@ -48,43 +48,129 @@ static int min2(int a, int b) { return a < b ? a : b; }
 
 int chrome_lcd_strip_h(int panel_h)
 {
-    int h = perm(72, panel_h);
-    /* Floor, not a clamp against panel_h: a strip taller than the panel is
-       the caller's problem (config_resolve_profile refuses such a panel
-       outright), while a strip too short to hit is this file's. 48 px is
-       about a third of a fingertip at this panel's density. */
-    if (h < 48) h = 48;
-    return h;
+    /* 250 permille. Why that number, and why the old 72 permille was wrong,
+       is in chrome.h -- it is a measurement about what the strip has to hold,
+       not a taste. No floor: see chrome.h. */
+    return perm(250, panel_h);
+}
+
+/* Contract, and the rationale for the diamond's arrangement, in chrome.h.
+
+   Two bands, because the strip carries two different KINDS of control and
+   mixing them costs reachability. The UPPER band holds the things a thumb
+   rests on -- the d-pad under the left one, the face diamond under the
+   right, MENU parked in the dead centre column between them where neither
+   thumb goes. The LOWER band holds the things pressed deliberately and
+   rarely: L1, SELECT, START, R1 in one row, with the battery lamp at its
+   left end.
+
+   Every dimension is a fraction of the band it lives in rather than of the
+   panel, so the whole strip scales with chrome_lcd_strip_h and one number
+   governs the lot. The two extents that matter are bounded BY CONSTRUCTION
+   rather than by a clamp, which is what lets tests assert containment as an
+   equality rather than an inequality:
+     d-pad  reaches 42/100 of the upper band from its centre  (< 1/2)
+     diamond reaches face_r + face_off = 26/10 * face_r
+                                       = 26/10 * 19/100 = 494/1000  (< 1/2)
+   so neither can leave the band it belongs to however tall the strip is. */
+void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *o)
+{
+    const int W = p->panel_w, H = p->panel_h;
+    memset(o, 0, sizeof *o);
+
+    /* No "strip taller than the panel" guard, and that is a proof rather than
+       an oversight: chrome_lcd_strip_h is 250 permille of H, so strip <= H for
+       every H >= 0 and sy below can never be negative. This file's own
+       convention (see round_out_corner, and the corner-radius note in
+       chrome_render) is that a guard which cannot fire is removed and replaced
+       by the reason, not left lying around looking defensive. */
+    int strip = chrome_lcd_strip_h(H);
+    int sy = H - strip;
+    o->strip.x = 0; o->strip.y = sy; o->strip.w = W; o->strip.h = strip;
+
+    int upper_h = strip * 68 / 100;
+    int lower_h = strip - upper_h;
+    int ly      = sy + upper_h;
+
+    /* --- upper band: d-pad, face diamond, MENU */
+    o->dpad_r  = upper_h * 42 / 100;
+    o->dpad_cx = W * 16 / 100;
+    o->dpad_cy = sy + upper_h / 2;
+
+    o->face_r   = upper_h * 19 / 100;
+    o->face_off = o->face_r * 8 / 5;    /* > face_r * sqrt(2): see chrome.h */
+    int fcx = W - W * 16 / 100;         /* mirrored, not a second constant */
+    int fcy = o->dpad_cy;
+    o->x_cx = fcx;                  o->x_cy = fcy - o->face_off;   /* NORTHEAST */
+    o->y_cx = fcx - o->face_off;    o->y_cy = fcy;
+    o->a_cx = fcx + o->face_off;    o->a_cy = fcy;
+    o->b_cx = fcx;                  o->b_cy = fcy + o->face_off;   /* SOUTHEAST */
+
+    /* The centre column is whatever the two thumb clusters leave. Derived
+       from their real extents, not from a fixed fraction of the panel, so it
+       cannot overlap them on a panel geometry nobody has measured. */
+    int col_l = o->dpad_cx + o->dpad_r + KOBOY_CHROME_MARGIN;
+    int col_r = fcx - (o->face_r + o->face_off) - KOBOY_CHROME_MARGIN;
+    int col_cx = (col_l + col_r) / 2;
+    int col_w  = col_r - col_l;
+
+    o->menu.w = W * 22 / 100;
+    if (o->menu.w > col_w) o->menu.w = col_w;
+    /* LIVE GUARD, and it is about REACHABILITY, not about memory: col_w goes
+       to nothing on a panel narrow enough for the two thumb clusters to meet
+       in the middle, and a zero-width MENU is a device with no way back to
+       the ROM browser. A cramped MENU that overlaps a button is recoverable;
+       an absent one is not. */
+    if (o->menu.w < 16) o->menu.w = 16;
+    o->menu.h = upper_h * 34 / 100;
+    o->menu.x = col_cx - o->menu.w / 2;
+    o->menu.y = sy + upper_h * 12 / 100;
+    if (o->menu.x < 0) o->menu.x = 0;
+
+    /* --- lower band: the battery lamp, then four pills */
+    o->bat_r  = lower_h * 22 / 100;
+    if (o->bat_r < 4) o->bat_r = 4;
+    o->bat_cx = 2 * KOBOY_CHROME_MARGIN + o->bat_r;
+    /* Two fifths down the band, not centred: "BATTERY" is captioned BELOW the
+       lamp (as it is in the DMG layout), so the pair has to be centred, not
+       the disc alone. */
+    o->bat_cy = ly + lower_h * 40 / 100;
+
+    int px0  = o->bat_cx + o->bat_r + KOBOY_CHROME_MARGIN;
+    int px1  = W - 2 * KOBOY_CHROME_MARGIN;
+    int cell = (px1 - px0) / 4;
+    if (cell < 8) cell = 8;             /* LIVE GUARD: see menu.w above */
+    int pcy  = ly + lower_h / 2;
+    int ph   = lower_h * 56 / 100;
+    /* L1 and R1 are drawn NARROWER than SELECT and START inside cells of the
+       same width, which is the whole of what makes them read as shoulder
+       buttons rather than a fifth and sixth pill. Their CENTRES stay on the
+       even grid, so the row is evenly spaced whatever the widths are. */
+    int wide  = cell - W * 2 / 100;  if (wide  < 8) wide  = 8;
+    int small = cell * 60 / 100;     if (small < 8) small = 8;
+    const int ws[4] = { small, wide, wide, small };
+    koboy_rect *slot[4] = { &o->l1, &o->select, &o->start, &o->r1 };
+    for (int i = 0; i < 4; i++) {
+        int cx = px0 + cell * i + cell / 2;
+        slot[i]->w = ws[i];
+        slot[i]->h = ph;
+        slot[i]->x = cx - ws[i] / 2;
+        slot[i]->y = pcy - ph / 2;
+    }
 }
 
 void chrome_lcd_menu_rect(const koboy_profile *p, koboy_rect *out)
 {
-    int strip = chrome_lcd_strip_h(p->panel_h);
-    int sy    = p->panel_h - strip;
-    int mw    = p->panel_w / 5;
-    int mh    = strip * 3 / 5;
-    out->w = mw;
-    out->h = mh;
-    /* Right end of the strip, a double bezel margin in from the edge, so the
-       zone is nowhere near the panel corner a palm rests on. */
-    out->x = p->panel_w - mw - 2 * KOBOY_CHROME_MARGIN;
-    out->y = sy + (strip - mh) / 2;
-    if (out->x < 0) out->x = 0;          /* LIVE GUARD: a very narrow panel */
-    if (out->y < 0) out->y = 0;
+    chrome_lcd_controls c;
+    chrome_lcd_layout(p, &c);
+    *out = c.menu;
 }
 
 void chrome_lcd_battery(const koboy_profile *p, int *cx, int *cy, int *r)
 {
-    int strip = chrome_lcd_strip_h(p->panel_h);
-    int sy    = p->panel_h - strip;
-    int rr    = strip / 5;
-    if (rr < 4) rr = 4;
-    *r  = rr;
-    *cx = 2 * KOBOY_CHROME_MARGIN + rr;
-    /* Two fifths down the strip, not centred: the "BATTERY" caption is drawn
-       BELOW the lamp (as it is in the DMG layout), so the pair has to be
-       centred, not the disc alone. */
-    *cy = sy + strip * 2 / 5;
+    chrome_lcd_controls c;
+    chrome_lcd_layout(p, &c);
+    *cx = c.bat_cx; *cy = c.bat_cy; *r = c.bat_r;
 }
 
 /* Contract and rationale in chrome.h. Every term below is the exact expression
@@ -291,6 +377,62 @@ static void text_draw_centred_at(uint8_t *fb, int stride, int W, int H,
     text_draw(fb, stride, W, H, cx - text_measure(s, px) / 2, y, s, px, ink);
 }
 
+/* The d-pad cross, drawn from a centre and an arm half-length. BOTH layouts
+   call this: the DMG faceplate's cross and the Game & Watch strip's are the
+   same object at different sizes and positions, and a Game & Watch title's
+   own directions (Donkey Kong needs a full four-way; Mickey Mouse binds two
+   diagonals to up/down) are steered with exactly the same shape. Extracted
+   rather than copied for the reason chrome.h's header gives about the
+   battery lamp: a second copy is a second chance to get it wrong.
+
+   Solid DPAD (near-black) arms -- the darkest thing on the case, per the
+   reference photo, and the single most recognisable shape on a DMG's lower
+   half. Round 1 filled these with a near-white tone, which read as a hole
+   punched in the case rather than a raised control; DPAD is chosen to sit
+   clearly below DARK (the bezel tone) too, so the d-pad and the bezel do not
+   blur into "the same dark thing" even though they are the two darkest tones
+   on the panel. */
+static void draw_dpad(uint8_t *fb, int stride, int W, int H, int dcx, int dcy, int dr)
+{
+    int arm = dr / 3;
+    box(fb, stride, W, H, dcx, dcy, arm, 2 * dr, DPAD);
+    box(fb, stride, W, H, dcx, dcy, 2 * dr, arm, DPAD);
+    frame(fb, stride, W, H, dcx - arm / 2, dcy - dr, arm, 2 * dr, 2, INK);
+    frame(fb, stride, W, H, dcx - dr, dcy - arm / 2, 2 * dr, arm, 2, INK);
+
+    /* Centre boss and ridges, matching the photo's moulded cross rather
+       than a flat one. Purely cosmetic pixels drawn INSIDE the cross just
+       filled above -- dcx/dcy/dr/arm are untouched, so chrome_controls_top's
+       d-pad terms (computed from those same four values, see this file's
+       top) cannot drift from what is actually drawn, and input.c's touch
+       zone, built from the same layout permille, stays exactly as wide as
+       it always was.
+       Round 1's ridges were full-width ink lines spanning the WHOLE arm at
+       even intervals, which subdivided each arm into a row of visibly
+       separate boxes -- a segmented grid, not a ridged surface. Fixed two
+       ways: the ridge colour is now DARK (a lighter tone scored onto the
+       near-black DPAD fill, a surface highlight rather than a same-colour
+       divider line), and each ridge is SHORTER than the arm's own width
+       (ridge_w, not the full arm) and clustered near the outer THIRD of
+       each arm -- three per tip -- rather than evenly spaced hub-to-tip. */
+    int hub_r = arm / 2;
+    if (hub_r > 0) {
+        disc(fb, stride, W, H, dcx, dcy, hub_r, DARK);
+        ring(fb, stride, W, H, dcx, dcy, hub_r, INK);
+    }
+    int ridge_w = arm * 2 / 3;
+    if (ridge_w < 1) ridge_w = 1;
+    int tip_span = dr / 3;
+    for (int k = 1; k <= 3; k++) {
+        int off = dr - (tip_span * k) / 4;
+        if (off <= hub_r + 2 || off >= dr - 1) continue;
+        hline(fb, stride, W, H, dcx - ridge_w / 2, dcx + ridge_w / 2, dcy - off, DARK);
+        hline(fb, stride, W, H, dcx - ridge_w / 2, dcx + ridge_w / 2, dcy + off, DARK);
+        vline(fb, stride, W, H, dcx - off, dcy - ridge_w / 2, dcy + ridge_w / 2, DARK);
+        vline(fb, stride, W, H, dcx + off, dcy - ridge_w / 2, dcy + ridge_w / 2, DARK);
+    }
+}
+
 void chrome_bands(const koboy_profile *p, int panel_w, int *left, int *right_start)
 {
     int lx = p->game_x;                     /* width of the left band */
@@ -310,21 +452,81 @@ void chrome_bands(const koboy_profile *p, int panel_w, int *left, int *right_sta
    that task lands and audio is real, not when it merely exists on paper. */
 static const char STRAPLINE[] = "DOT MATRIX ON ELECTRONIC PAPER";
 
-/* The LCD faceplate: everything the DMG one has MINUS the controls, because a
-   Game & Watch title draws its own into the artwork (koboy.h's
-   koboy_layout_mode has the full argument). What is left is a case, a recess
-   around a game rect that runs the full panel width, and one bottom strip.
+/* Fits a label to a box and draws it centred, returning nothing: the exact
+   loop the MENU pill used before the strip grew nine more labelled controls.
+   Extracted because "pick the largest px that still clears the box" is the
+   one sizing rule every label on this faceplate follows, and nine copies of
+   it is nine chances for one of them to overflow its box unnoticed. `max_px`
+   caps a short word in a big box, which is what keeps a two-character label
+   from being drawn twice the height of a six-character one beside it. */
+static void label_in_box(uint8_t *fb, int stride, int W, int H,
+                         int bx, int by, int bw, int bh, const char *s,
+                         int max_px, uint8_t ink)
+{
+    int px = 1;
+    while (px < max_px &&
+          text_measure(s, px + 1) <= bw - 8 &&
+          TEXT_GLYPH_H * (px + 1) <= bh - 8)
+        px++;
+    text_draw_centred_at(fb, stride, W, H, bx + bw / 2,
+                         by + (bh - TEXT_GLYPH_H * px) / 2, s, px, ink);
+}
 
-   No d-pad, no A/B, no Start/Select. Drawing them would be worse than
-   useless: their touch zones do not stop being live under a rect drawn over
-   them (that is v1's own lesson, quoted in config.c), so a drawn control
-   that presses a button the loaded system does not have is a control that
-   silently eats touches meant for the artwork.
+/* One pill: PILL fill, INK frame, label inside. Start/Select/MENU on the DMG
+   faceplate are drawn this way and so is every pill in the LCD strip, which
+   is the point -- someone who has used the DMG faceplate already knows what
+   a pill with a word in it does. */
+static void draw_pill(uint8_t *fb, int stride, int W, int H,
+                      const koboy_rect *r, const char *label)
+{
+    fill_rect(fb, stride, W, H, r->x, r->y, r->x + r->w - 1, r->y + r->h - 1, PILL);
+    frame(fb, stride, W, H, r->x, r->y, r->w, r->h, 2, INK);
+    label_in_box(fb, stride, W, H, r->x, r->y, r->w, r->h, label, 4, INK);
+}
 
-   No strapline either. In the DMG layout it sits in the top bezel band, whose
-   height is derived from a top margin that layout guarantees; here the game
-   rect is allowed to reach y = 0 (Donkey Kong at 606x748 fills a 1264x1560
-   area exactly), so there is no band to guarantee it a home.
+/* One face-button disc with its RETROPAD name in it. The label goes INSIDE
+   rather than below, unlike the DMG's A and B: those have a whole case band
+   under them and these do not, and an unlabelled disc in a diamond of four
+   is exactly the "four indistinguishable grey shapes" text.c was added to
+   stop.
+
+   The names are X / Y / A / B and NOT the DMG's own two, deliberately: the
+   gw core's own overlay speaks retropad ("NORTHEAST" sits over the SNES
+   pad's TOP button, which is X), and a label that disagreed with the overlay
+   would send a user to the wrong button every time they consulted it. */
+static void draw_face_button(uint8_t *fb, int stride, int W, int H,
+                             int cx, int cy, int r, const char *label)
+{
+    disc(fb, stride, W, H, cx, cy, r, BUTTON);
+    ring(fb, stride, W, H, cx, cy, r, INK);
+    /* Inscribed square of the disc, so a label can never poke out of the
+       circle it is centred in: half-side = r / sqrt(2), and 7/10 is just
+       under 1/sqrt(2) = 0.7071. */
+    int side = r * 7 / 10 * 2;
+    label_in_box(fb, stride, W, H, cx - side / 2, cy - side / 2, side, side,
+                 label, 4, BG);
+}
+
+/* The LCD faceplate: a case, a recess around a game rect that runs the full
+   panel width, and one bottom strip carrying a FULL RETROPAD.
+
+   The strip's controls are the correction this layout's first version
+   needed. That version drew none, on the theory that a Game & Watch title
+   exposes its own on-artwork buttons to a pointer. Measured against the
+   shipped .mgw collection, that theory is false: those files route through
+   gwlua's compat init, which has no pointer handling at all, so a pointer
+   press anywhere on the artwork changes ZERO pixels while a joypad press
+   changes 211k. Every one of these titles is driven by per-title RETROPAD
+   bindings -- Mickey Mouse (Wide Screen) uses up/down/x/b for its four
+   diagonals and l1/r1 for GAME A / GAME B; Donkey Kong (Multi Screen) uses
+   the full cross plus b for JUMP -- and koboy cannot know which. So the
+   strip exposes the WHOLE set rather than guessing: a d-pad, the X/Y/A/B
+   diamond, SELECT and START (without which no round can be started at all),
+   and L1/R1.
+
+   No strapline. In the DMG layout it sits in the top bezel band, whose
+   height that layout guarantees; here the game rect is allowed to reach
+   y = 0, so there is no band to guarantee it a home.
 
    Obeys the same contract as chrome_render: it must never write inside the
    game rect. Every element below is either in the bottom strip or clipped to
@@ -364,46 +566,48 @@ static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p)
     frame(fb, stride, W, H, gx0 - bez, gy0 - bez,
           (gx1 + bez) - (gx0 - bez) + 1, (gy1 + bez) - (gy0 - bez) + 1, 1, CASE_HI);
 
-    /* The bottom strip. One hairline to separate it from the case above --
-       the strip carries live controls and the case does not, and on a panel
-       with no colour a tone change is the only way to say so. */
-    int strip = chrome_lcd_strip_h(H);
-    int sy    = H - strip;
-    hline(fb, stride, W, H, 0, W - 1, sy, CASE_LO);
-    hline(fb, stride, W, H, 0, W - 1, sy + 1, CASE_HI);
+    chrome_lcd_controls c;
+    chrome_lcd_layout(p, &c);
 
-    /* MENU, styled exactly like the DMG layout's: a PILL box with an INK
-       frame and the label inside it. Same tone, same shape, same word --
-       someone who has used the DMG faceplate already knows what this
-       is. It is the only way back to the ROM browser. */
-    koboy_rect m;
-    chrome_lcd_menu_rect(p, &m);
-    fill_rect(fb, stride, W, H, m.x, m.y, m.x + m.w - 1, m.y + m.h - 1, PILL);
-    frame(fb, stride, W, H, m.x, m.y, m.w, m.h, 2, INK);
-    int menu_px = 1;
-    while (menu_px < 6 &&
-          text_measure("MENU", menu_px + 1) <= m.w - 8 &&
-          TEXT_GLYPH_H * (menu_px + 1) <= m.h - 8)
-        menu_px++;
-    text_draw_centred_at(fb, stride, W, H, m.x + m.w / 2,
-                         m.y + (m.h - TEXT_GLYPH_H * menu_px) / 2,
-                         "MENU", menu_px, INK);
+    /* One hairline to separate the strip from the case above -- the strip
+       carries live controls and the case does not, and on a panel with no
+       colour a tone change is the only way to say so. */
+    hline(fb, stride, W, H, 0, W - 1, c.strip.y, CASE_LO);
+    hline(fb, stride, W, H, 0, W - 1, c.strip.y + 1, CASE_HI);
 
-    /* Wordmark, centred in the strip between the lamp and MENU. Sized to the
-       room actually left between them rather than to the panel, and skipped
-       outright -- not crushed -- when there is none. */
-    int bcx, bcy, br;
-    chrome_lcd_battery(p, &bcx, &bcy, &br);
-    int word_l = bcx + br + KOBOY_CHROME_MARGIN;
-    int word_r = m.x - KOBOY_CHROME_MARGIN;
-    if (word_r - word_l > 16) {
+    draw_dpad(fb, stride, W, H, c.dpad_cx, c.dpad_cy, c.dpad_r);
+
+    /* The diamond, in the arrangement the core's own overlay uses. Drawn in
+       the order X, Y, A, B purely so the source reads top, left, right,
+       bottom; they do not overlap (see chrome.h on face_off). */
+    draw_face_button(fb, stride, W, H, c.x_cx, c.x_cy, c.face_r, "X");
+    draw_face_button(fb, stride, W, H, c.y_cx, c.y_cy, c.face_r, "Y");
+    draw_face_button(fb, stride, W, H, c.a_cx, c.a_cy, c.face_r, "A");
+    draw_face_button(fb, stride, W, H, c.b_cx, c.b_cy, c.face_r, "B");
+
+    draw_pill(fb, stride, W, H, &c.l1,     "L1");
+    draw_pill(fb, stride, W, H, &c.select, "SELECT");
+    draw_pill(fb, stride, W, H, &c.start,  "START");
+    draw_pill(fb, stride, W, H, &c.r1,     "R1");
+    draw_pill(fb, stride, W, H, &c.menu,   "MENU");
+
+    /* Wordmark, in the centre column under MENU -- the only decoration the
+       strip has room for, and it goes where the original console puts its own
+       logotype: below everything, centred. Sized to the gap actually left
+       between MENU and the bottom of the upper band, and skipped outright --
+       not crushed -- when there is none. It is decoration, so it is derived
+       FROM the controls' geometry and never feeds back into it. */
+    int deco_y0 = c.menu.y + c.menu.h + KOBOY_CHROME_MARGIN;
+    int deco_y1 = c.l1.y - KOBOY_CHROME_MARGIN;
+    if (deco_y1 - deco_y0 > TEXT_GLYPH_H + 2) {
+        int avail_h = deco_y1 - deco_y0;
         int word_px = 1;
-        while (word_px < 6 &&
-              text_measure("koboy", word_px + 1) <= word_r - word_l &&
-              TEXT_GLYPH_H * (word_px + 1) <= strip - 8)
+        while (word_px < 5 &&
+              text_measure("koboy", word_px + 1) <= c.menu.w &&
+              TEXT_GLYPH_H * (word_px + 1) <= avail_h - 2)
             word_px++;
-        text_draw_centred_at(fb, stride, W, H, (word_l + word_r) / 2,
-                             sy + (strip - TEXT_GLYPH_H * word_px) / 2,
+        text_draw_centred_at(fb, stride, W, H, c.menu.x + c.menu.w / 2,
+                             deco_y0 + (avail_h - TEXT_GLYPH_H * word_px) / 2,
                              "koboy", word_px, DARK);
     }
 }
@@ -624,51 +828,12 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
         text_draw(fb, stride, W, H, word_x, word_y, "koboy", word_px, DARK);
     }
 
-    /* d-pad cross. Solid DPAD (near-black) arms -- the darkest thing on the
-       case, per the reference photo, and the single most recognisable shape
-       on a DMG's lower half. Round 1 filled these with a near-white tone,
-       which read as a hole punched in the case rather than a raised
-       control; DPAD is chosen to sit clearly below DARK (the bezel tone)
-       too, so the d-pad and the bezel do not blur into "the same dark
-       thing" even though they are the two darkest tones on the panel. */
+    /* The cross, at the DMG layout's permille position. draw_dpad owns the
+       shape; chrome_controls_top's d-pad terms are computed from these same
+       three values (see this file's top), so the drawn control and the
+       reserved band cannot drift. */
     int dcx = perm(l->dpad_cx, W), dcy = perm(l->dpad_cy, H), dr = perm(l->dpad_r, W);
-    int arm = dr / 3;
-    box(fb, stride, W, H, dcx, dcy, arm, 2 * dr, DPAD);
-    box(fb, stride, W, H, dcx, dcy, 2 * dr, arm, DPAD);
-    frame(fb, stride, W, H, dcx - arm / 2, dcy - dr, arm, 2 * dr, 2, INK);
-    frame(fb, stride, W, H, dcx - dr, dcy - arm / 2, 2 * dr, arm, 2, INK);
-
-    /* Centre boss and ridges, matching the photo's moulded cross rather
-       than a flat one. Purely cosmetic pixels drawn INSIDE the cross just
-       filled above -- dcx/dcy/dr/arm are untouched, so chrome_controls_top's
-       d-pad terms (computed from those same four values, see this file's
-       top) cannot drift from what is actually drawn, and input.c's touch
-       zone, built from the same layout permille, stays exactly as wide as
-       it always was.
-       Round 1's ridges were full-width ink lines spanning the WHOLE arm at
-       even intervals, which subdivided each arm into a row of visibly
-       separate boxes -- a segmented grid, not a ridged surface. Fixed two
-       ways: the ridge colour is now DARK (a lighter tone scored onto the
-       near-black DPAD fill, a surface highlight rather than a same-colour
-       divider line), and each ridge is SHORTER than the arm's own width
-       (ridge_w, not the full arm) and clustered near the outer THIRD of
-       each arm -- three per tip -- rather than evenly spaced hub-to-tip. */
-    int hub_r = arm / 2;
-    if (hub_r > 0) {
-        disc(fb, stride, W, H, dcx, dcy, hub_r, DARK);
-        ring(fb, stride, W, H, dcx, dcy, hub_r, INK);
-    }
-    int ridge_w = arm * 2 / 3;
-    if (ridge_w < 1) ridge_w = 1;
-    int tip_span = dr / 3;
-    for (int k = 1; k <= 3; k++) {
-        int off = dr - (tip_span * k) / 4;
-        if (off <= hub_r + 2 || off >= dr - 1) continue;
-        hline(fb, stride, W, H, dcx - ridge_w / 2, dcx + ridge_w / 2, dcy - off, DARK);
-        hline(fb, stride, W, H, dcx - ridge_w / 2, dcx + ridge_w / 2, dcy + off, DARK);
-        vline(fb, stride, W, H, dcx - off, dcy - ridge_w / 2, dcy + ridge_w / 2, DARK);
-        vline(fb, stride, W, H, dcx + off, dcy - ridge_w / 2, dcy + ridge_w / 2, DARK);
-    }
+    draw_dpad(fb, stride, W, H, dcx, dcy, dr);
 
     /* A and B: dark, clearly darker than the case (BUTTON), matching the
        photo's magenta discs read in greyscale -- round 1 shipped these

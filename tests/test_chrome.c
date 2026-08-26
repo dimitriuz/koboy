@@ -906,8 +906,170 @@ TEST_MAIN({
 
         int strip = chrome_lcd_strip_h(1680);
         int sy    = 1680 - strip;
-        CHECK_EQ_INT(strip, 120);          /* 72 permille of 1680 */
-        CHECK_EQ_INT(sy, lp.game_y + lp.game_h + (1560 - lp.game_y - lp.game_h));
+        CHECK_EQ_INT(strip, 420);          /* 250 permille of 1680 */
+        CHECK_EQ_INT(sy, 1260);
+
+        /* ================================= THE CONTROL STRIP
+         *
+         * The strip exists to carry a full retropad, because the shipped
+         * .mgw titles are driven by per-title retropad bindings and ignore
+         * the pointer entirely (measured: 0 pixels changed by a pointer
+         * press, 211k by a joypad press). Everything below is about the
+         * controls being THERE, being DRAWN, and not sitting on top of one
+         * another -- the matching "a tap here presses THAT button and not a
+         * neighbour" checks live in tests/test_input_touch.c.
+         */
+        chrome_lcd_controls ctl;
+        memset(&ctl, 0, sizeof ctl);
+        chrome_lcd_layout(&lp, &ctl);
+
+        CHECK_EQ_INT(ctl.strip.y, sy);
+        CHECK_EQ_INT(ctl.strip.h, strip);
+        CHECK_EQ_INT(ctl.strip.w, 1264);
+
+        /* THE DIAMOND'S ARRANGEMENT. Not decoration: the gw core's own
+           overlay draws a SNES pad and labels its TOP button NORTHEAST,
+           which is Mickey Mouse's `x` binding, so X must be the top one and
+           B the bottom one or a user reading the overlay is sent to the
+           wrong button. Asserted as strict inequalities between the four
+           centres, which is the only form a rearrangement cannot satisfy. */
+        CHECK(ctl.x_cy < ctl.y_cy);            /* X above the middle row */
+        CHECK(ctl.x_cy < ctl.a_cy);
+        CHECK(ctl.b_cy > ctl.y_cy);            /* B below it */
+        CHECK(ctl.b_cy > ctl.a_cy);
+        CHECK_EQ_INT(ctl.y_cy, ctl.a_cy);      /* Y and A share the row */
+        CHECK(ctl.y_cx < ctl.a_cx);            /* Y left of A */
+        CHECK_EQ_INT(ctl.x_cx, ctl.b_cx);      /* X and B share the column */
+        CHECK(ctl.y_cx < ctl.x_cx && ctl.x_cx < ctl.a_cx);
+        /* ...and adjacent discs do not merge into one blob, which is what
+           face_off > face_r * sqrt(2) buys. Squared, to stay integer. */
+        CHECK(2 * ctl.face_off * ctl.face_off > 4 * ctl.face_r * ctl.face_r);
+
+        /* EVERY CONTROL IS INSIDE THE STRIP AND INSIDE THE PANEL, and none of
+           them overlaps another. Expressed over one table so a control added
+           later without a bounds check is caught by construction rather than
+           by whoever remembers to add a line. The d-pad and the four discs
+           enter as their bounding boxes -- a box that clears its neighbours
+           certainly means the shape inside it does. */
+        struct { koboy_rect r; const char *name; } zone[10] = {
+            { { ctl.dpad_cx - ctl.dpad_r, ctl.dpad_cy - ctl.dpad_r,
+                2 * ctl.dpad_r + 1, 2 * ctl.dpad_r + 1 }, "dpad" },
+            { { ctl.x_cx - ctl.face_r, ctl.x_cy - ctl.face_r,
+                2 * ctl.face_r + 1, 2 * ctl.face_r + 1 }, "X" },
+            { { ctl.y_cx - ctl.face_r, ctl.y_cy - ctl.face_r,
+                2 * ctl.face_r + 1, 2 * ctl.face_r + 1 }, "Y" },
+            { { ctl.a_cx - ctl.face_r, ctl.a_cy - ctl.face_r,
+                2 * ctl.face_r + 1, 2 * ctl.face_r + 1 }, "A" },
+            { { ctl.b_cx - ctl.face_r, ctl.b_cy - ctl.face_r,
+                2 * ctl.face_r + 1, 2 * ctl.face_r + 1 }, "B" },
+            { ctl.l1,     "L1"     },
+            { ctl.select, "SELECT" },
+            { ctl.start,  "START"  },
+            { ctl.r1,     "R1"     },
+            { ctl.menu,   "MENU"   },
+        };
+        for (int i = 0; i < 10; i++) {
+            const koboy_rect *r = &zone[i].r;
+            if (r->x < 0 || r->y < sy || r->x + r->w > 1264 || r->y + r->h > 1680)
+                fprintf(stderr, "  LCD control %s at (%d,%d) %dx%d escapes the strip\n",
+                        zone[i].name, r->x, r->y, r->w, r->h);
+            CHECK(r->w > 0 && r->h > 0);
+            CHECK(r->x >= 0);
+            CHECK(r->y >= sy);                       /* below the artwork */
+            CHECK(r->x + r->w <= 1264);
+            CHECK(r->y + r->h <= 1680);
+            /* Big enough to hit with a thumb. 64 px is ~5.4 mm on this
+               panel's 300 dpi -- a floor, not a target; the shipped sizes are
+               75-108 px. The four discs' BOUNDING boxes are what is measured,
+               which is the honest number for a round target. */
+            CHECK(r->w >= 64 && r->h >= 64);
+        }
+        for (int i = 0; i < 10; i++)
+            for (int j = i + 1; j < 10; j++) {
+                const koboy_rect *a = &zone[i].r, *b2 = &zone[j].r;
+                int over = !(a->x + a->w <= b2->x || b2->x + b2->w <= a->x ||
+                             a->y + a->h <= b2->y || b2->y + b2->h <= a->y);
+                /* The diamond's four discs are the ONE permitted overlap:
+                   their bounding boxes touch at the corners even though the
+                   circles inside them do not (asserted separately above). */
+                int diamond = (i >= 1 && i <= 4 && j >= 1 && j <= 4);
+                if (over && !diamond)
+                    fprintf(stderr, "  LCD controls %s and %s overlap\n",
+                            zone[i].name, zone[j].name);
+                CHECK(!over || diamond);
+            }
+
+        /* EVERY CONTROL IS ACTUALLY DRAWN. A zone with nothing under it is an
+           invisible button. Checked as a tone difference against the bare
+           strip beside it, so a palette retune does not break it. */
+        int case_v = fb[(sy + 4) * 1264 + 1264 / 2];   /* bare strip, top edge */
+        for (int i = 0; i < 10; i++) {
+            const koboy_rect *r = &zone[i].r;
+            int painted_px = 0;
+            for (int y = r->y; y < r->y + r->h; y++)
+                for (int x = r->x; x < r->x + r->w; x++)
+                    if (fb[y * 1264 + x] != case_v) painted_px++;
+            /* AREA, not a single sample point: sampling the centre pixel is
+               what a labelled control defeats -- the glyph is drawn there, in
+               a tone that is neither the fill nor the case, and for the "B"
+               disc it happened to equal the case tone exactly. (Real, caught
+               here.) The three shapes fill very different fractions of their
+               boxes -- a pill all of it, a disc pi/4 = 78%, the d-pad cross
+               only 31% (two arms of width dr/3 crossing) -- so the threshold
+               is set below the smallest of them. 25% is still five times what
+               the largest LABEL alone covers (a 20x28 glyph in a 109x109 box
+               is under 5%), which is the mutant it has to catch. */
+            int area = r->w * r->h;
+            if (painted_px * 100 < area * 25)
+                fprintf(stderr, "  LCD control %s: painted=%d/%d\n",
+                        zone[i].name, painted_px, area);
+            CHECK(painted_px * 100 >= area * 25);
+        }
+
+        /* ...AND EVERY LABELLED ONE CARRIES ITS LABEL. Separate from the
+           check above, and looking at a strictly INTERIOR region, because
+           that is the only way to see a label at all: a disc's INK ring and a
+           pill's INK frame are ink too, so counting ink over the whole zone
+           passes for an unlabelled control. Deleting the diamond's
+           label_in_box call was caught ONLY by the golden until this existed
+           -- a real mutant, and the same class as v2's "MENU box not drawn".
+           An unlabelled disc in a diamond of four is precisely the "four
+           indistinguishable grey shapes" text.c was added to stop, and here
+           it is worse than cosmetic: the labels are what tie koboy's buttons
+           to the names the core's own overlay uses. */
+        {
+            /* The interior of each labelled control: the inscribed box for a
+               disc (7/10 of r either way is just inside r/sqrt(2)), and a
+               6 px inset for a pill, which clears its 2 px frame. The d-pad
+               has no label and is not in this table. */
+            int fr = ctl.face_r * 7 / 10;
+            struct { koboy_rect r; const char *name; } lbl[9] = {
+                { { ctl.x_cx - fr, ctl.x_cy - fr, 2 * fr, 2 * fr }, "X" },
+                { { ctl.y_cx - fr, ctl.y_cy - fr, 2 * fr, 2 * fr }, "Y" },
+                { { ctl.a_cx - fr, ctl.a_cy - fr, 2 * fr, 2 * fr }, "A" },
+                { { ctl.b_cx - fr, ctl.b_cy - fr, 2 * fr, 2 * fr }, "B" },
+                { { ctl.l1.x + 6,     ctl.l1.y + 6,     ctl.l1.w - 12,     ctl.l1.h - 12     }, "L1" },
+                { { ctl.select.x + 6, ctl.select.y + 6, ctl.select.w - 12, ctl.select.h - 12 }, "SELECT" },
+                { { ctl.start.x + 6,  ctl.start.y + 6,  ctl.start.w - 12,  ctl.start.h - 12  }, "START" },
+                { { ctl.r1.x + 6,     ctl.r1.y + 6,     ctl.r1.w - 12,     ctl.r1.h - 12     }, "R1" },
+                { { ctl.menu.x + 6,   ctl.menu.y + 6,   ctl.menu.w - 12,   ctl.menu.h - 12   }, "MENU" },
+            };
+            for (int i = 0; i < 9; i++) {
+                const koboy_rect *r = &lbl[i].r;
+                int glyph = 0;
+                int fill_v = fb[(r->y + r->h - 2) * 1264 + r->x + 1];  /* a corner of the interior: the fill */
+                for (int y = r->y; y < r->y + r->h; y++)
+                    for (int x = r->x; x < r->x + r->w; x++)
+                        if (fb[y * 1264 + x] != fill_v) glyph++;
+                /* A 5x7 glyph at the smallest px this faceplate ever picks is
+                   35 pixels; the shipped labels are hundreds. 20 is a floor
+                   that only "nothing was drawn" can fall below. */
+                if (glyph < 20)
+                    fprintf(stderr, "  LCD control %s: %d label px inside it\n",
+                            lbl[i].name, glyph);
+                CHECK(glyph >= 20);
+            }
+        }
 
         /* MENU is REACHABLE: it is the only way back to the ROM browser once
            a game is running, so its zone must be inside the strip, clear of
@@ -965,6 +1127,73 @@ TEST_MAIN({
         memcpy(fb0, fb, (size_t)1264 * 1680);
         chrome_render_battery(fb, 1264, &lp, &lc.layout, 0);
         CHECK(memcmp(fb0, fb, (size_t)1264 * 1680) != 0);
+    }
+
+    /* EXTREME PANELS, where the strip's two live guards actually fire. Both
+       are about REACHABILITY, not memory, and neither can be reached on any
+       supported panel -- which is exactly why they need a case here rather
+       than a comment saying they look dead.
+
+       Hand-built profiles, not resolver output: config_resolve_profile is
+       free to refuse geometry this silly, and the guards belong to
+       chrome_lcd_layout regardless of who asks it. */
+    {
+        /* Tall and narrow enough that the d-pad and the diamond meet in the
+           middle and leave no centre column at all. MENU is the ONLY way back
+           to the ROM browser, so it must survive with a hittable size and
+           inside the panel; a cramped MENU overlapping a button is
+           recoverable, an absent one is not. */
+        koboy_profile xp;
+        memset(&xp, 0, sizeof xp);
+        xp.panel_w = 400; xp.panel_h = 1600; xp.layout_mode = KOBOY_LAYOUT_LCD;
+        chrome_lcd_controls xc;
+        memset(&xc, 0, sizeof xc);
+        chrome_lcd_layout(&xp, &xc);
+        if (xc.menu.w < 16 || xc.menu.h < 16)
+            fprintf(stderr, "  400x1600: MENU collapsed to %dx%d\n", xc.menu.w, xc.menu.h);
+        CHECK(xc.menu.w >= 16 && xc.menu.h >= 16);
+        CHECK(xc.menu.x >= 0 && xc.menu.x + xc.menu.w <= 400);
+        CHECK(xc.menu.y >= xc.strip.y && xc.menu.y + xc.menu.h <= 1600);
+
+        /* Narrower and taller still, until the centre column's midpoint itself
+           lands on the panel's left edge. MENU's x clamp is what keeps the
+           zone from starting at a negative column, where in_rect_xywh would
+           quietly make it wider than it is drawn. Nothing resembling a device
+           reaches here -- it is the guard's own boundary, and it is tested
+           because the alternative is a guard nothing can fail. */
+        koboy_profile zp;
+        memset(&zp, 0, sizeof zp);
+        zp.panel_w = 50; zp.panel_h = 4000; zp.layout_mode = KOBOY_LAYOUT_LCD;
+        chrome_lcd_controls zc;
+        memset(&zc, 0, sizeof zc);
+        chrome_lcd_layout(&zp, &zc);
+        if (zc.menu.x < 0)
+            fprintf(stderr, "  50x4000: MENU starts at column %d\n", zc.menu.x);
+        CHECK(zc.menu.x >= 0);
+
+        /* Narrow enough that the battery lamp leaves the pill row almost no
+           width. The four pills must still be four distinct zones -- without
+           the cell floor their centres collapse onto one another and L1,
+           SELECT, START and R1 become the same button. */
+        koboy_profile yp;
+        memset(&yp, 0, sizeof yp);
+        yp.panel_w = 120; yp.panel_h = 1600; yp.layout_mode = KOBOY_LAYOUT_LCD;
+        chrome_lcd_controls yc;
+        memset(&yc, 0, sizeof yc);
+        chrome_lcd_layout(&yp, &yc);
+        const koboy_rect *row[4] = { &yc.l1, &yc.select, &yc.start, &yc.r1 };
+        for (int i = 0; i < 4; i++) {
+            CHECK(row[i]->w > 0 && row[i]->h > 0);
+            for (int j = i + 1; j < 4; j++) {
+                int over = !(row[i]->x + row[i]->w <= row[j]->x ||
+                             row[j]->x + row[j]->w <= row[i]->x);
+                if (over)
+                    fprintf(stderr, "  120x1600: pill %d (%d..%d) and %d (%d..%d) collapsed\n",
+                            i, row[i]->x, row[i]->x + row[i]->w,
+                            j, row[j]->x, row[j]->x + row[j]->w);
+                CHECK(!over);
+            }
+        }
     }
 
     /* Guard band, LCD layout: a profile whose rect runs off every edge must

@@ -40,28 +40,86 @@ int chrome_controls_top(int layout_mode, const koboy_layout *l,
  * once (see input.h's note on the faceplate's zones under a full-panel list).
  */
 
-/* Height of the bottom strip: the band below the game rect carrying the
-   BATTERY lamp, the wordmark and the MENU zone. Permille of the panel, like
-   every other control dimension here, with a floor so a hypothetical tiny
-   panel still gets a strip a finger can hit.
+/* Height of the bottom strip: the band below the game rect carrying the game
+   CONTROLS, the BATTERY lamp, the wordmark and the MENU zone. Permille of the
+   panel, like every other control dimension here.
 
-   72 permille is not a free parameter. It is the largest strip that still
-   lets the TALLEST measured Game & Watch title fill the panel width: Donkey
-   Kong is 606x748, which at 1264 wide is 1560 rows, and 1680 - 1560 = 120 --
-   which is what 72 permille of 1680 comes to. A taller strip would start
-   shrinking that title away from full width for no gain. */
+   250 permille -- 420 px on the verified 1264x1680 panel -- and the number is
+   set by what has to FIT IN it, not by what is left over. The first version
+   of this layout was 72 permille (120 px), chosen as "the largest strip that
+   still lets Donkey Kong fill the panel width", because that version drew no
+   game controls at all. That was a mistake with a measurement behind it: the
+   shipped .mgw titles route through gwlua's compat init, which has no pointer
+   handling whatsoever, so a touch on the artwork changes ZERO pixels while a
+   joypad press changes 211k. Every one of these titles is driven by retropad
+   buttons, so the strip has to carry a full retropad, and 120 px cannot.
+
+   What 250 permille costs is nothing that matters: the binding case is the
+   tallest measured title, Donkey Kong (Multi Screen) at 606x748, which fits
+   1021x1260 in the remaining 1264x1260 -- still more than 1.6x, against the
+   1x the device reported before this layout existed. The widescreen titles
+   (Mickey Mouse 654x396) are width-bound and unaffected: they fill all 1264
+   columns either way.
+
+   No floor any more, and that is deliberate rather than an omission: the old
+   48 px floor existed for a strip holding one MENU pill. A strip that must
+   seat a d-pad, four face buttons and four pills has no meaningful minimum --
+   chrome_lcd_layout derives every control from this height, so a panel too
+   short for them produces controls too small to hit whatever floor is
+   applied, and inventing one would only hide that. */
 int chrome_lcd_strip_h(int panel_h);
 
-/* The MENU zone, in panel coordinates. MENU is the ONLY way back to the ROM
-   browser once a game is running, so in a layout with no drawn faceplate
-   controls it is the one thing that must still be there. */
+/* Every control the LCD strip carries, in PANEL coordinates, resolved once.
+   chrome.c draws from this, input.c hit-tests from it, and config.c reserves
+   the game rect clear of the strip that holds it -- one definition, for the
+   reason the section header above gives.
+
+   The d-pad is a four-way cross of half-length `dpad_r`, hit-tested exactly
+   like the DMG faceplate's (a circle of that radius, then the shared
+   deadzone/hysteresis decode), so the two layouts share one implementation
+   and one set of quirks.
+
+   The four face buttons are a DIAMOND, and the arrangement is load-bearing
+   rather than decorative: the gw core's own overlay (START with no cursor
+   active) draws a SNES pad and labels the TOP button NORTHEAST, the BOTTOM
+   one SOUTHEAST. X is that top button, Y left, A right, B bottom -- so a
+   user reading the core's overlay can find the same button here. Rearranging
+   them into a row would break that correspondence silently.
+
+   `face_r` is every disc's radius and `face_off` the centre-to-centre
+   distance out to each one. face_off > face_r * sqrt(2) by construction (it
+   is face_r * 8/5), which is what keeps two ADJACENT discs from merging into
+   one blob -- their centres are face_off * sqrt(2) apart. */
+typedef struct {
+    koboy_rect strip;                   /* the whole bottom strip */
+    int dpad_cx, dpad_cy, dpad_r;
+    int face_r, face_off;
+    int x_cx, x_cy;                     /* NORTHEAST on the core's overlay */
+    int y_cx, y_cy;
+    int a_cx, a_cy;
+    int b_cx, b_cy;                     /* SOUTHEAST on the core's overlay */
+    koboy_rect l1, select, start, r1;   /* the lower band, left to right */
+    koboy_rect menu;
+    int bat_cx, bat_cy, bat_r;
+} chrome_lcd_controls;
+
+void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *out);
+
+/* The MENU zone, in panel coordinates -- chrome_lcd_layout's `menu`, kept as
+   a named accessor because MENU is the ONLY way back to the ROM browser once
+   a game is running and every caller that wants it wants nothing else. It
+   sits in the strip's CENTRE COLUMN, between the d-pad and the face diamond,
+   which is the one part of the strip neither thumb rests on: a MENU that fires
+   by accident mid-round is worse than one that is slightly further to reach. */
 void chrome_lcd_menu_rect(const koboy_profile *p, koboy_rect *out);
 
-/* The battery lamp's centre and radius, in panel coordinates. The user asked
+/* The battery lamp's centre and radius, in panel coordinates -- again just
+   chrome_lcd_layout's answer under a name its callers can use. The user asked
    for the battery to move under the screen; in this layout that is the left
-   end of the bottom strip, and chrome_render_battery draws it there instead
-   of in the DMG layout's left-hand case band (which does not exist here --
-   the game rect runs the full panel width). */
+   end of the strip's LOWER band, beside the L1/SELECT/START/R1 pills, and
+   chrome_render_battery draws it there instead of in the DMG layout's
+   left-hand case band (which does not exist here -- the game rect runs the
+   full panel width). */
 void chrome_lcd_battery(const koboy_profile *p, int *cx, int *cy, int *r);
 
 /* The two background-band widths chrome_render fills either side of the game

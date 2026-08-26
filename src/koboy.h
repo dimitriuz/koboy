@@ -50,8 +50,21 @@ typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
 #define KOBOY_KEY_BTN_TL    310   /* Xbox LB -- shipped default for key_start */
 #define KOBOY_KEY_BTN_TR    311   /* Xbox RB -- shipped default for key_select */
 
-/* libretro RETRO_DEVICE_ID_JOYPAD_* as bits */
+/* libretro RETRO_DEVICE_ID_JOYPAD_* as bits. The bit POSITION is the libretro
+   id, which is what makes core.c's forwarding a plain shift (`latched >> id`)
+   rather than a translation table -- do not renumber these.
+
+   The Game Boy needs eight of them, which is all v1 ever defined. Y, X, L1 and
+   R1 exist because a Game & Watch title's compat keymap binds whichever
+   retropad buttons its author felt like: Mickey Mouse (Wide Screen) uses
+   x = NORTHEAST and b = SOUTHEAST for its two diagonals and l1/r1 for its
+   GAME A / GAME B switches, and a title whose action key is one koboy cannot
+   name is a title nobody can play. Measured against the core's own on-screen
+   overlay, which draws a SNES pad and labels the TOP button NORTHEAST -- see
+   the LCD faceplate's diamond in chrome.c, whose geometry matches it so a
+   user reading that overlay can find the same button on koboy. */
 #define KOBOY_BTN_B      (1u << 0)
+#define KOBOY_BTN_Y      (1u << 1)
 #define KOBOY_BTN_SELECT (1u << 2)
 #define KOBOY_BTN_START  (1u << 3)
 #define KOBOY_BTN_UP     (1u << 4)
@@ -59,6 +72,9 @@ typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
 #define KOBOY_BTN_LEFT   (1u << 6)
 #define KOBOY_BTN_RIGHT  (1u << 7)
 #define KOBOY_BTN_A      (1u << 8)
+#define KOBOY_BTN_X      (1u << 9)
+#define KOBOY_BTN_L1     (1u << 10)
+#define KOBOY_BTN_R1     (1u << 11)
 
 /* Which presentation the LOADED SYSTEM gets. Not a user preference and not a
    global: a .gb/.gbc gets DMG, a .mgw gets LCD, decided from the ROM's own
@@ -74,12 +90,17 @@ typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
    Donkey Kong needs a full cross plus JUMP), so a fixed remap onto koboy's
    two drawn buttons cannot work and DID not: NE on Mickey Mouse is
    RETRO_DEVICE_ID_JOYPAD_X, which the DMG faceplate has no button for at
-   all, and the device report was "only b button works". The core accepts
-   pointer input on port 2 (third_party/gw/src/libretro.c), so LCD forwards
-   touches through as a pointer and lets the user press the drawn buttons
-   directly. That frees the whole panel: no d-pad, no A/B, a full-width
-   FRACTIONALLY scaled game rect, and one bottom strip carrying the battery
-   lamp and MENU. */
+   all, and the device report was "only b button works".
+
+   The answer is NOT to press those drawn buttons through a pointer. That was
+   tried and measured: the core does query RETRO_DEVICE_POINTER, but the
+   shipped .mgw files route through gwlua's compat init, which has no pointer
+   handling at all -- a pointer press anywhere on the artwork changes ZERO
+   pixels, a joypad press changes 211k. So LCD exposes the WHOLE retropad
+   instead of guessing a subset: a full-width FRACTIONALLY scaled game rect
+   above a bottom strip carrying a d-pad, the X/Y/A/B diamond, SELECT, START,
+   L1, R1, MENU and the battery lamp. The pointer forwarding stays alongside
+   it -- it is additive, and the newer .mgw format does read it. */
 typedef enum { KOBOY_LAYOUT_DMG = 0, KOBOY_LAYOUT_LCD } koboy_layout_mode;
 
 typedef struct { int x, y, w, h; } koboy_rect;   /* w == 0 means "empty" */

@@ -288,24 +288,27 @@ TEST_MAIN({
         /* MEASURED geometries, from running the real gw-libretro core --
            the same three tests/test_config.c's DMG sweep already uses. The
            expected rects below are on the ONE verified panel (Libra 2,
-           1264x1680), where the strip is 72 permille = 120 px and the rect
-           therefore fits into 1264x1560. */
+           1264x1680), where the strip is 250 permille = 420 px and the rect
+           therefore fits into 1264x1260. (It was 120 px until the strip had
+           to carry a real retropad -- see chrome.h.) */
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
         CHECK_EQ_INT(lp.layout_mode, KOBOY_LAYOUT_LCD);
         CHECK_EQ_INT(lp.game_w, 1264);          /* Mickey Mouse: width binds */
         CHECK_EQ_INT(lp.game_h, 765);
         CHECK_EQ_INT(lp.game_x, 0);
-        CHECK_EQ_INT(lp.game_y, (1560 - 765) / 2);
+        CHECK_EQ_INT(lp.game_y, (1260 - 765) / 2);
 
-        /* Donkey Kong, 606x748 -- the TALLEST measured title, and the one
-           that decides the strip height: at full width it is 1560 rows,
-           exactly the room a 120 px strip leaves. Height binds here, by a
-           hair, which is what makes this the case that proves both axes are
-           fitted rather than just the width. */
+        /* Donkey Kong, 606x748 -- the TALLEST measured title, and the one the
+           strip height costs the most: HEIGHT binds here, so it is the case
+           that proves both axes are fitted rather than just the width, and
+           the case that would notice if the strip ever grew again. Still
+           1.68x, against the 1x the device reported before this layout
+           existed, which is the trade the taller strip buys. */
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 606, 748, 606, 748));
-        CHECK_EQ_INT(lp.game_h, 1560);
-        CHECK_EQ_INT(lp.game_w, 606 * 1560 / 748);
+        CHECK_EQ_INT(lp.game_h, 1260);
+        CHECK_EQ_INT(lp.game_w, 606 * 1260 / 748);
         CHECK_EQ_INT(lp.game_y, 0);
+        CHECK(lp.game_w > 606);                 /* bigger than 1:1, the whole point */
 
         /* Mario Bros., 973x532 -- the widest measured title. */
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 973, 532, 973, 532));
