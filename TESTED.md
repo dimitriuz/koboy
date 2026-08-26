@@ -99,6 +99,49 @@ controls are per-title retropad bindings --- Mickey Mouse is
 is the full d-pad plus a JUMP button. `START` with no cursor active opens the
 core's own overlay, which names that title's bindings.
 
+### NES and Pokemon Mini: run on the device, 2026-08-26
+
+Both cross-built cores `dlopen`, run and render on the Kobo Libra 2. Measured
+with `--frames` over ssh (Nickel up, never through `koboy.sh`), so this
+covers loading, geometry and speed --- **not** a playtest.
+
+| | NES (fceumm) | Pokemon Mini |
+|---|---|---|
+| Reported geometry | 256x240 | 96x64 |
+| Resolved rect | 768x720 at (248,84), scale 3 | **1248x832** at (8,84) |
+| `core` | 4.3--4.6 ms | 2.0 ms |
+| `submit` | 14.1--14.9 ms | 20.5 ms |
+| `blit` | 1.4--2.5 ms | 2.2 ms |
+| `refresh` | 108--132 us | 800 us |
+
+Two things worth reading off that table.
+
+**Emulation is genuinely cheap on this CPU.** fceumm costs 4.6 ms a frame ---
+a whole NES for a quarter of what `video_submit` spends. The v1 spec's premise
+that emulation would be the constraint is wrong for this system too; the
+pixel pipeline is still the bottleneck, exactly as `docs/FOLLOWUPS.md` #23
+found for the Game Boy.
+
+**Pokemon Mini fills the panel.** 1248x832 from a 96x64 source is the
+per-system scale default working: under the old rule it inherited the Game
+Boy's `scale = 5` and would have rendered 480x320, a postage stamp. NES sits
+at scale 3 and costs *less* than the Game Boy's 16.6 ms, because 768x720 is
+fewer destination pixels than 800x720.
+
+**NES battery saves work on hardware.** The Zelda cart wrote
+`Legend of Zelda, The (USA) (Rev 1).srm` and a later run logged
+`koboy: loaded ...srm`, so the round trip is real, through the same
+`sram.c`/`safefile.c` path the Game Boy cartridge save was verified against.
+
+Game & Watch titles also write `.srm` (777 bytes --- high scores), which was
+not something this project set out to support and is a pleasant accident of
+the core exposing save RAM.
+
+**Not established:** no playtest of either system. Nobody has driven NES with
+the d-pad on the panel, and the smearing that makes scrolling platformers
+unpleasant (#25) is expected to apply to NES side-scrollers exactly as it
+does to the Game Boy's.
+
 ### Second title, an action game (Darkwing Duck, MBC1)
 
 Tetris is a generous first test: small dirty rectangles, no scrolling. An action

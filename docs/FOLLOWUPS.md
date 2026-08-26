@@ -343,7 +343,7 @@ Config question, not a code one, until someone reports a title feeling slow.
 
 ## NES and Pokemon Mini (added 2026-08-26)
 
-### 33. NEITHER NEW SYSTEM HAS RUN ON HARDWARE
+### 33. ~~(closed 2026-08-26: both run on the device, see TESTED.md)~~ -- NEITHER NEW SYSTEM HAS RUN ON HARDWARE
 
 The highest-value item in this file. Everything about fceumm and PokeMini in
 this repo was measured on the x86_64 host with `scripts/probe_core.c` and a
