@@ -181,6 +181,19 @@ static koboy_rect rect_union(koboy_rect a, koboy_rect b)
     return u;
 }
 
+/* Is `b` entirely inside `a` (including equal)? Used to drop redundant
+   candidates after the merge-cap below: unioning candidates in band-major
+   order can, once a merged box has absorbed a third candidate, end up
+   strictly containing some other candidate that was never unioned with it.
+   Dropping the contained one is free (its area was already going to be
+   blitted and refreshed as part of `a`) and turns a guaranteed-wasted
+   double-refresh into nothing. */
+static bool rect_contains(koboy_rect a, koboy_rect b)
+{
+    return b.x >= a.x && b.y >= a.y &&
+           b.x + b.w <= a.x + a.w && b.y + b.h <= a.y + a.h;
+}
+
 /* Does the tile-row `r` (in the reduced tby0-relative grid, width sub_tw)
    contain any dirty tile? Column-segmentation and row-segmentation both need
    this, so it is one function rather than two copies that could drift. */
@@ -200,16 +213,21 @@ int video_split_dirty(const uint8_t *prev, const uint8_t *cur,
                       int w, int h, int stride, int fixed_tiles,
                       koboy_rect *out, int max_out)
 {
+    /* LIVE GUARD: out == NULL has no slot to write a rect count into, so
+       there is nothing this function can honestly report. Every caller in
+       this codebase passes a real array, but video_split_dirty is also
+       exercised directly by tests/test_video_multirect.c, and a NULL here
+       must not be a silent no-op or a crash. */
     if (!out) return 0;
 
     koboy_rect merged = video_dirty_rect(prev, cur, w, h, stride);
     if (merged.w == 0) return 0;                  /* nothing changed */
 
-    /* max_out < 1 (a caller error, not a real request) and max_out == 1
-       (a real request for exactly the old single-rect behaviour) both
-       degrade to the merged box; folding them into one branch means
-       video_submit's wrapper -- which always asks for 1 -- never touches the
-       segmentation machinery below at all. */
+    /* LIVE GUARD: max_out < 1 (a caller error, not a real request) and
+       max_out == 1 (a real request for exactly the old single-rect
+       behaviour) both degrade to the merged box; folding them into one
+       branch means video_submit's wrapper -- which always asks for 1 --
+       never touches the segmentation machinery below at all. */
     if (max_out <= 1) { out[0] = merged; return 1; }
 
     /* Tile-index bounding box of the merged rect. video_dirty_rect's own walk
@@ -290,10 +308,36 @@ int video_split_dirty(const uint8_t *prev, const uint8_t *cur,
        covered, so this preserves the coverage property regardless of which
        pairs get merged. Order doesn't matter for correctness, only for how
        tight the result is, so the simplest rule (merge the last two,
-       repeatedly) is enough. */
+       repeatedly) is enough.
+
+       This does NOT keep the emitted rects disjoint. Candidates are
+       band-major ordered, and merging "the last two" can cross a band
+       boundary: a box that has already absorbed one neighbour by union can,
+       on the next merge, swallow a third candidate elsewhere in the list
+       outright (measured on production geometry: one merged 664x536 rect
+       fully contained an unrelated 80x72 one). Coverage still holds -- a
+       union only grows -- but an emitted rect nested inside another is pure
+       double-work downstream (blit_gray8 and refresh both run its area
+       twice), which is exactly the cost this function exists to cut. The
+       loop below removes that specific, cheaply-detectable case; it does not
+       attempt general deoverlap. */
     while (ncand > max_out) {
         cand[ncand - 2] = rect_union(cand[ncand - 2], cand[ncand - 1]);
         ncand--;
+    }
+
+    /* Drop any candidate now fully contained in another (see above). O(n^2)
+       over at most KOBOY_MAX_RECTS entries, so the cost is noise. */
+    for (int i = 0; i < ncand; i++) {
+        for (int j = 0; j < ncand; j++) {
+            if (i == j) continue;
+            if (rect_contains(cand[j], cand[i])) {
+                for (int k = i; k < ncand - 1; k++) cand[k] = cand[k + 1];
+                ncand--;
+                i--;
+                break;
+            }
+        }
     }
 
     /* The decision: split only when it is actually cheaper. With only one
@@ -393,6 +437,12 @@ int video_submit_rects(koboy_video *v, const void *src, int src_w, int src_h,
                        size_t src_pitch, koboy_pixfmt fmt, int fixed_tiles,
                        koboy_rect *out, int max_out)
 {
+    /* LIVE GUARD: out == NULL, checked here too (not just inside
+       video_split_dirty below) so a NULL out skips the pipeline entirely
+       rather than paying for a convert/scale/quantise pass whose result
+       could never be reported. max_out is not re-validated here: it passes
+       straight through to video_split_dirty, whose own live guard handles
+       max_out < 1. */
     if (!out) return 0;
     if (!video_pipeline_run(v, src, src_w, src_h, src_pitch, fmt)) return 0;
 

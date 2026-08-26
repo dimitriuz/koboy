@@ -19,15 +19,16 @@ void video_dither_1bit(uint8_t *buf, int w, int h, int stride,
 koboy_rect video_dirty_rect(const uint8_t *prev, const uint8_t *cur,
                            int w, int h, int stride);
 
-/* Up to this many disjoint rectangles per frame. Four was enough to separate
-   a sprite corner from a status bar corner (the case this exists for) without
-   the candidate/merge bookkeeping growing unbounded; nothing about the
-   algorithm requires exactly four, but callers size their koboy_rect arrays
-   against this constant so it is fixed at compile time. */
+/* Up to this many rectangles per frame. Four was enough to separate a sprite
+   corner from a status bar corner (the case this exists for) without the
+   candidate/merge bookkeeping growing unbounded; nothing about the algorithm
+   requires exactly four, but callers size their koboy_rect arrays against
+   this constant so it is fixed at compile time.
+   NOT a guarantee of disjointness -- see video_split_dirty below. */
 #define KOBOY_MAX_RECTS 4
 
-/* Splits the changed region into up to max_out disjoint rectangles, or returns
-   the single merged bounding box when splitting would not pay.
+/* Splits the changed region into up to max_out rectangles, or returns the
+   single merged bounding box when splitting would not pay.
 
    Refresh cost on this hardware is roughly `fixed + area`, so a sprite in the
    top-left and a status bar in the bottom-right merge into a near-full-rect
@@ -41,10 +42,19 @@ koboy_rect video_dirty_rect(const uint8_t *prev, const uint8_t *cur,
    like ghosting, which is the worst kind of e-ink bug because nobody reports it
    as a bug. tests/test_video_multirect.c asserts that union directly.
 
+   The rects are NOT guaranteed disjoint. When the candidate list is capped to
+   max_out, candidates are merged pairwise by bounding-box union (src/video.c),
+   which can make one candidate a strict superset of another once it has
+   absorbed a third; video_split_dirty drops any rect fully contained in
+   another after capping, but does not otherwise deoverlap. Coverage still
+   holds either way -- a union only grows -- the cost is a rect blitted and
+   refreshed twice, not a stale pixel.
+
    max_out < 1 degrades to the merged box (written to out[0], returns 1) rather
    than refusing to answer: a caller that mis-passes 0 still gets a correct,
-   if unsplit, answer as long as out itself has room for one rect. out == NULL
-   has nowhere to write anything, so that returns 0. */
+   if unsplit, answer as long as out itself has room for one rect -- this is
+   the live guard for that case. out == NULL has nowhere to write anything, so
+   that returns 0 -- the live guard for that case. */
 int video_split_dirty(const uint8_t *prev, const uint8_t *cur,
                       int w, int h, int stride, int fixed_tiles,
                       koboy_rect *out, int max_out);

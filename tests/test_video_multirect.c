@@ -100,4 +100,30 @@ TEST_MAIN({
     n = video_split_dirty(prev, cur, W, H, S, 40, out, 1);
     CHECK_EQ_INT(n, 1);
     CHECK(covers_all_dirty(prev, cur, W, H, S, out, n));
+
+    /* THE BOUNDARY CASE. Every check above uses either a fixed_tiles nowhere
+       near the decision (40 with tiny blocks, or 1000000) or a shape with no
+       decision to make at all (the scroller). None of them can tell a live
+       cost gate from a stuck-open or stuck-shut one: a mutant that deletes
+       the comparison only fails the 1000000 case above (see task-13-report.md,
+       Step 9), and mutants that bias the gate toward merging more -- which is
+       the failure mode that matters, since 20/40/80 is exactly the range
+       Step 10's on-device tuning run will try -- pass everything else green.
+       This block picks a shape whose merged-vs-split cost actually crosses
+       zero inside that range, so the outcome differs by fixed_tiles alone:
+       two 2x2-tile blocks with a 3-tile gap between them (tile (0,0) and
+       tile (5,5)) merge into a 7x7-tile (49-tile) bounding box; each block is
+       4 tiles, so splitting saves 49 - 2*4 = 41 tiles of fixed-cost-free area.
+       fixed_tiles < 41 must split; fixed_tiles > 41 must merge. 20 and 80
+       straddle that on either side of the same 20/40/80 sweep Step 10 uses. */
+    memcpy(cur, prev, sizeof cur);
+    dirty_block(cur, S, 0, 0, 2, 2);
+    dirty_block(cur, S, 5, 5, 2, 2);
+    koboy_rect blow[KOBOY_MAX_RECTS], bhigh[KOBOY_MAX_RECTS];
+    int nlow  = video_split_dirty(prev, cur, W, H, S, 20, blow,  KOBOY_MAX_RECTS);
+    int nhigh = video_split_dirty(prev, cur, W, H, S, 80, bhigh, KOBOY_MAX_RECTS);
+    CHECK(nlow >= 2);
+    CHECK(covers_all_dirty(prev, cur, W, H, S, blow, nlow));
+    CHECK_EQ_INT(nhigh, 1);
+    CHECK(covers_all_dirty(prev, cur, W, H, S, bhigh, nhigh));
 })

@@ -774,10 +774,14 @@ int main(int argc, char **argv)
 
         /* A NULL g_frame is the core's can-dupe signal, which video_submit_rects
            turns into zero rects -- so an unchanged frame costs no refresh at
-           all. Up to KOBOY_MAX_RECTS disjoint rects instead of one merged box:
+           all. Up to KOBOY_MAX_RECTS rects instead of one merged box:
            video_split_dirty (src/video.c) only splits when the summed cost of
            the pieces beats the merged box's, so a full-screen scroller still
-           comes back as a single rect here. */
+           comes back as a single rect here. The rects are not guaranteed
+           disjoint (video_split_dirty's own comment has the detail) -- a
+           capped merge can leave one rect containing another -- so blitting
+           and refreshing each in turn can redo a small overlap; it never
+           misses one. */
         koboy_rect rects[KOBOY_MAX_RECTS];
         t0 = pf->now_us(pf->ctx);
         int nrects = video_submit_rects(vid, g_frame, (int)g_fw, (int)g_fh,
@@ -827,6 +831,19 @@ int main(int argc, char **argv)
             big_refreshes++;
         }
 
+        /* Accumulate BLIT and REFRESH across every rect of THIS frame and
+           call stats_add once, not once per rect. CORE and SUBMIT still fire
+           once per presented frame, and stats_mean_us divides by count[stage]
+           -- so a per-rect stats_add would silently change what the mean
+           MEANS, from "cost per presented frame" (CORE, SUBMIT, and every
+           reading before Task 13) to "cost per rect," with nothing in the
+           printed line saying so. That would bias Step 10's on-device tuning
+           run toward splitting by construction: quartering into four rects
+           mechanically quarters a per-rect mean even if the total refresh
+           time went up, which is the opposite of what the tuning run is
+           trying to measure. One stats_add per frame keeps all four stages'
+           means on the same "per presented frame" footing. */
+        uint64_t blit_us = 0, refresh_us = 0;
         for (int i = 0; i < nrects; i++) {
             const koboy_rect *r = &rects[i];
             t0 = pf->now_us(pf->ctx);
@@ -834,13 +851,15 @@ int main(int argc, char **argv)
                            video_buffer(vid) + (size_t)r->y * video_stride(vid) + r->x,
                            r->w, r->h, video_stride(vid),
                            prof.game_x + r->x, prof.game_y + r->y);
-            stats_add(&stats, KOBOY_STAGE_BLIT, pf->now_us(pf->ctx) - t0);
+            blit_us += pf->now_us(pf->ctx) - t0;
 
             t0 = pf->now_us(pf->ctx);
             pf->refresh(pf->ctx, prof.game_x + r->x, prof.game_y + r->y,
                         r->w, r->h, wfm);
-            stats_add(&stats, KOBOY_STAGE_REFRESH, pf->now_us(pf->ctx) - t0);
+            refresh_us += pf->now_us(pf->ctx) - t0;
         }
+        stats_add(&stats, KOBOY_STAGE_BLIT, blit_us);
+        stats_add(&stats, KOBOY_STAGE_REFRESH, refresh_us);
         presented++;
         rects_emitted += (unsigned long)nrects;
 
@@ -883,9 +902,9 @@ sram_check:
 
     if (sb.mem && sb.len && sb.writeback) sram_save(sb.path, sb.mem, sb.len);
     say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
-        "%lu large-area full refreshes, %lu rects over %lu presented frames\n",
+        "%lu large-area full refreshes, %lu rects emitted\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,
-        big_refreshes, rects_emitted, presented);
+        big_refreshes, rects_emitted);
     /* Always printed, even under --quiet, for the same reason presented= is:
        this is the run's evidence, and a run whose numbers were suppressed is a
        run that has to be done again. */

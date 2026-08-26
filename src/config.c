@@ -282,7 +282,20 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
         else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
-        else if (!strcmp(k, "refresh_fixed_tiles"))   c->refresh_fixed_tiles = atoi(v);
+        else if (!strcmp(k, "refresh_fixed_tiles")) {
+            /* Clamped to >= 0, not merely accepted. video_split_dirty's cost
+               sum adds fixed_tiles once per candidate rect (src/video.c), so
+               a negative value makes the split branch cheaper the MORE rects
+               it emits -- the opposite of a fixed cost, and unbounded as the
+               candidate count approaches KOBOY_MAX_RECTS. cleanup_interval and
+               full_refresh_permille guard <= 0 above for the same reason (a
+               bad config value must not invert the behaviour it controls);
+               this one clamps instead of treating <= 0 as "off" because 0 is
+               itself a real, meaningful value here (no fixed cost at all),
+               not a sentinel. */
+            int t = atoi(v);
+            c->refresh_fixed_tiles = t < 0 ? 0 : t;
+        }
         else if (!strcmp(k, "waveform_fast"))
             c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
         else if (!strcmp(k, "core"))             snprintf(c->core_path, sizeof c->core_path, "%s", v);
