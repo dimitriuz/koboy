@@ -4,14 +4,25 @@
 
 /* The faceplate is drawn with KOBOY_REFRESH_FULL -- GC16, sixteen levels. The
    four-level ceiling is a constraint on the GAME RECT only, and this file used
-   three values out of sixteen. Depth is free here: chrome is drawn once, so
-   elaborateness is an authoring question and not a performance one. */
-#define BG      0xFF   /* case */
-#define CASE_HI 0xEE   /* raised edge */
-#define CASE_LO 0xD0   /* recess */
-#define MID     0xAA   /* button face */
-#define DARK    0x66   /* button shadow, bezel inner */
-#define INK     0x00
+   three values out of sixteen (now eight). Depth is free here: chrome is
+   drawn once, so elaborateness is an authoring question and not a
+   performance one.
+
+   The case tone is a WARM LIGHT GREY, not pure white -- the user's explicit
+   choice against the reference photo, task 15. Ordering is the contract, not
+   any one value: DARK must stay clearly darker than BG (bezel darker than
+   case) and MID must stay clearly lighter than BG (button faces lighter than
+   case) -- both by more than one ~17-level GC16 step, so the relationship
+   survives being quantised down to the panel's real waveform. Everything
+   else here is free to retune. */
+#define BG        0xD0   /* case: warm light grey */
+#define CASE_HI   0xE8   /* raised edge, lighter than the case            */
+#define CASE_LO   0xA0   /* recess, darker than the case                  */
+#define MID       0xF6   /* button face: clearly LIGHTER than the case    */
+#define DARK      0x55   /* bezel / button shadow: clearly darker than BG */
+#define INK       0x00
+#define ACCENT_HI 0x30   /* strapline accent rule, upper: navy on the real DMG   */
+#define ACCENT_LO 0x78   /* strapline accent rule, lower: maroon on the real DMG */
 
 static int perm(int v, int total) { return v * total / 1000; }
 
@@ -135,6 +146,49 @@ static void ring(uint8_t *fb, int stride, int W, int H, int cx, int cy, int r, u
     }
 }
 
+/* Cuts a quarter-disc of `v` into one outer corner of a rectangle, so a
+   filled frame reads as a moulded, rounded case rather than a picture frame
+   with square corners -- the biggest remaining shape mismatch against the
+   reference photo once the band asymmetry itself was right.
+   (qx, qy) points FROM the corner INTO the rectangle (e.g. qx=+1 for a LEFT
+   corner, which rounds inward to the right; qy=+1 for a TOP corner). Every
+   candidate pixel lies within the r x r box between the corner and
+   (cx + qx*r, cy + qy*r), which is what makes the call sites' radius bound
+   safe: a radius no larger than the thinner of the two bands meeting at that
+   corner can only remove bezel material that band already owned, never
+   reach past it -- see the call sites in chrome_render for the actual
+   bound. This function does not enforce that bound itself; it draws
+   whatever quarter-disc it is asked for, same as disc() and box() do not
+   know about the game rect either.
+
+   The circle is centred on the box's INNER corner -- (r-1, r-1) in the
+   (dx, dy) frame below, i.e. the pixel deepest into the rectangle, not the
+   true outer corner (cx, cy) itself. Centring it AT the outer corner was
+   the first version's bug: with the circle at (0, 0), "distance > r" is
+   true for almost the whole box except a blob near the box's FAR corner,
+   which cuts a floating chevron out of the rectangle's interior and leaves
+   the true corner sharp -- exactly backwards, and it shipped once, caught
+   only by zooming into a rendered golden pixel-for-pixel (see the task 15
+   report's corner crops). Centring on the inner corner instead makes the
+   true corner the point FARTHEST from the centre,
+   so it is reliably the first pixel cut, and the cut traces a proper
+   quarter circle out to the two tangent points at (r-1, 0) and (0, r-1). */
+static void round_out_corner(uint8_t *fb, int stride, int W, int H,
+                             int cx, int cy, int r, int qx, int qy, uint8_t v)
+{
+    int cr = r - 1;
+    for (int dy = 0; dy < r; dy++) {
+        int py = cy + qy * dy;
+        if (py < 0 || py >= H) continue;
+        for (int dx = 0; dx < r; dx++) {
+            int ex = dx - cr, ey = dy - cr;         /* offset from the INNER corner */
+            if (ex * ex + ey * ey <= cr * cr) continue;   /* inside the round: leave the bezel alone */
+            int px = cx + qx * dx;
+            if (px >= 0 && px < W) fb[(size_t)py * stride + px] = v;
+        }
+    }
+}
+
 static void box(uint8_t *fb, int stride, int W, int H, int cx, int cy, int w, int h, uint8_t v)
 {
     for (int y = cy - h / 2; y <= cy + h / 2; y++) {
@@ -213,25 +267,42 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
 
     /* Asymmetric DARK bezel around the screen recess, replacing the old
        uniform 6px INK hairline. A real DMG's bottom bezel is visibly taller
-       than the other three sides -- it is where the strapline lives -- and
-       that asymmetry, more than any other single choice, is what makes a
-       rectangle read as a handheld console rather than "a screen with a
-       border".
+       than the other three sides, and that asymmetry, more than any other
+       single choice, is what makes a rectangle read as a handheld console
+       rather than "a screen with a border". Task 15's photo correction: the
+       STRAPLINE lives in the TOP band, not the bottom one (the bottom band
+       stays plain, and stays the taller of the two -- see top_t/bot_t below).
        Four filled bands, entirely outside the game rect by construction (the
        top band stops at game_y - 1, the bottom band starts at
        game_y + game_h, and the side bands are cut to exactly the rect's own
-       y-span), so this can never intrude on it regardless of side_t/bot_t.
+       y-span), so this can never intrude on it regardless of side_t/top_t/
+       bot_t.
        side_t is kept modest on purpose: the mandatory game_h/12 addition to
        bot_t already consumes most of the gap above chrome_controls_top on
        the narrowest supported panel (Clara), and a fatter side_t would eat
-       further into the band the wordmark and grille need below -- see the
-       "free full-width band" comment further down. */
-    int side_t = perm(8, W);
-    if (side_t < 4) side_t = 4;
+       further into the band the wordmark needs below -- see the "free
+       full-width band" comment further down. Nudged from 8 to 13 permille in
+       task 15 so the rounded corners below have enough width to read as
+       rounded rather than merely notched; verified against the sweep test
+       that this still leaves the wordmark band non-empty on Clara. */
+    int side_t = perm(13, W);
+    if (side_t < 5) side_t = 5;
+    /* Grown enough to seat the strapline (photo correction: it belongs
+       ABOVE the screen, not below), but with a SMALLER bonus than bot_t's
+       own -- /24 versus /12, so top_t < bot_t for every game_h > 0 and the
+       bottom band is guaranteed to stay the taller of the two without a
+       runtime clamp. top_t also never has to fight config_resolve_profile
+       for headroom: game_y (the top margin) is fixed at panel_h/20
+       regardless of scale, comfortably larger than top_t on every supported
+       panel (by 30+ px at scale 5), so by0 below never goes negative and
+       this band never eats into the resolver's scale-5 fit -- unlike a
+       change to game_y itself would (see config.c's game_y comment for the
+       fix-round history this task's brief calls out by name). */
+    int top_t = side_t + p->game_h / 24;
     int bot_t = side_t + p->game_h / 12;      /* the asymmetry */
 
     int bx0 = p->game_x - side_t, bx1 = p->game_x + p->game_w - 1 + side_t;
-    int by0 = p->game_y - side_t, by1 = p->game_y + p->game_h - 1 + bot_t;
+    int by0 = p->game_y - top_t, by1 = p->game_y + p->game_h - 1 + bot_t;
 
     fill_rect(fb, stride, W, H, bx0, by0, bx1, p->game_y - 1, DARK);              /* top */
     fill_rect(fb, stride, W, H, bx0, p->game_y + p->game_h, bx1, by1, DARK);      /* bottom */
@@ -247,48 +318,112 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     frame(fb, stride, W, H, p->game_x - 1, p->game_y - 1, p->game_w + 2, p->game_h + 2, 2, CASE_LO);
     frame(fb, stride, W, H, bx0, by0, bx1 - bx0 + 1, by1 - by0 + 1, 2, CASE_HI);
 
-    /* Strapline, centred in the tall lower band. Sized to the widest px that
-       still clears both the band's own height and the game rect's width (with
-       a margin), so the one string fits every supported panel without a
-       per-device table. */
+    /* Rounded bezel corners, larger at the bottom-right as the photo shows.
+       Every radius here is a fraction of side_t, and that alone is what
+       makes the bound safe: side_t is the width of every band (top, bottom
+       AND both sides) at the point where two bands MEET a corner, since
+       top_t = side_t + game_h/24 and bot_t = side_t + game_h/12 are both
+       side_t PLUS a non-negative term, i.e. top_t >= side_t and
+       bot_t >= side_t always. So a radius no larger than side_t itself can
+       only remove bezel material the THINNER of the two meeting bands
+       already owned, at every corner, without needing to re-derive which
+       band is thinner per corner. Applied after both frame() calls above
+       (not before) so the cut also removes the CASE_HI outer-bevel stroke
+       at the corner, not just the DARK fill under it -- a square frame()
+       drawn after the round would just redraw the sharp corner it was meant
+       to remove. */
+    int corner_small = side_t / 2;
+    int corner_big   = side_t;         /* bottom-right: the photo's larger radius */
+    if (corner_small > 0) {
+        round_out_corner(fb, stride, W, H, bx0, by0, corner_small, +1, +1, BG);
+        round_out_corner(fb, stride, W, H, bx1, by0, corner_small, -1, +1, BG);
+        round_out_corner(fb, stride, W, H, bx0, by1, corner_small, +1, -1, BG);
+    }
+    if (corner_big > 0)
+        round_out_corner(fb, stride, W, H, bx1, by1, corner_big, -1, -1, BG);
+
+    /* Two short accent rules flank the strapline on each side (one pair
+       left, one pair right), echoing the real DMG's two colour rules either
+       side of its strap -- navy over maroon there, two distinct greys off
+       this file's ramp here, since the panel has no colour. Their size is
+       fixed BEFORE the strapline's own px is chosen, and that ordering
+       matters: reserving `2 * rule_reserve` in the strapline's own width
+       budget below guarantees room for both rules by construction, rather
+       than hoping whatever px the text lands on happens to leave slack.
+       Without the reservation the text greedily claims the width first
+       (that was the task 15 first pass -- 90% of game_w gone to the string,
+       leaving less on each side than one gap+rule needs), and the rules
+       silently never draw on any supported panel, which no test here would
+       catch since drawing nothing is not a crash. */
+    int rule_gap = perm(6, W);  if (rule_gap < 2) rule_gap = 2;
+    int rule_len = perm(20, W); if (rule_len < 6) rule_len = 6;
+    int rule_margin = perm(10, W);
+    int rule_reserve = rule_gap + rule_len + rule_margin;
+
+    /* Strapline, centred in the TOP band -- the single biggest "reads as the
+       real handheld" correction in task 15: it shipped in the bottom band,
+       and the real one sits above the screen. Sized to the widest px that
+       still clears the band's own height, the game rect's width (with a
+       margin), AND the two rules' reserved width, so the one string fits
+       every supported panel without a per-device table.
+       Text stays "DOT MATRIX ON ELECTRONIC PAPER" -- the real DMG's strap
+       claims stereo sound, and this build has none; see STRAPLINE's own
+       comment. Do not "correct" the wording toward the photo. */
     int strap_px = 1;
     while (strap_px < 8 &&
-          text_measure(STRAPLINE, strap_px + 1) <= p->game_w - perm(20, W) &&
-          TEXT_GLYPH_H * (strap_px + 1) <= bot_t - 6)
+          text_measure(STRAPLINE, strap_px + 1) <= p->game_w - perm(20, W) - 2 * rule_reserve &&
+          TEXT_GLYPH_H * (strap_px + 1) <= top_t - 6)
         strap_px++;
-    int strap_y = p->game_y + p->game_h + (bot_t - TEXT_GLYPH_H * strap_px) / 2;
+    int strap_y = by0 + (top_t - TEXT_GLYPH_H * strap_px) / 2;
     text_draw_centred(fb, stride, W, H, strap_y, STRAPLINE, strap_px, BG);
 
-    /* Wordmark and speaker grille: both live in the free full-width band
-       between the bezel's bottom edge and the topmost drawn control --
-       chrome_controls_top() already computes exactly that boundary, so
-       reusing it here means neither element can ever grow into a button
-       regardless of how the bezel or the layout change later. Neither
-       feeds back INTO that function, on purpose: they are decoration, not
-       a drawn control or a live touch zone, so they have no business in
-       its chain (chrome.h's contract is explicit that the chain covers
-       controls and touch zones only).
+    /* The rules sit LEVEL with the text rather than stacked above/below it,
+       so they cost no extra vertical room and top_t's sizing above never has
+       to account for them. The `if` guards stay -- belt and braces against
+       the reservation above, and the only thing that keeps this "skipped,
+       not crushed" at scales far below anything shipped, where strap_px
+       never leaves 1 and the reservation was never actually exercised. */
+    int strap_w = text_measure(STRAPLINE, strap_px);
+    int strap_l = W / 2 - strap_w / 2;
+    int strap_r = W / 2 + strap_w / 2;
+    int rule_y = strap_y + TEXT_GLYPH_H * strap_px / 2;
+    if (strap_l - rule_gap - rule_len >= bx0 + rule_margin) {
+        int rx1 = strap_l - rule_gap, rx0 = rx1 - rule_len;
+        hline(fb, stride, W, H, rx0, rx1, rule_y - 1, ACCENT_HI);
+        hline(fb, stride, W, H, rx0, rx1, rule_y + 1, ACCENT_LO);
+    }
+    if (strap_r + rule_gap + rule_len <= bx1 - rule_margin) {
+        int rx0 = strap_r + rule_gap, rx1 = rx0 + rule_len;
+        hline(fb, stride, W, H, rx0, rx1, rule_y - 1, ACCENT_HI);
+        hline(fb, stride, W, H, rx0, rx1, rule_y + 1, ACCENT_LO);
+    }
 
-       The band is split at the panel's own centreline: koboy sits
-       lower-left, like the original console's own logotype below its
-       screen; the grille sits lower-right and angled, like its speaker
-       grille -- both kept KOBOY_CHROME_MARGIN clear of their own panel
-       edge. On the tightest supported panel (Clara, 1072x1448) this band
-       is under twenty pixels tall at the shipped scale, so both elements
-       size themselves to whatever room is actually there instead of
-       assuming Libra 2 (1264x1680) headroom, and the whole block is
-       skipped -- not crushed into garbage -- if some future layout leaves
-       no room at all. */
+    /* Wordmark: lives in the free full-width band between the bezel's
+       bottom edge and the topmost drawn control -- chrome_controls_top()
+       already computes exactly that boundary, so reusing it here means the
+       wordmark can never grow into a button regardless of how the bezel or
+       the layout change later. It does not feed back INTO that function, on
+       purpose: it is decoration, not a drawn control or a live touch zone,
+       so it has no business in its chain (chrome.h's contract is explicit
+       that the chain covers controls and touch zones only).
+       koboy sits lower-left, like the original console's own logotype below
+       its screen, kept KOBOY_CHROME_MARGIN clear of the panel edge. The
+       speaker grille used to share this band (upper-right, level with the
+       wordmark) -- photo correction: it belongs lower-right, below the A/B
+       cluster, so it is drawn much further down, after MENU below, using
+       its own placement independent of chrome_controls_top. On the tightest
+       supported panel (Clara, 1072x1448) this band is under twenty pixels
+       tall at the shipped scale, so the wordmark sizes itself to whatever
+       room is actually there instead of assuming Libra 2 (1264x1680)
+       headroom, and the whole block is skipped -- not crushed into garbage
+       -- if some future layout leaves no room at all. */
     int ctrl_top = chrome_controls_top(l, W, H);
     int deco_y0 = p->game_y + p->game_h + bot_t;
     int deco_y1 = ctrl_top;
     if (deco_y1 - deco_y0 > TEXT_GLYPH_H + 2) {
         int pad = KOBOY_CHROME_MARGIN;
-        int mid = W / 2;
         int avail_h = deco_y1 - deco_y0;
-
-        /* koboy, lower-left. */
-        int word_avail_w = mid - 2 * pad;
+        int word_avail_w = W - 2 * pad;
         int word_px = 1;
         while (word_px < 6 &&
               text_measure("koboy", word_px + 1) <= word_avail_w &&
@@ -297,24 +432,6 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
         int word_x = pad;
         int word_y = deco_y0 + (avail_h - TEXT_GLYPH_H * word_px) / 2;
         text_draw(fb, stride, W, H, word_x, word_y, "koboy", word_px, DARK);
-
-        /* Speaker grille, lower-right: six parallel diagonal slashes,
-           stepped a column at a time with hline -- there is no line
-           primitive in this file and six short diagonals do not justify
-           adding one. */
-        int gx0 = mid + pad, gx1 = W - pad;
-        int gy0 = deco_y0 + 1, gy1 = deco_y1 - 1;
-        if (gx1 - gx0 > 12 && gy1 - gy0 > 6) {
-            int gw = gx1 - gx0, gh = gy1 - gy0;
-            int n = 6;
-            for (int i = 1; i <= n; i++) {
-                int glx0 = gx0 + (i * gw) / (n + 1);
-                int len = gh;
-                if (glx0 + len > gx1) len = gx1 - glx0;
-                for (int s = 0; s < len; s++)
-                    hline(fb, stride, W, H, glx0 + s, glx0 + s + 1, gy0 + s, DARK);
-            }
-        }
     }
 
     /* d-pad cross */
@@ -324,6 +441,27 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     box(fb, stride, W, H, dcx, dcy, 2 * dr, arm, MID);
     frame(fb, stride, W, H, dcx - arm / 2, dcy - dr, arm, 2 * dr, 2, INK);
     frame(fb, stride, W, H, dcx - dr, dcy - arm / 2, 2 * dr, arm, 2, INK);
+
+    /* Centre boss and ridged arms, matching the photo's moulded cross
+       rather than a flat one. Purely cosmetic pixels drawn INSIDE the cross
+       just filled above -- dcx/dcy/dr/arm are untouched, so
+       chrome_controls_top's d-pad terms (computed from those same four
+       values, see this file's top) cannot drift from what is actually
+       drawn, and input.c's touch zone, built from the same layout permille,
+       stays exactly as wide as it always was. */
+    int hub_r = arm / 2;
+    if (hub_r > 0) {
+        disc(fb, stride, W, H, dcx, dcy, hub_r, DARK);
+        ring(fb, stride, W, H, dcx, dcy, hub_r, INK);
+    }
+    for (int k = 1; k <= 2; k++) {
+        int off = hub_r + k * (dr - hub_r) / 3;
+        if (off >= dr - 1) continue;
+        hline(fb, stride, W, H, dcx - arm / 2 + 1, dcx + arm / 2 - 1, dcy - off, INK);
+        hline(fb, stride, W, H, dcx - arm / 2 + 1, dcx + arm / 2 - 1, dcy + off, INK);
+        vline(fb, stride, W, H, dcx - off, dcy - arm / 2 + 1, dcy + arm / 2 - 1, INK);
+        vline(fb, stride, W, H, dcx + off, dcy - arm / 2 + 1, dcy + arm / 2 - 1, INK);
+    }
 
     /* A and B */
     int acx = perm(l->a_cx, W), acy = perm(l->a_cy, H), ar = perm(l->a_r, W);
@@ -344,7 +482,14 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     text_draw_centred_at(fb, stride, W, H, acx, acy + ar + perm(6, H), "A", lbl_px, INK);
     text_draw_centred_at(fb, stride, W, H, bcx, bcy + br + perm(6, H), "B", lbl_px, INK);
 
-    /* Start and Select pills */
+    /* Start and Select pills. The real ones sit at roughly a 20-degree
+       angle; these stay AXIS-ALIGNED, a deliberate simplification recorded
+       here rather than an oversight -- angling them needs a sheared fill
+       primitive this file does not have AND rotated text, which text.c
+       cannot do (its glyph table is drawn column-by-column at 0 degrees
+       only). The tilted A/B pair already carries the diagonal feel the
+       photo has; adding a shear primitive and a rotated glyph path for two
+       pills was judged not worth it against that. */
     int scx = perm(l->start_cx, W), scy = perm(l->start_cy, H);
     int sw = perm(l->start_w, W), sh = perm(l->start_h, H);
     int tcx = perm(l->select_cx, W), tcy = perm(l->select_cy, H);
@@ -368,6 +513,53 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
        four, which is the one placement rule this element does not share with
        them. */
     text_draw_centred_at(fb, stride, W, H, mcx, mcy - TEXT_GLYPH_H * lbl_px / 2, "MENU", lbl_px, INK);
+
+    /* Speaker grille: six parallel diagonal slashes, LOWER RIGHT below the
+       A/B cluster -- photo correction: it shipped upper-right, level with A,
+       which is wrong. It draws below the Start/Select/MENU row rather than
+       sharing the band above chrome_controls_top with the wordmark: on a
+       real DMG the grille sits low, near the headphone jack, well below the
+       buttons, and koboy's drawn MENU zone already occupies the lower-right
+       spot a real DMG leaves empty for its grille -- so this waits for the
+       row below THAT instead. Decorative only, like the wordmark above: it
+       must never join chrome_controls_top's chain (that would cost every
+       panel headroom for a design element nobody can touch), and drawing
+       below the lowest control means it can never reach up toward the game
+       rect regardless of layout. Stepped a column at a time with hline --
+       there is no line primitive in this file and six short diagonals do
+       not justify adding one. */
+    /* Width fixed at 22% of the panel, anchored to the right margin, rather
+       than spanning the whole half-panel free to the right of MENU: a
+       squarer cluster reads as a grille (six short diagonals close enough
+       together to look like one feature) where a wide sparse one reads as
+       stray dashes -- and it keeps each slash's own width slot comparable
+       to gh, which is what exercises the right-margin clamp below at all.
+       A slot much wider than gh (the box's old width) never reaches gx1
+       regardless of the clamp, which is exactly how the FOLLOWUPS #20
+       overdraw shipped unnoticed for as long as it did: the geometry that
+       exposes a boundary bug and the geometry that looks right turned out
+       to be the same fix. */
+    int gx1 = W - KOBOY_CHROME_MARGIN, gx0 = gx1 - perm(220, W);
+    int gy0 = mcy + mh / 2 + perm(10, H), gy1 = H - KOBOY_CHROME_MARGIN;
+    if (gx1 - gx0 > 12 && gy1 - gy0 > 6) {
+        int gw = gx1 - gx0, gh = gy1 - gy0;
+        int n = 6;
+        for (int i = 1; i <= n; i++) {
+            int glx0 = gx0 + (i * gw) / (n + 1);
+            int len = gh;
+            /* `hline` draws its two columns INCLUSIVELY (glx0+s, glx0+s+1),
+               so clamping only the loop's own bound against gx1 still lets
+               the second, inclusive column land ON gx1 -- the review found
+               1px right-margin overdraw this fixes (7px of clearance
+               instead of the required KOBOY_CHROME_MARGIN of 8; FOLLOWUPS
+               #20). Reserving one extra column here keeps the inclusive
+               second column inside gx1 too. */
+            if (glx0 + len + 1 > gx1) len = gx1 - glx0 - 1;
+            if (len < 0) len = 0;
+            for (int s = 0; s < len; s++)
+                hline(fb, stride, W, H, glx0 + s, glx0 + s + 1, gy0 + s, DARK);
+        }
+    }
 }
 
 /* One definition of the label and its scale, so the guard below cannot measure

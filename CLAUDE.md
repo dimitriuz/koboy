@@ -13,7 +13,7 @@ was attached for any of that plan. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 22 binaries, 880 checks. Runs on x86_64.
+make test        # host suite: 22 binaries, 887 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform

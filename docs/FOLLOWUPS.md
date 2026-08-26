@@ -103,13 +103,15 @@ deliberately deferred, not a known live bug.
 
 18. **`MODE_MENU`'s interactive branches are verified by construction, not by
     an executed test.** `src/main.c:647` (the `input_take_menu_request`
-    branch in the emulator loop). `--ui-script` drives `run_list`/`run_menu`
-    in `MODE_BROWSE` (see `run_list`'s own comment on why), but the emulator
-    loop itself never accepts scripted input, so SAVE/LOAD/RESET/CHOOSE
-    ROM/QUIT are exercised by inspection and by hand, never by `make test`.
-    Extending `--ui-script` through the emulator loop is the obvious
-    follow-up; #17's prerequisite is now cleared. `src/uiscript.h` and
-    `run_list`'s comment no longer claim MODE_MENU coverage they do not have.
+    branch in the emulator loop). `--ui-script` drives `run_list` only in
+    `MODE_BROWSE` (see `run_list`'s own comment on why); `run_menu` is never
+    passed a script -- its one call site, `src/main.c:691`, passes `NULL, 0`
+    -- so the emulator loop itself never accepts scripted input, and
+    SAVE/LOAD/RESET/CHOOSE ROM/QUIT are exercised by inspection and by hand,
+    never by `make test`. Extending `--ui-script` through the emulator loop is
+    the obvious follow-up; #17's prerequisite is now cleared. `src/uiscript.h`
+    and `run_list`'s comment no longer claim MODE_MENU coverage they do not
+    have.
 
 19. **The d-pad horizontal-arm term in `chrome_controls_top` is provably
     dead.** `src/chrome.c:41-42`. `top = min2(top, dcy - arm/2 - 1)` can never
@@ -120,14 +122,19 @@ deliberately deferred, not a known live bug.
     function's return value is identical whether the line is there or not --
     only a term-by-term audit finds it.
 
-20. **The speaker grille overdraws its right margin by 1px, on three of the
-    four tested panel sizes.** `src/chrome.c:305-315`. Each slash is drawn
-    with `hline(..., glx0+s, glx0+s+1, ...)` -- two columns per step -- and
-    the length clamp (`if (glx0+len > gx1) len = gx1-glx0`) only fires when
-    the *unclamped* last column would exceed `gx1`. When it lands exactly on
-    `gx1` instead, the clamp never triggers and the two-wide `hline`'s second
-    column paints at `gx1`, one column into the margin `gx1` exists to keep
-    clear.
+20. ~~**The speaker grille overdraws its right margin by 1px, on three of the
+    four tested panel sizes.**~~ FIXED, task 15. `src/chrome.c`, the grille's
+    slash loop. Each slash was drawn with `hline(..., glx0+s, glx0+s+1, ...)`
+    -- two columns per step -- and the length clamp (`if (glx0+len > gx1)
+    len = gx1-glx0`) only fired when the *unclamped* last column would
+    exceed `gx1`. When it landed exactly on `gx1` instead, the clamp never
+    triggered and the two-wide `hline`'s second column painted at `gx1`, one
+    column into the margin `gx1` exists to keep clear. The clamp now
+    reserves the inclusive second column too (`if (glx0+len+1 > gx1) len =
+    gx1-glx0-1`), and `tests/test_chrome.c` asserts the margin directly
+    (swept over all four supported panels) with a verified mutant -- see the
+    task 15 report. The grille itself also moved, lower-right below the A/B
+    cluster, matching the reference photo.
 
 21. **`video_split_dirty`'s overflow fallbacks are untested.**
     `src/video.c:245` (tile grid larger than `KOBOY_SPLIT_MAX_TILES`) and

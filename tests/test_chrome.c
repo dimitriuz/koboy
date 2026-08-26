@@ -731,6 +731,89 @@ TEST_MAIN({
         CHECK_EQ_INT(intruding_combos, 0);
     }
 
+    /* Case tone, task 15's user-chosen ordering: bezel CLEARLY darker than
+       the case, and button faces CLEARLY lighter than it -- "clearly"
+       pinned as more than one GC16 waveform step (~17 levels of 256) apart,
+       so the relationship survives being quantised down to the panel's real
+       16-level driver, not just on this exact 8-bit render. Sampled from
+       three coordinates guaranteed to land on exactly one of the three
+       tones regardless of layout: (2,2) is above and left of the bezel on
+       every supported panel (the bezel's own top-left corner is rounded
+       off entirely by task 15's corner cut, so plain background is what a
+       corner pixel reads even there); the A disc's own centre is always
+       button MID; and game_x - 3 at the rect's own vertical middle sits
+       inside the LEFT bezel band, which fill_rect paints solid DARK for
+       every side_t >= 3 -- true unconditionally, since side_t floors at 5. */
+    {
+        koboy_config c; config_defaults(&c);
+        koboy_profile p;
+        const int W = 1264, H = 1680;
+        static uint8_t fb3[1264 * 1680];
+        config_resolve_profile(&p, &c, W, H);
+        memset(fb3, 0x7F, (size_t)W * H);
+        chrome_render(fb3, W, &p, &c.layout);
+
+        int case_v  = fb3[2 * W + 2];
+        int a_cx = c.layout.a_cx * W / 1000, a_cy = c.layout.a_cy * H / 1000;
+        int button_v = fb3[(size_t)a_cy * W + a_cx];
+        int bezel_x = p.game_x - 3, bezel_y = p.game_y + p.game_h / 2;
+        int bezel_v = fb3[(size_t)bezel_y * W + bezel_x];
+
+        if (case_v - bezel_v <= 17 || button_v - case_v <= 17)
+            fprintf(stderr, "  case tone: bezel=%d case=%d button=%d\n",
+                    bezel_v, case_v, button_v);
+        CHECK(case_v - bezel_v > 17);     /* bezel clearly darker than the case  */
+        CHECK(button_v - case_v > 17);    /* button clearly lighter than the case */
+    }
+
+    /* Speaker grille right margin, FOLLOWUPS #20 / task 15 item 4: `hline`
+       draws its two columns INCLUSIVELY, so clamping only the loop's own
+       bound against the margin still let the second, inclusive column land
+       ON the boundary -- 7px of clearance shipped where
+       KOBOY_CHROME_MARGIN requires 8. Swept over all four supported panels,
+       not just Libra 2, since the old bug's margin was panel-width
+       dependent (three of four panels showed it, per FOLLOWUPS).
+       The grille's own y-range is recomputed here from the layout, the same
+       independent-duplication style chrome_controls_top's guard uses below
+       and for the same reason: a pixel scan restricted to the WRONG rows
+       would either miss the grille or catch the bezel's unrelated DARK
+       bands, which are not held to this margin at all (side_t can exceed
+       KOBOY_CHROME_MARGIN by design). Detects DARK by sampling it fresh at
+       a known bezel pixel rather than hard-coding chrome.c's private macro
+       value, so a future palette retune cannot make this test silently
+       compare against a stale constant. */
+    {
+        static const int panels[][2] = {
+            { 1072, 1448 }, { 1264, 1680 }, { 1404, 1872 }, { 1440, 1920 },
+        };
+        koboy_config c; config_defaults(&c);
+        static uint8_t gfb[1440 * 1920];
+        int total_violations = 0;
+        for (size_t pi = 0; pi < sizeof panels / sizeof panels[0]; pi++) {
+            int W = panels[pi][0], H = panels[pi][1];
+            koboy_profile p;
+            CHECK(config_resolve_profile(&p, &c, W, H));
+            memset(gfb, 0x7F, (size_t)W * H);
+            chrome_render(gfb, W, &p, &c.layout);
+
+            int dark_v = gfb[(size_t)(p.game_y + p.game_h / 2) * W + (p.game_x - 3)];
+
+            int mcy = c.layout.menu_cy * H / 1000, mh = c.layout.menu_h * H / 1000;
+            int gy0 = mcy + mh / 2 + 10 * H / 1000;
+            int gy1 = H - KOBOY_CHROME_MARGIN;
+
+            int violation = 0;
+            for (int y = gy0; y < gy1; y++)
+                for (int x = W - KOBOY_CHROME_MARGIN; x < W; x++)
+                    if (gfb[(size_t)y * W + x] == dark_v) violation++;
+            if (violation)
+                fprintf(stderr, "  grille right margin painted: %dx%d -> %d px\n",
+                        W, H, violation);
+            total_violations += violation;
+        }
+        CHECK_EQ_INT(total_violations, 0);
+    }
+
     /* NO NINTENDO MARKS. This is a public GPLv3 repo; the faceplate is an
        homage to the industrial design and carries none of the word marks.
        Asserted on the source rather than the pixels, because that is where a
