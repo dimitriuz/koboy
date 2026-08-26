@@ -29,14 +29,23 @@ static const uint8_t DIGIT[10][5] = {
 
 /* PUNCT_CHARS[i] is drawn by PUNCT[i]. Kept as parallel arrays with one
    lookup so adding a character is one edit in each, and a mismatch in length
-   is caught by the test's punctuation check rather than by silence. */
+   is caught by the test's punctuation check rather than by silence.
+
+   Every entry here MUST fit in bits 0..6 (row 0 through TEXT_GLYPH_H - 1).
+   text_draw's row loop is `row < TEXT_GLYPH_H`, so bit 7 of any column is
+   silently never drawn -- there is no clip warning, no assert, nothing. A
+   comma and a semicolon used to set bit 7 for their descender and rendered
+   with it invisibly discarded, which made ',' pixel-identical to '.' and
+   dropped the tail of ';'. Every No-Intro ROM name ("Game (USA, Europe)")
+   showed the collision. If the font ever grows a real descender (lowercase
+   g/j/p/q/y), it needs a taller cell, not a byte value above 0x7F here. */
 static const char PUNCT_CHARS[] = " .,:;-_/\\()[]'\"!?+*=%#&<>@";
 static const uint8_t PUNCT[][5] = {
     { 0x00,0x00,0x00,0x00,0x00 }, /* space */
     { 0x00,0x00,0x40,0x00,0x00 }, /* .  */
-    { 0x00,0x00,0xC0,0x00,0x00 }, /* ,  */
+    { 0x00,0x40,0x60,0x00,0x00 }, /* ,  tail at rows 5-6, distinct from '.' */
     { 0x00,0x00,0x24,0x00,0x00 }, /* :  */
-    { 0x00,0x00,0xA4,0x00,0x00 }, /* ;  */
+    { 0x00,0x40,0x64,0x00,0x00 }, /* ;  dot at row 2 + the ',' tail */
     { 0x08,0x08,0x08,0x08,0x08 }, /* -  */
     { 0x40,0x40,0x40,0x40,0x40 }, /* _  */
     { 0x20,0x10,0x08,0x04,0x02 }, /* /  */

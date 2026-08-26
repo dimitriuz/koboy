@@ -10,6 +10,25 @@ static int ink_count(const uint8_t *fb, int n)
     return c;
 }
 
+/* Renders a single character alone into an exact TEXT_GLYPH_W x
+   TEXT_GLYPH_H buffer and packs its pixels into a signature: bit
+   (row * TEXT_GLYPH_W + col) set iff that pixel is ink. TEXT_GLYPH_W *
+   TEXT_GLYPH_H is 35, well under 64, so this is an exact, order-independent
+   fingerprint of the glyph -- no scaling, no second character, no clipping
+   in play, comparable with plain ==. */
+static uint64_t glyph_signature(char ch)
+{
+    enum { GW = TEXT_GLYPH_W, GH = TEXT_GLYPH_H };
+    uint8_t g[GW * GH];
+    char s[2] = { ch, 0 };
+    memset(g, 0xFF, sizeof g);
+    text_draw(g, GW, GW, GH, 0, 0, s, 1, 0x00);
+    uint64_t sig = 0;
+    for (int i = 0; i < GW * GH; i++)
+        if (g[i] == 0x00) sig |= (uint64_t)1 << i;
+    return sig;
+}
+
 TEST_MAIN({
     enum { W = 200, H = 40 };
     static uint8_t fb[W * H];
@@ -30,6 +49,51 @@ TEST_MAIN({
     memset(fb, 0xFF, sizeof fb);
     text_draw(fb, W, W, H, 0, 0, ".,:-_/()'", 1, 0x00);
     CHECK(ink_count(fb, sizeof fb) > 0);
+
+    /* Regression: TEXT_GLYPH_H is 7, so text_draw's row loop only ever
+       visits bits 0..6 of a glyph column -- bit 7 (0x80) is silently never
+       drawn, with no clip warning anywhere. ',' and ';' used to set bit 7
+       for their descender tail, so it vanished: ',' rendered pixel-identical
+       to '.', and ';' lost its tail and read as a malformed ':'. Every
+       No-Intro ROM name ("Game (USA, Europe)") showed the collision as
+       "USA. EUROPE". The ink-count checks above cannot catch this kind of
+       bug -- both glyphs still have SOME ink, just the SAME ink as a
+       different character. This asserts the distinction directly, per
+       CLAUDE.md's testing-culture note: a test that only pins a value, and
+       not a difference from its neighbours, does not catch a collision. */
+    CHECK(glyph_signature(',') != glyph_signature('.'));
+    CHECK(glyph_signature(';') != glyph_signature(':'));
+
+    /* Generalised: sweep every printable ASCII character the font can be
+       asked to render and require that no two DIFFERENT characters produce
+       the same non-blank bitmap. Two exclusions, both intentional rather
+       than gaps in the sweep:
+         - Signature 0 (fully blank): glyph() maps every character outside
+           the table to BLANK on purpose, so many different characters are
+           *supposed* to share the blank glyph. A collision between two
+           characters that both have real ink is never intentional.
+         - Lowercase a-z: glyph() folds these to their uppercase glyph on
+           purpose (asserted above), so 'a' colliding with 'A' is the
+           designed behaviour, not the bug this test exists to catch. */
+    {
+        int collisions = 0;
+        for (int a = 0x20; a <= 0x7E; a++) {
+            if (a >= 'a' && a <= 'z') continue;
+            uint64_t sig_a = glyph_signature((char)a);
+            if (sig_a == 0) continue;
+            for (int b = a + 1; b <= 0x7E; b++) {
+                if (b >= 'a' && b <= 'z') continue;
+                uint64_t sig_b = glyph_signature((char)b);
+                if (sig_b == 0) continue;
+                if (sig_a == sig_b) {
+                    fprintf(stderr, "text glyph collision: '%c' (0x%02x) == "
+                            "'%c' (0x%02x)\n", a, a, b, b);
+                    collisions++;
+                }
+            }
+        }
+        CHECK_EQ_INT(collisions, 0);
+    }
 
     /* Lowercase folds to uppercase rather than vanishing. */
     memset(fb, 0xFF, sizeof fb);

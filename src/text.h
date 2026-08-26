@@ -13,6 +13,12 @@
 #define TEXT_GLYPH_H 7
 #define TEXT_ADVANCE 6          /* 5 columns plus one blank */
 
+/* TEXT_GLYPH_H = 7 means text_draw's row loop only ever visits bits 0..6 of
+   a glyph column; bit 7 (0x80) is silently never drawn, with no clip warning.
+   A comma and a semicolon in src/text.c once set bit 7 for their descender
+   and lost it invisibly, making ',' render identically to '.'. Any glyph
+   table entry, in this file or added later, must stay within 0x00..0x7F. */
+
 /* Width in panel pixels of `s` rendered at scale `px`. */
 int  text_measure(const char *s, int px);
 
