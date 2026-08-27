@@ -54,6 +54,11 @@
 # retro_get_memory_size(RETRO_MEMORY_SAVE_RAM) is 0 for all 28 .col files in
 # the author's collection. A stock ColecoVision cartridge has no battery.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/gearcoleco}"
@@ -61,8 +66,7 @@ SRC="${SRC:-third_party/gearcoleco}"
 # every other core in this series.
 LR="$SRC/platforms/libretro"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/drhelius/Gearcoleco "$SRC"
+koboy_fetch_pinned gearcoleco "$SRC"
 
 make -C "$LR" clean || true
 

@@ -76,12 +76,16 @@
 # it is also not harmful, and it is the same code path, so nothing special is
 # done here. Recorded so the next person does not go looking for a bug.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/snes9x2005}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/snes9x2005 "$SRC"
+koboy_fetch_pinned snes9x2005 "$SRC"
 
 make -C "$SRC" clean || true
 

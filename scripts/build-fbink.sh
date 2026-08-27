@@ -15,12 +15,19 @@
 # Everything else (OpenType, image decoding, QImageScale, unifont) is dead
 # weight here: koboy blits its own gray8 straight into the mmap'ed fb.
 set -e
+# The upstream revision is PINNED; scripts/pins.txt is the table.
+. "$(dirname "$0")/pins.sh"
 CROSS="${CROSS:-arm-linux-gnueabihf-}"
 SRC="${SRC:-third_party/fbink}"
 ARM_FLAGS="${ARM_FLAGS:--march=armv7-a -mfpu=neon -mfloat-abi=hard}"
 
-[ -d "$SRC" ] || git clone --depth 1 --recurse-submodules --shallow-submodules \
-    https://github.com/NiLuJe/FBInk "$SRC"
+# Pinned like the cores, and with more at stake than any of them: FBInk is
+# linked STATICALLY into koboy-arm, so its revision is part of the shipped
+# emulator rather than of a file beside it. The third argument asks
+# koboy_fetch_pinned to initialise submodules, which it does from the SHAs the
+# pinned commit itself records -- so this one line pins font8x8, i2c-tools,
+# libevdev, libunibreak and stb as well.
+koboy_fetch_pinned fbink "$SRC" submodules
 
 # FBInk's Makefile adds -fno-semantic-interposition unconditionally for
 # non-Clang compilers. That option is GCC >= 5 only, and the toolchain that

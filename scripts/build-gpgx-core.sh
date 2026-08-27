@@ -61,12 +61,16 @@
 # one. koboy pins the length at ROM-load time for exactly this reason; see
 # core_sram in src/core.c and the test in tests/test_core.c.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/gpgx}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/Genesis-Plus-GX "$SRC"
+koboy_fetch_pinned gpgx "$SRC"
 
 make -C "$SRC" -f Makefile.libretro clean || true
 

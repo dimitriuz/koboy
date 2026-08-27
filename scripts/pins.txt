@@ -1,0 +1,63 @@
+# Upstream revisions, and this file is the ONLY place they are written down.
+#
+# WHY A PIN AT ALL. Every `scripts/build-*-core.sh` used to `git clone
+# --depth 1` and build whatever `master` happened to be that day. Two people
+# building the same koboy tag six months apart therefore got different cores,
+# and -- worse -- every measurement in `TESTED.md` was taken against a core
+# build nothing identified. A release that cannot be rebuilt is not a
+# release, and a benchmark whose subject is unnamed is not a benchmark.
+#
+# THESE ARE THE REVISIONS TESTED.md WAS MEASURED AGAINST. They are the trees
+# that were checked out on the author's machine when the device sessions of
+# 2026-08-26 and 2026-08-27 were run. Changing a row here invalidates that
+# file's numbers for that system; say so in TESTED.md when you do it.
+#
+# FORMAT: three whitespace-separated columns -- name, URL, full 40-hex commit.
+# Blank lines and `#` comments are ignored. The commit MUST be the full hash
+# and not an abbreviation: `git fetch --depth 1 origin <sha>` is what
+# scripts/pins.sh uses to get exactly one commit without a full history, and
+# the wire protocol's want-line takes a complete object id only. An
+# abbreviation fails at fetch time with "not our ref", which is loud, but it
+# fails on a contributor's machine rather than here.
+#
+# The parser (koboy_pin_lookup in scripts/pins.sh) is deliberately dumb --
+# `while read name url rev` -- so this file can also be read by
+# .github/workflows/release.yml with `cut`, and by tests/test_pins.sh with
+# grep. Do not add a fourth column or a quoted field without checking those
+# three readers.
+#
+# NOT PINNED HERE BECAUSE NOT SHIPPED: mgba, vba-next (lost the GBA shootout
+# in scripts/build-gba-core.sh), snes9x, snes9x2010 (lost the SNES one in
+# scripts/build-snes-core.sh) and beetle-ngp (lost to RACE in
+# scripts/build-race-core.sh). Those comparisons are recorded in the build
+# scripts' headers; re-running one is the only honest way to revisit a
+# choice, and it needs whatever those repositories' masters are at the time,
+# not a pin from this one.
+
+# name                      url                                                        commit
+gambatte                    https://github.com/libretro/gambatte-libretro               d9d6cd06382d1ced30de34d56d3609452323dab1
+gw                          https://github.com/libretro/gw-libretro                     91d599b951e7bfe7e040347f58667cba20074adc
+fceumm                      https://github.com/libretro/libretro-fceumm                 236ccdfc911e84c60fea6b9d0699c2d440a8de14
+pokemini                    https://github.com/libretro/PokeMini                        132111b76343559860532a1ccc094f93f1ed5650
+wswan                       https://github.com/libretro/beetle-wswan-libretro           4b01295838ea89e3f1355bbe4cb5cf98aa6108cd
+race                        https://github.com/libretro/RACE                            c7810dd7f172827bfa2004813bc000b13786636b
+stella2014                  https://github.com/libretro/stella2014-libretro             4a7da82595d27b8df7af1ecb467a64b642a41bc9
+gearcoleco                  https://github.com/drhelius/Gearcoleco                      6b0e75dd9a520fbe61de784b09653a5af3ef3125
+freeintv                    https://github.com/libretro/FreeIntv                        ef3e0fe322bec62a7f916c0bb0834c08c348d0b4
+gpgx                        https://github.com/libretro/Genesis-Plus-GX                 b7e79b3641eb2e322c5ba29903352e115887e83c
+snes9x2005                  https://github.com/libretro/snes9x2005                      deb49d80d1836e3e737480a326e31a54c46c04ae
+pce                         https://github.com/libretro/beetle-pce-fast-libretro        bebe2b13a840fbfd45cb501f5cd0efe01bdb1735
+gpsp                        https://github.com/libretro/gpsp                            8d268a6bb2cd799f8f2791ebb544a7ef550cfc6f
+# Arcade. This revision was already pinned before this file existed, in
+# build-fbneo-core.sh's own FBNEO_REV, because an arcade romset is checked
+# member by member against the emulator's database and a set built for a
+# different FBNeo release fails exactly like a broken core. The pin moved
+# here so there is one mechanism rather than two; the reasoning stayed in
+# that script, where it is about content rather than about reproducibility.
+fbneo                       https://github.com/libretro/FBNeo                           ae41c16e10a1996e71ac7dd9a5484b725b8d1a51
+# Not a core: FBInk is linked STATICALLY into koboy-arm itself, so its
+# revision is part of the shipped emulator binary in a way no core's is. It
+# also carries submodules, which koboy_fetch_pinned initialises from the
+# pinned commit's own recorded submodule SHAs -- so pinning FBInk pins
+# font8x8, i2c-tools, libevdev, libunibreak and stb along with it.
+fbink                       https://github.com/NiLuJe/FBInk                             886f25f13368859ad8a899b88d04c26e19cda32e

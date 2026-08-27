@@ -24,7 +24,10 @@
 # building: all 227 of the owner's zips were CRC-checked member by member
 # against it, and every pre-1990 board matched exactly, including the device
 # zips a set needs beside a game (tapper wants midssio.zip, which is present).
-FBNEO_REV="${FBNEO_REV:-ae41c16e10a1996e71ac7dd9a5484b725b8d1a51}"
+# The hash itself now lives in scripts/pins.txt with the other fourteen --
+# one mechanism instead of two -- but the REASON stays here, because it is
+# not the reason the others are pinned. Theirs is reproducibility; this
+# one's is that the content on the user's card has to match the build.
 #
 # NO SUBSET, DELIBERATELY, and it was measured rather than assumed. FBNeo's
 # libretro Makefile supports partial builds (Makefile.pre68k, Makefile.cps12,
@@ -104,18 +107,21 @@ FBNEO_REV="${FBNEO_REV:-ae41c16e10a1996e71ac7dd9a5484b725b8d1a51}"
 # retro_serialize_size() is non-zero, so koboy's SAVE STATES are the working
 # way to keep a game -- that is the mechanism the MENU already offers.
 set -e
+# The upstream revision is PINNED -- see scripts/pins.txt, and the long
+# comment above for why THIS core's pin is about romsets rather than about
+# reproducible builds.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/fbneo}"
 LR="$SRC/src/burner/libretro"
 
-if [ ! -d "$SRC" ]; then
-    # Not --depth 1: the pin above is a year behind master, so the clone has to
-    # be able to reach it. --filter=blob:none keeps that affordable (the tree
-    # history without every historical blob).
-    git clone --filter=blob:none https://github.com/libretro/FBNeo "$SRC"
-fi
-( cd "$SRC" && git checkout -q "$FBNEO_REV" )
+# koboy_fetch_pinned fetches the pinned commit DIRECTLY (`git fetch --depth 1
+# origin <sha>`), which is strictly better than what this script used to do
+# here: a --filter=blob:none clone of the whole history followed by a checkout,
+# needed only because `git clone --depth 1` cannot take a commit id. FBNeo is
+# the largest tree koboy builds and it was paying for that history every time.
+koboy_fetch_pinned fbneo "$SRC"
 
 make -C "$LR" clean || true
 

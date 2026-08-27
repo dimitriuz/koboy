@@ -19,12 +19,16 @@
 # directory concept for this core, and the `[BIOS] Nintendo Pokemon Mini
 # (World).min` file sitting in a normal collection is not a dependency.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/pokemini}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/PokeMini "$SRC"
+koboy_fetch_pinned pokemini "$SRC"
 
 make -C "$SRC" -f Makefile.libretro clean || true
 

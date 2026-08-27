@@ -28,12 +28,16 @@
 # frame, and video_submit is this project's measured bottleneck). Verified by
 # probe: `pixel_format requested: RGB565`, pitch 448 at 224x144.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/wswan}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/beetle-wswan-libretro "$SRC"
+koboy_fetch_pinned wswan "$SRC"
 
 make -C "$SRC" clean || true
 

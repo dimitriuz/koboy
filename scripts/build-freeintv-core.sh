@@ -47,12 +47,16 @@
 # SAVES DO NOT GO THROUGH RETRO_MEMORY_SAVE_RAM: measured 0 for all 26 titles.
 # An Intellivision cartridge has no battery.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/freeintv}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/FreeIntv "$SRC"
+koboy_fetch_pinned freeintv "$SRC"
 
 make -C "$SRC" clean || true
 

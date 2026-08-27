@@ -39,13 +39,17 @@
 #                 with none to spare, and koboy quantises to four greys --
 #                 there is nothing for a colour-artifact filter to say.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/fceumm}"
 SWITCHES="WANT_32BPP=0 HAVE_HDPACK=0 HAVE_NTSC=0"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/libretro-fceumm "$SRC"
+koboy_fetch_pinned fceumm "$SRC"
 
 make -C "$SRC" -f Makefile.libretro clean || true
 

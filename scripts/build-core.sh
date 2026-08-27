@@ -5,12 +5,16 @@
 # are Cortex-A53 running a 32-bit userland, so armv7-a+neon is the common
 # denominator that runs on both. A core tuned for A53 will SIGILL on an A9.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 CROSS="${CROSS:-arm-linux-gnueabihf-}"
 SRC="${SRC:-third_party/gambatte-libretro}"
 OUT="${OUT:-dist/gambatte_libretro.so}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/gambatte-libretro "$SRC"
+koboy_fetch_pinned gambatte "$SRC"
 
 mkdir -p "$(dirname "$OUT")"
 make -C "$SRC" clean || true

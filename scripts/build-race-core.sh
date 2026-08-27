@@ -44,12 +44,16 @@
 # saves work -- but through a different mechanism from sram.c, which is why
 # tests/test_config.c pins that answer rather than leaving it incidental.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/race}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/RACE "$SRC"
+koboy_fetch_pinned race "$SRC"
 
 make -C "$SRC" clean || true
 

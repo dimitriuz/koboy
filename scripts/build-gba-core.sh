@@ -69,12 +69,16 @@
 # override an in-makefile `:=`, which is why these two are not exported like
 # everything else here.
 set -e
+# The upstream revision is PINNED, and scripts/pins.txt is where it is
+# written down -- one table for every core, so a release can be rebuilt.
+# See that file's header for why a floating `git clone --depth 1` of
+# master was not good enough.
+. "$(dirname "$0")/pins.sh"
 
 TARGET="${1:-kobo}"
 SRC="${SRC:-third_party/gpsp}"
 
-[ -d "$SRC" ] || git clone --depth 1 \
-    https://github.com/libretro/gpsp "$SRC"
+koboy_fetch_pinned gpsp "$SRC"
 
 make -C "$SRC" clean || true
 
