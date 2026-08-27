@@ -329,19 +329,28 @@ static const struct { const char *ext; const char *core; int ceiling; } g_core_b
        of them ends .gba -- no .agb, no .bin, no copier convention, nothing
        like the .smc/.sfc split or the .bin contest the Mega Drive lost.
 
-       CEILING 4, AND IT IS THE TIGHTEST CONSTRAINT ON THIS SYSTEM. A GBA
-       frame is 240x160 with square pixels, so an uncapped auto-fit takes
-       scale 5 and presents 1200x800 -- 960,000 pixels, HALF AS MANY AGAIN as
-       the Mega Drive rect that was measured throttling its own core (645,120,
-       and capping it returned three Sega systems to ~97.7% of full speed).
-       video_submit costs roughly 4.7 ms + 20.7 ns/px, so those 960,000 pixels
-       are ~24.6 ms of presentation against a 16.7 ms frame; the emulator
-       would be starved by the picture. Scale 4 is 960x640 = 614,400 px, which
-       is a shade UNDER the capped Mega Drive's rect and therefore inside
-       ground this project has already measured. The device figures are in
-       TESTED.md; do not raise this without re-measuring, because the core
-       here is far more expensive than Genesis Plus GX and has less headroom
-       to give away. */
+       CEILING 4, AND IT IS NOT A HEADROOM CAP -- IT IS WHAT MAKES THE
+       SYSTEM EXIST. A GBA frame is 240x160 with square pixels, the smallest
+       frame koboy scales, so an uncapped auto-fit reaches the LCD strip's
+       full width: 1264x842, 1,064,288 pixels. MEASURED on the device
+       (koboy-arm --frames 900, Advance Wars 2, scale pinned; the table is in
+       TESTED.md):
+
+           scale 3  720x480   submit 11.3 ms  pipeline 14.8 ms
+           scale 4  960x640   submit 18.1 ms  pipeline 24.9 ms   <- this row
+           scale 6 1264x842   submit 30.3 ms  pipeline 40.7 ms
+
+       The device runs present_divisor = 2, so the per-core-frame budget is
+       16742 - pipeline/2. At scale 4 that is 4,316 us and every measured
+       title fits. At the uncapped fit it is NEGATIVE: 20.3 ms of
+       presentation charged against a 16.7 ms frame, with nothing left for
+       the emulator at all.
+
+       Do not raise this without re-measuring. The one title that sits ON the
+       4,316 us budget rather than inside it is Metroid Fusion with the
+       screen scrolling (4,467 us, 99.1% of full speed) -- see
+       docs/FOLLOWUPS.md #87, whose remedy is the divisor rather than a
+       smaller picture for the whole library. */
     { ".gba", "gpsp_libretro.so", 4 }, /* Game Boy Advance, gpSP -- ceiling above */
     /* THE FIRST EXTENSION IN THIS TABLE THAT IS NOT A SYSTEM'S OWN, and the
        decision behind it is the interesting part of adding arcade.

@@ -1491,25 +1491,91 @@ is no headroom at all; at 17.7 ms there is.
   heaviest Mega Drive title this project has met (84% at 957x720 before any
   of this), is not on the device.
 
-## Game Boy Advance: measured on the host, NOT on the device
+## Game Boy Advance, measured on the device, 2026-08-27
 
 The fifteenth system, and the second one the v1 design spec ruled out on CPU
 grounds. SNES was the first, and re-testing that judgement rather than
-inheriting it is why this one was re-tested too.
+inheriting it is why this one was re-tested too. **The spec was wrong about
+this one as well.**
 
-**Read this section knowing what it is not.** The device was awake for four
-minutes at the start of the session --- long enough to accept `corebench-arm`
-and both candidate ARM cores, not long enough to run them --- and then went
-off the LAN and stayed off. Everything below is either an x86_64 host
-measurement, or a device figure taken from an EARLIER session's table in this
-file and reasoned against. Nothing in this section is a Cortex-A9 measurement
-of a GBA.
+The device slept for most of the session and woke for the last of it, so this
+section has both kinds of number in it and says which is which on every
+table. The core benchmark and the dynarec check are MEASURED on the Libra 2.
 
-### The core: gpSP, chosen from three
+### THE MEASUREMENT: gpSP on the Libra 2
 
-Host, x86_64, 600 frames after a 2400-frame warmup, `--mash` (so these are
-gameplay frames, not a title screen --- see `scripts/corebench.c`), mean us
-per `retro_run`:
+`corebench-arm`, 600 frames after a 2,400-frame warmup, `--mash` on (so the
+measured window is gameplay and not a title screen --- see
+`scripts/corebench.c`), Nickel up, `--budget-us 6142`. That budget is the
+per-core-frame allowance at the device's OWN `present_divisor = 2` with the
+GBA rect at its shipped ceiling of 4: `16742 - 21200/2`.
+
+| Title | class | mean us | p95 us | worst us | % of budget (mean) | % (p95) | % (worst frame) |
+|---|---|---|---|---|---|---|---|
+| Advance Wars 2 | turn-based | 2,868.2 | 3,524 | 7,069 | 47% | 57% | 115% |
+| Fire Emblem | turn-based | 2,477.1 | 3,289 | 13,040 | 40% | 54% | 212% |
+| Final Fantasy Tactics Advance | turn-based | 2,662.1 | 3,059 | 4,146 | 43% | 50% | 68% |
+| Golden Sun | turn-based | 2,611.1 | 3,547 | 7,180 | 43% | 58% | 117% |
+| Metroid Fusion | action | 1,804.6 | 2,707 | 4,795 | 29% | 44% | 78% |
+| Castlevania: Aria of Sorrow | action | 2,561.5 | 3,252 | 6,590 | 42% | 53% | 107% |
+| Super Mario Advance 2 | action | 2,476.6 | 2,995 | 4,010 | 40% | 49% | 65% |
+| Astro Boy: Omega Factor | action | 3,165.5 | 4,108 | 6,326 | 52% | 67% | 103% |
+
+**Every title runs at full speed, with the tightest at 52% of budget.** For
+scale, the two systems measured on this device before it: gambatte 2.1--2.5
+ms, fceumm 4.3--4.6 ms. **A Game Boy Advance costs less per frame here than a
+NES**, which is what an ARM recompiler buys against two interpreters.
+
+The `worst` column crosses budget on five titles and Fire Emblem's crosses it
+twice over --- one frame in 600 at 13.0 ms. That is what `p95` is printed
+for: every p95 is inside 67% of budget, so those are single frames (a scene
+transition, a battle animation spawning), not a sustained state. The same
+shape as the SNES rows earlier in this file, and less severe than Star Fox's.
+
+**Turn-based titles are not the cheap ones**, which is worth noting because
+the system was added for them: Advance Wars 2 and Golden Sun cost MORE than
+Metroid Fusion and Super Mario Advance 2 in this run. A strategy map is a
+screen full of sprites and a scrolling background; a corridor is not. The
+case for the turn-based library on this panel is about e-ink dwell time and
+legibility, not about emulation cost.
+
+### The same eight with the screen SCROLLING, which is a different answer
+
+`--mash` presses START and A and no direction, so nothing in the table above
+scrolls --- and scrolling is where a GBA's four background layers cost what
+they cost. `--walk` holds RIGHT as well (see `corebench.c`), and it is run
+here at a 8,400-frame warmup so the measured window is deeper into each
+title. Same device, same budget:
+
+| Title | `--mash` mean | `--walk` mean | `--walk` p95 | `--walk` worst | % of budget (walk mean) |
+|---|---|---|---|---|---|
+| Advance Wars 2 | 2,868.2 | 2,022.7 | 2,152 | 3,199 | 33% |
+| Fire Emblem | 2,477.1 | 2,339.1 | 2,835 | 5,260 | 38% |
+| Final Fantasy Tactics Advance | 2,662.1 | 2,706.4 | 3,035 | 4,270 | 44% |
+| Golden Sun | 2,611.1 | 3,524.6 | 4,209 | 17,126 | 57% |
+| **Metroid Fusion** | 1,804.6 | **4,467.3** | 5,236 | 6,884 | **73%** |
+| Castlevania: Aria of Sorrow | 2,561.5 | 1,318.1 | 1,943 | 3,308 | 21% |
+| Super Mario Advance 2 | 2,476.6 | 2,637.9 | 3,972 | 5,324 | 43% |
+| Astro Boy: Omega Factor | 3,165.5 | 3,153.3 | 4,098 | 6,138 | 51% |
+
+**Metroid Fusion is 2.5x more expensive once it is actually moving** ---
+1,804 us of cutscene against 4,467 us of Samus running through a corridor.
+That is the single most useful number in this section, and `--mash` alone
+would have reported the cheaper one. It is still inside budget, but the
+margin drops from 3.4x to 1.4x, and 1.4x is a margin worth knowing about.
+
+The two runs are NOT the same trajectory --- RIGHT is held through the menus
+too, so a different option gets selected and a different scene is reached
+(Aria of Sorrow ends up somewhere cheaper, Advance Wars 2 likewise). The
+honest reading is the **worse of the two per title**, which is what the
+"playable?" judgement below uses. Golden Sun's 17,126 us worst frame is one
+frame in 600 against a 3,503 us median; that is what p95 is printed for.
+
+### The core was chosen from three, on the host
+
+The device slept for the part of the session when the choice had to be made,
+so the shootout is a host measurement. Host, x86_64, 600 frames after a
+2400-frame warmup, `--mash`, mean us per `retro_run`:
 
 | title | gpSP | mGBA | vba-next |
 |---|---|---|---|
@@ -1529,49 +1595,78 @@ two cores' only case. **vba-next being the slowest is not what the folklore
 says**, and it is not close: it loses to mGBA by 1.67x on every one of the
 eight. That reputation dates from when mGBA was new.
 
-### What the ARM build is, and what has NOT been verified about it
+### THE DYNAREC RUNS ON THIS KERNEL --- checked directly, not inferred
+
+The one thing that had to be established before any device figure could be
+believed. gpSP's ARM recompiler writes ARM instructions into a buffer and
+jumps into them, so it asks `mmap` for memory that is writable AND
+executable; a hardened kernel refuses, gpSP falls back to its interpreter,
+the run completes, and the numbers look like numbers. Silent, and it would
+have corrupted every row below.
+
+Checked by looking at the process's own memory map while it ran, which is the
+only check that cannot be fooled by the timings:
+
+```
+# ./corebench-arm --frames 3000 --warmup 200 --mash ./gpsp_libretro_arm.so ./aw2.gba &
+# grep rwxp /proc/6203/maps
+760fe000-76b7e000 rwxp 00000000 00:00 0
+```
+
+One 11,206,656-byte read-write-execute mapping. That is the JIT cache, the
+kernel granted it, and every core figure in this section is a figure about
+gpSP's ARM RECOMPILER on a Cortex-A9.
 
 `scripts/build-gba-core.sh kobo` produces a 681 KB stripped ARM core needing
 `libm.so.6` and `libc.so.6` and nothing else --- smaller than every other core
-koboy ships except the Game & Watch one. It is built with `CPU_ARCH=arm
-HAVE_DYNAREC=1`, so it assembles `arm/arm_stub.S` and compiles
-`cpu_threaded.c`, the ARM recompiler.
+koboy ships except the Game & Watch one.
 
-**The dynarec has not been shown to work on this device's kernel.** It asks
-`mmap` for memory that is both writable and executable; a hardened kernel can
-refuse, and gpSP's refusal path is not a crash and not a build error --- the
-core would simply be slower than it should be, and would be reported as fast.
-Verifying that is one ssh session with `corebench-arm`, which is already
-sitting in `/mnt/onboard/gbabench` on the device along with both cores.
+### The ceiling of 4, MEASURED --- and uncapped is not merely slow, it is impossible
 
-### Presentation: why the ceiling is 4, argued from THIS FILE's device numbers
+A GBA frame is 240x160 with square pixels: the smallest frame koboy scales,
+so it auto-fits furthest. Uncapped it takes the LCD strip's full width.
+`koboy-arm --frames 900` on the device, Advance Wars 2, `scale` pinned in a
+copy of the device's own ini so only the rect differs, three minutes of idle
+before the batch:
 
-A GBA frame is 240x160 with square pixels --- the smallest frame koboy
-scales, so it auto-fits furthest. Uncapped it takes scale 5 and presents
-1200x800 on the DMG faceplate or 1264x842 on the strip: 960k--1063k pixels,
-which is the band the three Sega systems were measured slow in (900k--1221k,
-70--83% of full speed). Capping at 4 gives 960x640.
+| scale | rect | px | submit | blit | refresh | pipeline | capacity | demand at divisor 2 |
+|---|---|---|---|---|---|---|---|---|
+| 3 | 720x480 | 345,600 | 11,330 us | 2,388 | 1,065 | 14,783 us | 67.6 /s | 29.96 /s |
+| **4 (shipped)** | **960x640** | **614,400** | **18,148** | **4,405** | **2,299** | **24,852 us** | **40.2 /s** | 29.96 /s |
+| 6 (uncapped fit) | 1264x842 | 1,064,288 | 30,273 | 7,693 | 2,732 | 40,698 us | **24.6 /s** | 29.96 /s |
 
-Set against the rows measured on the device in the section above, using the
-same `1000 / (submit + blit + refresh)` capacity model and the same
-`4.7 ms + 20.7 ns/px` submit model:
+The fourth row of that run is the SHIPPED path with no `scale` override at
+all --- 960x640, `submit` 18,014, within 0.7% of the pinned scale-4 row, so
+the `ceiling` table really is what produces it.
 
-| System | rect | px | submit | pipeline | capacity | demand at divisor 2 |
-|---|---|---|---|---|---|---|
-| Mega Drive, **measured** | 879x672 | 590,688 | 17.3 ms | 20.4 ms | 49.1 /s | 29.96 /s |
-| SNES, **measured** | 897x672 | 602,784 | ~17.2 | ~20.3 | ~49 /s | 29.96 /s |
-| GBA at ceiling 4, **modelled** | 960x640 | 614,400 | ~17.4 | ~21.2 | ~47 /s | 29.96 /s |
-| GBA uncapped, **modelled** | 1264x842 | 1,064,288 | ~26.7 | ~33 | ~30 /s | 29.96 /s |
+**The uncapped rect cannot meet the demand.** 24.6 presented frames a second
+against a demand of 29.96 is the Game Gear's situation before its ceiling,
+and worse. Turned into the per-core-frame budget the benchmark above is
+scored against, `16742 - pipeline/divisor`:
 
-So the capped GBA rect lands 4% above the Mega Drive rect that was measured
-at 97.7% of full speed, and the uncapped one lands on the demand line
-exactly --- which is where the Game Gear was sitting (29.4 /s) when the owner
-reported it as slow. **That is the argument for the ceiling, and it is an
-argument by analogy to a measured rect rather than a measurement.** The core
-cost is the half that is still missing: at ceiling 4 and divisor 2 the budget
-left for emulation is roughly 16,742 - 21,200/2 = **6,100 us per core
-frame**, and whether gpSP's ARM dynarec fits inside that is exactly what has
-not been run.
+| scale | budget at divisor 2 (the device's own) | budget at divisor 3 (shipped) |
+|---|---|---|
+| 3 | 9,350 us | 11,815 us |
+| **4** | **4,316 us** | 8,458 us |
+| 6 | **negative** --- presentation alone exceeds the frame | 3,176 us |
+
+At the owner's `present_divisor = 2` an uncapped GBA has **no budget at all**:
+40.7 ms of pipeline every other frame is 20.3 ms charged against a 16.7 ms
+frame before the emulator runs. That is not a ceiling that buys headroom, it
+is a ceiling that makes the system exist.
+
+**What 4 costs, stated rather than left to be found.** At divisor 2 the
+budget is 4,316 us, and the worst mean measured on this device is Metroid
+Fusion's 4,467 us with the screen scrolling --- 3.5% over, i.e. **99.1% of
+full speed**. Its p95 puts it at 94.8%. Every other title in both runs is
+inside. So at the device's current setting, the heaviest scrolling action
+title has no headroom left and everything else has plenty.
+
+**The remedy is the divisor, not a smaller picture for everybody.** At the
+shipped `present_divisor = 3` the same rect gives 8,458 us and Fusion sits at
+53% of budget; the divisor is a menu entry the owner already cycles. Dropping
+the ceiling to 3 would buy the same headroom by throwing away 44% of the
+picture area for all fifteen hundred titles, to rescue one.
 
 ### Compatibility: 1692 of 1693 files load and run
 
@@ -1589,6 +1684,14 @@ It is not a truncated file --- 4 MB, a valid Nintendo logo, a header naming
 not catch it either. **mGBA runs the same file happily; vba-next crashes on
 it too.** That is the compatibility cost of choosing the fastest core, and it
 is one homebrew file in 1693.
+
+The same sweep against mGBA, because the comparison is not one-sided:
+`TOTAL=1693 OK=1690 CRASH=0 REFUSED=3`. mGBA *rejects* three homebrew files
+(`Gapman (PD)`, `Pacoman`, `Dwarrendelf`) that gpSP loads and runs. gpSP has
+the better LOAD compatibility of the two --- 1693 against 1690 --- and one
+fatal where mGBA has none. The folklore that gpSP trades a lot of
+compatibility for its speed is, at this revision, worth about one file in
+either direction.
 
 ### The four greys: this system reduces BETTER than expected
 
@@ -1628,13 +1731,25 @@ which backup chip the cartridge has. So:
   `FLASH_V` signatures, and a Pokemon-family fallback that forces 128 KB
   flash. The classic wrong-save-type failure is what that table exists for.
 
-**Round trip, proven end to end on Fire Emblem.** Emulation here is
-deterministic --- two runs with identical input produced byte-identical
-frames, md5 `1d85cea...` both times, which is the control that makes the rest
-mean anything. koboy wrote a `.srm` through its own `sram.c`; a third run
-that loaded that `.srm` back through `sram_load` produced a DIFFERENT frame.
-The game's behaviour changed because of the file koboy wrote, which is what a
-working save is.
+**Round trip, proven ON THE DEVICE, on Fire Emblem.** `koboy-arm --frames
+600` against the Libra 2's own FAT32, four runs:
+
+| step | result |
+|---|---|
+| run 1, no save present | wrote `fe.srm`, **131,072 bytes**, md5 `c839acb750926e32a7149f8cefd6e2ce` |
+| run 2, same conditions | **same md5** --- the instrument is deterministic on the device too |
+| `.srm` cut to 65,536 bytes, then run | file left at **65,536** --- not overwritten short, not destroyed |
+| run 3, loading the full `c839acb7…` | wrote **`8dbce47990f4e47f3c7d78ddbe0faef3`** --- a different save |
+
+The last row is the round trip: the game read the file koboy wrote and its
+state diverged from a fresh boot. The third is `sram_writeback` staying false
+for the session when a save file exists but cannot be read whole --- the
+destructive-truncation guard that FOLLOWUPS #3 was opened for, now shown
+working on a 128 KB GBA save as well as on Zelda's 8 KB one.
+
+The same divergence was established on the host beforehand, with a tighter
+instrument: two identical runs produced byte-identical FRAMES (md5
+`1d85cea…` twice), and a run loading koboy's `.srm` produced a different one.
 
 **Pokemon: the mechanism reaches the game, a real save was never made.** An
 automated masher cannot get Emerald past Birch's intro (START restarts it),

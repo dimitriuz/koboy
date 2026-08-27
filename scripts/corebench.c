@@ -57,6 +57,9 @@
  *   --csv          one machine-readable line per title, for a report table
  *   --mash         hold START, then A, on a 32-frame cycle, so the measured
  *                  frames are GAMEPLAY and not a title screen. See state_cb.
+ *   --walk         --mash plus RIGHT held throughout, so the measured frames
+ *                  SCROLL. Implies --mash. An upper bound beside --mash's
+ *                  lower one, not a replacement -- see state_cb.
  *
  * Build:  cc -O2 -o corebench scripts/corebench.c -ldl
  * Cross:  arm-linux-gnueabihf-gcc -std=c11 -O2 -march=armv7-a -mfpu=neon \
@@ -111,6 +114,7 @@
 #define RETRO_DEVICE_JOYPAD          1
 #define RETRO_DEVICE_ID_JOYPAD_A     8
 #define RETRO_DEVICE_ID_JOYPAD_START 3
+#define RETRO_DEVICE_ID_JOYPAD_RIGHT 7
 
 enum retro_pixel_format {
     RETRO_PIXEL_FORMAT_0RGB1555 = 0,
@@ -251,12 +255,37 @@ static void poll_cb(void) {}
  * repeatedly IS what a player does, and the cost of the menus and text boxes
  * it opens is part of what has to fit in the budget. */
 static int g_mash = 0;
+static int g_walk = 0;
 static unsigned long g_mash_frame = 0;
 
+/* --walk: --mash with RIGHT held on every frame as well.
+ *
+ * IT EXISTS BECAUSE --mash HAS AN ASYMMETRIC BLIND SPOT. It presses START and
+ * A and no direction, so nothing SCROLLS -- and scrolling is simultaneously
+ * the expensive case for an emulator (every background layer's registers
+ * change every frame, every tilemap row is refetched) and the bad case for an
+ * e-ink panel. A mean measured with --mash alone is therefore the optimistic
+ * end of an action title's range, and reporting it as "the" figure is the
+ * kind of number this project treats as worse than none.
+ *
+ * RIGHT AND NOT A CYCLE OF DIRECTIONS, because the job is to make the screen
+ * move rather than to play well. Every side-scroller starts facing right;
+ * every top-down map has somewhere to the east. A cycling direction spends
+ * half its time undoing the other half and produces less movement, not more.
+ *
+ * THE MASH KEEPS RUNNING UNDERNEATH, which is what makes this usable at all:
+ * a title that has not been started yet does not scroll no matter which way
+ * you push, so START and A still have to be pressed to get out of the menus.
+ * The cost is that RIGHT is also held THROUGH those menus, which moves a
+ * cursor -- and on some titles selects a different option than --mash does.
+ * The two runs are therefore not the same trajectory, and the honest use of
+ * this flag is as an upper bound beside --mash's lower one, never as a
+ * replacement for it. */
 static int16_t state_cb(unsigned p, unsigned d, unsigned i, unsigned id)
 {
     (void)p; (void)i;
     if (!g_mash || d != RETRO_DEVICE_JOYPAD) return 0;
+    if (g_walk && id == RETRO_DEVICE_ID_JOYPAD_RIGHT) return 1;
     unsigned phase = (unsigned)(g_mash_frame % 32u);
     if (phase < 6u)  return id == RETRO_DEVICE_ID_JOYPAD_START ? 1 : 0;
     if (phase < 16u) return 0;
@@ -307,12 +336,16 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[argi], "--budget-us") && argi + 1 < argc) budget_us = atol(argv[++argi]);
         else if (!strcmp(argv[argi], "--csv")) csv = 1;
         else if (!strcmp(argv[argi], "--mash")) g_mash = 1;
+        /* --walk implies --mash: without it nothing would ever leave the
+           title screen, and "held RIGHT on a menu for 600 frames" is not a
+           measurement of anything. */
+        else if (!strcmp(argv[argi], "--walk")) { g_mash = 1; g_walk = 1; }
         else break;
     }
     if (argc - argi < 2) {
         fprintf(stderr,
             "usage: %s [--frames N] [--warmup N] [--budget-us N] [--csv]"
-            " [--mash] <core.so> <content> [<content> ...]\n", argv[0]);
+            " [--mash] [--walk] <core.so> <content> [<content> ...]\n", argv[0]);
         return 2;
     }
     /* LIVE CLAMP: a zero or negative --frames would malloc(0) and then divide
