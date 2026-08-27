@@ -99,6 +99,15 @@ int chrome_lcd_strip_h(int panel_h);
    which arrangement was resolved, and every consumer switches on it rather
    than re-deriving it.
 
+   PAIR2: two discs on a north-east/south-west diagonal, A above and right of
+   B, which is a Game Boy Advance. `x_*` and `y_*` come back ZERO in this
+   arrangement -- that machine has two face buttons and drawing four would
+   invent two, see koboy_lcd_face in koboy.h -- and a zero is a coordinate a
+   real finger can reach, so BOTH the draw path and input.c's hit test are
+   gated on `face_n >= 4` rather than relying on the zero to be harmless. The
+   four pills stay: a GBA has L and R, and they are the one control pair on
+   this strip that is genuinely left-and-right.
+
    The FIELD NAMES here are the retropad's, and they stay the retropad's:
    they say which BIT each disc reports, which is one thing for every system
    and every arrangement. What each disc SAYS is a separate table
@@ -116,16 +125,23 @@ int chrome_lcd_strip_h(int panel_h);
    merge -- their centres are face_off * sqrt(2) apart. face_pitch is
    face_r * 11/5, so a grid neighbour's centre is 2.2 * face_r away and the
    discs keep a 0.2 * face_r gap; the diagonal neighbours are 3.11 * face_r
-   apart. */
+   apart. PAIR2 reuses face_off: its two discs sit face_off/2 either side of
+   the cluster centre on both axes, so their centres are face_off * sqrt(2)
+   apart -- the diamond's adjacent-pair separation exactly, and therefore
+   proved by the same construction. */
 typedef struct {
     koboy_rect strip;                   /* the whole bottom strip */
     int dpad_cx, dpad_cy, dpad_r;
-    int face_n;                         /* 4 = DIAMOND, 6 = ROWS6 */
+    int face_n;                         /* 2 = PAIR2, 4 = DIAMOND, 6 = ROWS6 */
     int face_r, face_off, face_pitch;
-    int x_cx, x_cy;                     /* diamond: NORTHEAST. rows6: top mid */
-    int y_cx, y_cy;                     /* diamond: west.      rows6: low left */
-    int a_cx, a_cy;                     /* diamond: east.      rows6: low right */
-    int b_cx, b_cy;                     /* diamond: SOUTHEAST. rows6: low mid  */
+    int x_cx, x_cy;                     /* diamond: NORTHEAST. rows6: top mid.
+                                           pair2: ZERO -- no such button */
+    int y_cx, y_cy;                     /* diamond: west.      rows6: low left.
+                                           pair2: ZERO -- no such button */
+    int a_cx, a_cy;                     /* diamond: east.      rows6: low right.
+                                           pair2: north-east */
+    int b_cx, b_cy;                     /* diamond: SOUTHEAST. rows6: low mid.
+                                           pair2: south-west */
     int l1_cx, l1_cy;                   /* rows6 only: top left  (zero otherwise) */
     int r1_cx, r1_cy;                   /* rows6 only: top right (zero otherwise) */
     koboy_rect l1, select, start, r1;   /* the lower band, left to right.

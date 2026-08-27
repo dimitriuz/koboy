@@ -350,8 +350,35 @@ typedef struct {
    shoulder BITS are discs in the grid rather than pills, and the lower band
    carries MODE and START alone. Drawing a shoulder pill for a bit that
    already has a disc would be two controls under one name -- the same defect
-   as a mislabelled one. */
-typedef enum { KOBOY_LCD_FACE_DIAMOND = 0, KOBOY_LCD_FACE_ROWS6 } koboy_lcd_face;
+   as a mislabelled one.
+
+   PAIR2 is TWO discs on a north-east/south-west diagonal -- A above and right
+   of B -- which is a Game Boy Advance, and it exists because the diamond is a
+   LIE about that machine rather than merely a poor fit. A GBA has exactly two
+   face buttons. Drawn as a diamond it would grow two more, and they would not
+   even be inert: gpSP binds JOYPAD_X and JOYPAD_Y to "Turbo A" and "Turbo B"
+   (its own input descriptors), front-end conveniences that no Game Boy
+   Advance ever had. A disc labelled X that fires A twenty times a second is
+   the same class of defect as the Mega Drive's disc labelled A that produced
+   C -- it is a control the hardware does not have, wearing a name.
+
+   THE DIAGONAL IS THE HARDWARE'S. On a real GBA, B sits down and left of A,
+   and every title's own control screen says so ("A: confirm, B: cancel" over
+   buttons in that relation). chrome_lcd_layout places them face_off/2 either
+   side of the cluster centre on both axes, which puts their centres
+   face_off * sqrt(2) apart -- the SAME separation the diamond gives its
+   adjacent pair, so the gap between two discs reads identically in both
+   arrangements and one number still governs the lot.
+
+   Both shoulder BITS keep their pills under PAIR2, unlike ROWS6: a GBA does
+   have L and R, they are a left/right pair, and the lower band's outermost
+   two slots are the only left/right pair the strip has. That is most of the
+   reason this system is in this layout at all -- see config_layout_for_rom. */
+typedef enum {
+    KOBOY_LCD_FACE_DIAMOND = 0,
+    KOBOY_LCD_FACE_ROWS6,
+    KOBOY_LCD_FACE_PAIR2
+} koboy_lcd_face;
 
 typedef struct {
     /* koboy_lcd_face, held as an int for the same reason dpad_mode is: this

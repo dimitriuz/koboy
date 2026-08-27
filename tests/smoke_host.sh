@@ -679,6 +679,7 @@ printf '\0' > "$d/GAME.GG"
 # inside retro_load_game below one mapping block.
 head -c 32768 /dev/zero > "$d/GAME.sfc"
 head -c 32768 /dev/zero > "$d/GAME.md"
+head -c 32768 /dev/zero > "$d/GAME.gba"
 
 # .mgw with no --core: the Game & Watch core, resolved beside the binary.
 rc=0
@@ -956,13 +957,16 @@ echo "$out" | grep -q "scale 5, game 800x720 at (232,84)" \
     || { echo "FAIL: the Game Boy rect moved"; rm -rf "$d"; exit 1; }
 echo "ok: .gb keeps the DMG faceplate at scale 5"
 
-# ...AND THE TWO CONSOLES WHOSE PADS OUTGREW THAT FACEPLATE. A SNES pad is
-# A B X Y L R and a six-button Mega Drive is A B C X Y Z; the DMG faceplate
-# has two spare pockets, the LCD strip has a d-pad, a four-button diamond,
-# L1, R1, SELECT and START. Asserted end to end for the same reason the .mgw
-# run above is: config.c can get the predicate right and src/main.c never read
-# it. `--core` is given because the stub stands in for both cores here.
-for ext in sfc md; do
+# ...AND THE THREE CONSOLES ON THAT STRIP. A SNES pad is A B X Y L R and a
+# six-button Mega Drive is A B C X Y Z; the DMG faceplate has two spare
+# pockets, the LCD strip has a d-pad, a per-system face block, L1, R1, SELECT
+# and START. The Game Boy Advance is here for a different reason -- its pad
+# FITS the faceplate, and it moved because the faceplate's two spare pockets
+# are FACE pockets while a GBA's L and R are a left one and a right one; see
+# config_layout_for_rom. Asserted end to end for the same reason the .mgw run
+# above is: config.c can get the predicate right and src/main.c never read it.
+# `--core` is given because the stub stands in for all three cores here.
+for ext in sfc md gba; do
     rc=0
     out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
             --rom "$d/GAME.$ext" --panel 1264x1680 --frames 10 2>&1) || rc=$?
@@ -977,7 +981,7 @@ for ext in sfc md; do
     echo "$out" | grep -q '^presented=' \
         || { echo "FAIL: the .$ext layout run never reached the emulator loop"; rm -rf "$d"; exit 1; }
 done
-echo "ok: .sfc and .md get the LCD control strip"
+echo "ok: .sfc, .md and .gba get the LCD control strip"
 
 # GEOMETRY CHURN: a re-fit happens when, and only when, the RECT moves.
 #
@@ -1181,9 +1185,18 @@ echo "ok: the in-game MENU opens and acts under the LCD layout"
 # The Game Gear row is the one worth reading: the SAME 160x144 frame gives
 # 960x864 uncapped and 800x720 capped, and 800x720 is the Game Boy's own
 # picture. That is where this system was believed to be for months.
+#
+# The .gba row joins them and is the tightest cap in the table: 240x160 is the
+# smallest frame koboy scales, so it auto-fits furthest -- 1264x842 uncapped
+# against 960x640 held. Its uncapped column is FIT-limited rather than
+# scale-limited (the strip's fractional fit runs out of panel width before it
+# runs out of scale), which is why the free scale is 6 and not 5: an ini
+# naming exactly 5 does not mark intent (KOBOY_SCALE_LEGACY_DEFAULT) and the
+# pair would compare the ceiling with itself.
 for row in "sms 256x192 4 768x576 1024x768" \
            "gg  160x144 6 800x720 960x864" \
-           "md  320x224 6 960x672 1264x884"; do
+           "md  320x224 6 960x672 1264x884" \
+           "gba 240x160 6 960x640 1264x842"; do
     set -- $row
     ext=$1; geom=$2; free_scale=$3; want_cap=$4; want_free=$5
     d_sg=$(mktemp -d)
@@ -1207,7 +1220,7 @@ for row in "sms 256x192 4 768x576 1024x768" \
         echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sg"; exit 1; }
     rm -rf "$d_sg"
 done
-echo "ok: .sms, .gg and .md each take their own measured ceiling"
+echo "ok: .sms, .gg, .md and .gba each take their own measured ceiling"
 
 rm -rf "$d_sc"
 

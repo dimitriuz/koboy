@@ -31,7 +31,7 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    /* One list, fourteen systems. .mgw is Game & Watch content for gw-libretro,
+    /* One list, fifteen systems. .mgw is Game & Watch content for gw-libretro,
        .nes is a NES cartridge for fceumm, .min is a Pokemon Mini cartridge
        for PokeMini, .ws/.wsc are WonderSwan and WonderSwan Color for
        beetle-wswan, .ngp/.ngc are Neo Geo Pocket and Pocket Color for RACE,
@@ -119,6 +119,13 @@ bool romlist_is_rom(const char *name)
         || ends_with_ci(name, ".md")
         || ends_with_ci(name, ".sfc") || ends_with_ci(name, ".smc")
         || ends_with_ci(name, ".pce")
+        /* .gba, the Game Boy Advance, and it is the least contested extension
+           in this whole list: 1693 files in the owner's tree and every one of
+           them ends .gba. No copier convention like the SNES's .smc, no
+           container fight like the Mega Drive's .bin, nothing left out. The
+           only reason it needs a comment at all is that the rest of this list
+           needed one. */
+        || ends_with_ci(name, ".gba")
         /* .zip is the one entry here that is a CONTAINER rather than a
            system, and it is listed for exactly one reason: nothing else koboy
            ships can open a zip, so there is no file this row could steal.

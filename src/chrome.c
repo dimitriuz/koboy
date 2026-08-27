@@ -102,13 +102,35 @@ void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *o)
     o->face_pitch = o->face_r * 11 / 5;  /* > 2 * face_r:       see chrome.h */
     int fcx = W - W * 16 / 100;         /* mirrored, not a second constant */
     int fcy = o->dpad_cy;
-    o->face_n = (p->lcd_face == KOBOY_LCD_FACE_ROWS6) ? 6 : 4;
+    o->face_n = (p->lcd_face == KOBOY_LCD_FACE_ROWS6)  ? 6
+              : (p->lcd_face == KOBOY_LCD_FACE_PAIR2)  ? 2
+                                                       : 4;
 
     /* How far left of fcx the cluster actually reaches, which is what the
-       centre column has to clear. The two arrangements differ: the diamond
-       puts one disc at face_off, the grid a whole column at face_pitch. */
+       centre column has to clear. The three arrangements differ: the diamond
+       puts one disc at face_off, the grid a whole column at face_pitch, and
+       the pair only half of face_off. */
     int face_reach;
-    if (o->face_n == 6) {
+    if (o->face_n == 2) {
+        /* TWO DISCS, a GBA: A north-east, B south-west, on the diagonal the
+           hardware puts them on. (Spelt GBA and not in full deliberately --
+           test_chrome.c forbids the console's word mark anywhere in this
+           file, comments included, and that guard is worth more than the
+           three extra words.) x_* and y_* are LEFT AT ZERO by the memset at
+           the top, and that absence is load-bearing rather than incidental --
+           a GBA has no third and fourth face button, and inventing two would
+           hand a player controls the machine never had (gpSP binds those two
+           bits to Turbo A / Turbo B, which is worse than inert). Both
+           consumers gate on face_n rather than on the zero: see chrome.h.
+
+           face_off/2 on each axis, which puts the two centres face_off *
+           sqrt(2) apart -- identical to the diamond's adjacent-pair spacing,
+           so the same construction proves they cannot merge. */
+        int d = o->face_off / 2;
+        o->a_cx = fcx + d;  o->a_cy = fcy - d;   /* NORTH-EAST */
+        o->b_cx = fcx - d;  o->b_cy = fcy + d;   /* SOUTH-WEST */
+        face_reach = d + o->face_r;
+    } else if (o->face_n == 6) {
         /* TWO ROWS OF THREE, in the six-button Mega Drive's own arrangement:
                X  Y  Z      JOYPAD_L  JOYPAD_X  JOYPAD_R
                A  B  C      JOYPAD_Y  JOYPAD_B  JOYPAD_A
@@ -170,7 +192,9 @@ void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *o)
        the face grid, and a Mega Drive has no shoulders to begin with -- two
        controls under one name is the labelling bug this layout exists to
        avoid, wearing a different hat. So that arrangement carries MODE and
-       START alone, spread across the same band. */
+       START alone, spread across the same band. PAIR2 keeps all four: a GBA
+       does have L and R, they are its only left/right pair, and the outermost
+       two slots of this row are the strip's. */
     const int np = (o->face_n == 6) ? 2 : 4;
     int cell = (px1 - px0) / np;
     if (cell < 8) cell = 8;             /* LIVE GUARD: see menu.w above */
@@ -657,10 +681,16 @@ static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p,
        shoulder bits are discs in the grid and pills in the lower band under
        the diamond -- chrome_lcd_layout has already decided which, and this
        reads its answer rather than asking the profile a second time. */
-    draw_face_button(fb, stride, W, H, c.x_cx, c.x_cy, c.face_r,
-                     lcd_label(l->lcd.x, "X"));
-    draw_face_button(fb, stride, W, H, c.y_cx, c.y_cy, c.face_r,
-                     lcd_label(l->lcd.y, "Y"));
+    /* X and Y only exist in the arrangements that HAVE them. PAIR2 leaves
+       their centres at zero, and a disc drawn at (0,0) would be a quarter
+       circle in the panel's top-left corner -- found the way this project
+       finds these, by rendering the strip and looking at it. */
+    if (c.face_n >= 4) {
+        draw_face_button(fb, stride, W, H, c.x_cx, c.x_cy, c.face_r,
+                         lcd_label(l->lcd.x, "X"));
+        draw_face_button(fb, stride, W, H, c.y_cx, c.y_cy, c.face_r,
+                         lcd_label(l->lcd.y, "Y"));
+    }
     draw_face_button(fb, stride, W, H, c.a_cx, c.a_cy, c.face_r,
                      lcd_label(l->lcd.a, "A"));
     draw_face_button(fb, stride, W, H, c.b_cx, c.b_cy, c.face_r,

@@ -897,15 +897,29 @@ TEST_MAIN({
                JOYPAD_A -> C, JOYPAD_L -> X, JOYPAD_X -> Y, JOYPAD_R -> Z,
                JOYPAD_SELECT -> Mode) and snes9x2005's identity map for the
                SNES. */
+            /* n_want, because the strip's systems no longer all have seven
+               controls: a Game Boy Advance has five, and padding its row with
+               two dummies would assert something about buttons it does not
+               have. */
+            int n_want;
             struct { const char *label; uint16_t bit; } want[7];
         } sys[] = {
-            { "/roms/MegaDrive/Streets of Rage 2 (USA).md", 293, 224, 348, 240, 6,
+            { "/roms/MegaDrive/Streets of Rage 2 (USA).md", 293, 224, 348, 240, 6, 7,
               { { "A", KOBOY_BTN_Y }, { "B", KOBOY_BTN_B }, { "C", KOBOY_BTN_A },
                 { "X", KOBOY_BTN_L1 }, { "Y", KOBOY_BTN_X }, { "Z", KOBOY_BTN_R1 },
                 { "MODE", KOBOY_BTN_SELECT } } },
-            { "/roms/SNES/Star Fox (USA) (Rev 2).sfc", 299, 224, 299, 224, 4,
+            { "/roms/SNES/Star Fox (USA) (Rev 2).sfc", 299, 224, 299, 224, 4, 7,
               { { "A", KOBOY_BTN_A }, { "B", KOBOY_BTN_B }, { "X", KOBOY_BTN_X },
                 { "Y", KOBOY_BTN_Y }, { "L", KOBOY_BTN_L1 }, { "R", KOBOY_BTN_R1 },
+                { "SELECT", KOBOY_BTN_SELECT } } },
+            /* The Game Boy Advance, and its five are the WHOLE machine -- gpSP
+               binds JOYPAD_X and JOYPAD_Y to Turbo A and Turbo B, which are
+               front-end conveniences and not hardware, so there is deliberately
+               no sixth or seventh row here to find. */
+            { "/roms/GBA/Advance Wars 2 - Black Hole Rising (USA).gba",
+              240, 160, 240, 160, 2, 5,
+              { { "A", KOBOY_BTN_A }, { "B", KOBOY_BTN_B },
+                { "L", KOBOY_BTN_L1 }, { "R", KOBOY_BTN_R1 },
                 { "SELECT", KOBOY_BTN_SELECT } } },
         };
 
@@ -955,7 +969,7 @@ TEST_MAIN({
                   cc.layout.lcd.select },
             };
 
-            for (int w = 0; w < 7; w++) {
+            for (int w = 0; w < sys[si].n_want; w++) {
                 const char *name = sys[si].want[w].label;
                 int found = -1;
                 for (int i = 0; i < 7; i++)
@@ -1019,6 +1033,37 @@ TEST_MAIN({
                                              gk.l1.y + gk.l1.h / 2) & KOBOY_BTN_L1, 0);
                 CHECK_EQ_INT(touch_probe(ci, gk.r1.x + gk.r1.w / 2,
                                              gk.r1.y + gk.r1.h / 2) & KOBOY_BTN_R1, 0);
+            }
+
+            /* THE TWO ABSENT DISCS ARE NOT LIVE AT THE PANEL ORIGIN. This is
+               the PAIR2 counterpart of the zero-sized-pill trap above, and it
+               is the more dangerous of the two: chrome_lcd_layout leaves x_*
+               and y_* at (0,0) for a system with two face buttons, and unlike
+               a rect, a CIRCLE of radius face_r centred at the origin is not
+               empty -- in_circle(x, y, 0, 0, face_r) matches every touch
+               within ~54 px of the panel's top-left corner on this panel,
+               which is inside the game rect. Probed at (0,0) and at the
+               phantom disc's own rim, and the whole button word is compared,
+               not just the X and Y bits: nothing at all may happen there. */
+            if (cl.face_n == 2) {
+                CHECK(cl.x_cx == 0 && cl.x_cy == 0);
+                CHECK_EQ_INT(touch_probe(ci, 0, 0), 0);
+                CHECK_EQ_INT(touch_probe(ci, cl.face_r - 1, 0), 0);
+                CHECK_EQ_INT(touch_probe(ci, 0, cl.face_r - 1), 0);
+                /* ...and where the diamond's X and Y discs sit on the SAME
+                   panel is bare strip here, so this is not a zone compared
+                   with itself. */
+                koboy_config dc; config_defaults(&dc);
+                dc.layout_mode = KOBOY_LAYOUT_LCD;
+                dc.lcd_rect_from_max = true;
+                koboy_profile dp;
+                CHECK(config_resolve_profile(&dp, &dc, 1264, 1680, 654, 396, 654, 396));
+                chrome_lcd_controls dk;
+                memset(&dk, 0, sizeof dk);
+                chrome_lcd_layout(&dp, &dk);
+                CHECK_EQ_INT(dk.face_n, 4);
+                CHECK_EQ_INT(touch_probe(ci, dk.x_cx, dk.x_cy) & KOBOY_BTN_X, 0);
+                CHECK_EQ_INT(touch_probe(ci, dk.y_cx, dk.y_cy) & KOBOY_BTN_Y, 0);
             }
 
             /* MENU IS STILL REACHABLE, and it is the only way back to the ROM

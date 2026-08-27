@@ -1963,6 +1963,185 @@ TEST_MAIN({
         }
     }
 
+    /* ============ THE TWO-BUTTON ARRANGEMENT (KOBOY_LCD_FACE_PAIR2)
+     *
+     * A Game Boy Advance has two face buttons, and the diamond would give it
+     * four. That is not a poor fit but an INVENTION: the two extra bits are
+     * bound by gpSP to Turbo A and Turbo B, so a diamond would put a disc
+     * labelled X on the panel that fires A twenty times a second -- a control
+     * the hardware never had, which is the same defect as the Mega Drive's
+     * disc labelled A that produced C, from the other direction.
+     *
+     * Asserted the ROWS6 way -- find each disc BY ITS LABEL, then check where
+     * that one ended up. A version that asserted `a_cx > b_cx` would pass
+     * with the two labels swapped.
+     *
+     * Swept over all four supported panels, and it carries one check no other
+     * arrangement needs: the two UNUSED discs sit at the origin, and a disc at
+     * the origin is not inert. in_circle(x, y, 0, 0, face_r) matches every
+     * touch within face_r of the panel's top-left corner, which is inside the
+     * game rect on all four.
+     */
+    {
+        static const struct { int w, h; const char *name; } gn[] = {
+            { 1072, 1448, "Clara"  }, { 1264, 1680, "Libra2" },
+            { 1404, 1872, "Elipsa" }, { 1440, 1920, "Sage"   },
+        };
+        for (size_t i = 0; i < sizeof gn / sizeof gn[0]; i++) {
+            const int W = gn[i].w, H = gn[i].h;
+
+            koboy_config gc; config_defaults(&gc);
+            gc.layout_mode       = config_layout_for_rom("Advance Wars 2.gba");
+            gc.scale_ceiling     = config_scale_ceiling_for_rom("Advance Wars 2.gba");
+            gc.lcd_rect_from_max = config_lcd_rect_from_max_for_rom("Advance Wars 2.gba");
+            config_lcd_pad_for_rom(&gc.layout, "Advance Wars 2.gba");
+            CHECK_EQ_INT(gc.layout_mode, KOBOY_LAYOUT_LCD);
+
+            koboy_profile gp;
+            CHECK(config_resolve_profile(&gp, &gc, W, H, 240, 160, 240, 160));
+            CHECK_EQ_INT(gp.lcd_face, KOBOY_LCD_FACE_PAIR2);
+
+            chrome_lcd_controls gk;
+            memset(&gk, 0, sizeof gk);
+            chrome_lcd_layout(&gp, &gk);
+            CHECK_EQ_INT(gk.face_n, 2);
+
+            /* Where each CONSOLE button ended up, found by its label. */
+            struct { const char *label; int cx, cy; } gdisc[2] = {
+                { gc.layout.lcd.a, gk.a_cx, gk.a_cy },
+                { gc.layout.lcd.b, gk.b_cx, gk.b_cy },
+            };
+            int gcx[2], gcy[2];
+            static const char *gwant[2] = { "A", "B" };
+            for (int k = 0; k < 2; k++) {
+                int found = -1;
+                for (int j = 0; j < 2; j++)
+                    if (gdisc[j].label && strcmp(gdisc[j].label, gwant[k]) == 0) { found = j; break; }
+                if (found < 0)
+                    fprintf(stderr, "  %s: no face disc says \"%s\"\n",
+                            gn[i].name, gwant[k]);
+                CHECK(found >= 0);
+                if (found < 0) { gcx[k] = 0; gcy[k] = 0; continue; }
+                gcx[k] = gdisc[found].cx; gcy[k] = gdisc[found].cy;
+            }
+            /* A IS UP AND RIGHT OF B -- the diagonal the hardware puts them
+               on, and the reason every GBA manual can say "A: confirm,
+               B: cancel" and have it mean a position. */
+            CHECK(gcx[0] > gcx[1]);
+            CHECK(gcy[0] < gcy[1]);
+
+            /* THE TWO ABSENT DISCS ARE AT THE ORIGIN, which is what makes the
+               face_n gate in chrome.c and input.c load-bearing rather than
+               tidy. Asserted explicitly so that a future arrangement which
+               parks them somewhere else has to come back here and say so. */
+            CHECK_EQ_INT(gk.x_cx, 0); CHECK_EQ_INT(gk.x_cy, 0);
+            CHECK_EQ_INT(gk.y_cx, 0); CHECK_EQ_INT(gk.y_cy, 0);
+
+            /* SAME RADIUS AS THE DIAMOND. Two discs that only fitted because
+               they shrank would be a worse answer than four. */
+            {
+                koboy_config dc; config_defaults(&dc);
+                dc.layout_mode = KOBOY_LAYOUT_LCD;
+                dc.lcd_rect_from_max = true;
+                koboy_profile dp;
+                CHECK(config_resolve_profile(&dp, &dc, W, H, 654, 396, 654, 396));
+                chrome_lcd_controls dk;
+                memset(&dk, 0, sizeof dk);
+                chrome_lcd_layout(&dp, &dk);
+                CHECK_EQ_INT(dk.face_n, 4);
+                CHECK_EQ_INT(gk.face_r, dk.face_r);
+            }
+
+            /* THEY DO NOT TOUCH, and it is the same construction the diamond
+               is proved by: centres face_off * sqrt(2) apart. */
+            {
+                long dx = gcx[0] - gcx[1], dy = gcy[0] - gcy[1];
+                if (dx * dx + dy * dy <= (long)(2 * gk.face_r) * (2 * gk.face_r))
+                    fprintf(stderr, "  %s: A and B overlap\n", gn[i].name);
+                CHECK(dx * dx + dy * dy > (long)(2 * gk.face_r) * (2 * gk.face_r));
+            }
+
+            /* INSIDE THE PANEL, INSIDE THE STRIP, CLEAR OF MENU AND THE PAD. */
+            for (int k = 0; k < 2; k++) {
+                CHECK(gcx[k] - gk.face_r >= 0);
+                CHECK(gcx[k] + gk.face_r <= W - 1);
+                CHECK(gcy[k] - gk.face_r >= gk.strip.y);
+                CHECK(gcy[k] + gk.face_r <= gk.strip.y + gk.strip.h - 1);
+                CHECK(gcx[k] - gk.face_r > gk.menu.x + gk.menu.w);
+                CHECK(gcx[k] - gk.face_r > gk.dpad_cx + gk.dpad_r);
+            }
+            CHECK(gk.menu.w >= 16 && gk.menu.h >= 16);
+
+            /* ALL FOUR PILLS STAY, unlike ROWS6 -- a GBA has L and R, they are
+               a LEFT one and a RIGHT one, and this row's outermost two slots
+               are the only left/right pair the strip has. That pair is most of
+               why this system is in this layout at all, so its absence would
+               be the bug and not a cosmetic loss. */
+            CHECK(gk.l1.w > 16 && gk.l1.h > 16);
+            CHECK(gk.r1.w > 16 && gk.r1.h > 16);
+            CHECK(gk.select.w > 16 && gk.start.w > 16);
+            CHECK(gk.l1.x + gk.l1.w <= gk.select.x);
+            CHECK(gk.select.x + gk.select.w <= gk.start.x);
+            CHECK(gk.start.x + gk.start.w <= gk.r1.x);
+            CHECK(gk.r1.x + gk.r1.w <= W);
+        }
+
+        /* AND IT ALL REACHES THE PANEL, on the one verified panel. Two discs
+           carrying the console's own labels -- and, the check this
+           arrangement exists for, NOTHING DRAWN AT THE PANEL'S TOP-LEFT
+           CORNER, where the two unused discs would land. Every geometry check
+           above passes with chrome.c drawing four discs; only the pixels can
+           tell. */
+        koboy_config gc; config_defaults(&gc);
+        gc.layout_mode = config_layout_for_rom("x.gba");
+        config_lcd_pad_for_rom(&gc.layout, "x.gba");
+        koboy_profile gp;
+        CHECK(config_resolve_profile(&gp, &gc, 1264, 1680, 240, 160, 240, 160));
+        chrome_lcd_controls gk;
+        memset(&gk, 0, sizeof gk);
+        chrome_lcd_layout(&gp, &gk);
+
+        memset(fb, 0x7F, (size_t)1264 * 1680);
+        chrome_render(fb, 1264, &gp, &gc.layout);
+
+        int fr2 = gk.face_r * 7 / 10;
+        struct { int cx, cy; const char *says; } glab[2] = {
+            { gk.a_cx, gk.a_cy, gc.layout.lcd.a },
+            { gk.b_cx, gk.b_cy, gc.layout.lcd.b },
+        };
+        for (int k = 0; k < 2; k++) {
+            int bx = glab[k].cx - fr2, by = glab[k].cy - fr2, side = 2 * fr2;
+            int fill_v = fb[(by + side - 4) * 1264 + bx + 3];
+            int glyph = 0;
+            for (int y = by + 3; y < by + side - 3; y++)
+                for (int x = bx + 3; x < bx + side - 3; x++)
+                    if (fb[y * 1264 + x] != fill_v) glyph++;
+            int expect = label_glyph_px(glab[k].says, side, side);
+            CHECK(expect > 20);
+            if (glyph != expect)
+                fprintf(stderr, "  GBA disc %d says %d px, \"%s\" is %d\n",
+                        k, glyph, glab[k].says, expect);
+            CHECK_EQ_INT(glyph, expect);
+        }
+
+        /* THE CORNER IS BARE. A disc drawn at (0,0) is a quarter circle of
+           face_r, so a square of face_r + 1 from the origin holds all of it.
+           Compared against the pixel at the very corner rather than against a
+           constant, so this is "the corner is one uniform tone" and not "the
+           corner is the tone I expected today". */
+        {
+            int corner_v = fb[0];
+            int odd = 0;
+            for (int y = 0; y <= gk.face_r; y++)
+                for (int x = 0; x <= gk.face_r; x++)
+                    if (fb[y * 1264 + x] != corner_v) odd++;
+            if (odd)
+                fprintf(stderr, "  %d px drawn in the top-left corner: "
+                                "a face disc at the origin\n", odd);
+            CHECK_EQ_INT(odd, 0);
+        }
+    }
+
     /* EXTREME PANELS, where the strip's two live guards actually fire. Both
        are about REACHABILITY, not memory, and neither can be reached on any
        supported panel -- which is exactly why they need a case here rather

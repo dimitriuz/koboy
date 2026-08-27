@@ -284,6 +284,20 @@ TEST_MAIN({
                                                          this core will refuse,
                                                          not a BIOS we hide */
 
+    /* .gba, and the reason it gets more lines than an unambiguous extension
+       normally would is that it is the FIRST one in this list whose strict
+       PREFIX is also listed. `.gb` and `.gba` are both content, for different
+       cores, so an allowlist that matched by prefix rather than by suffix
+       would list a Game Boy Advance cartridge as a Game Boy one -- and the
+       browser would look right, because both would appear. */
+    CHECK_EQ_INT(romlist_is_rom("Metroid Fusion (USA).gba"), 1);
+    CHECK_EQ_INT(romlist_is_rom("METROID FUSION (USA).GBA"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Golden Sun (USA, Europe).GbA"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Tetris.gb"), 1);       /* still a Game Boy   */
+    CHECK_EQ_INT(romlist_is_rom("Metroid Fusion.gbax"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Metroid Fusion.agb"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Metroid Fusion.ga"), 0);
+
     /* Superstring and prefix for the four new extensions. */
     CHECK_EQ_INT(romlist_is_rom("Sonic.mdx"), 0);
     CHECK_EQ_INT(romlist_is_rom("Sonic.m"), 0);

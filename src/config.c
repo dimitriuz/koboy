@@ -318,6 +318,31 @@ static const struct { const char *ext; const char *core; int ceiling; } g_core_b
        titles) need a system-card BIOS that is not ours to ship. Both
        exclusions are argued at length in scripts/build-pce-core.sh. */
     { ".pce", "mednafen_pce_fast_libretro.so", 0 }, /* PC Engine, beetle-pce-fast */
+    /* GAME BOY ADVANCE, and this is the SECOND system the v1 design spec
+       ruled out on CPU grounds that turned out to be playable. SNES was the
+       first; that is what made this one worth re-testing rather than
+       inheriting. scripts/build-gba-core.sh carries the three-core shootout
+       and TESTED.md the device figures.
+
+       ONE EXTENSION, and for once there is no argument to have: .gba has
+       never meant anything else. The owner's tree is 1693 files and every one
+       of them ends .gba -- no .agb, no .bin, no copier convention, nothing
+       like the .smc/.sfc split or the .bin contest the Mega Drive lost.
+
+       CEILING 4, AND IT IS THE TIGHTEST CONSTRAINT ON THIS SYSTEM. A GBA
+       frame is 240x160 with square pixels, so an uncapped auto-fit takes
+       scale 5 and presents 1200x800 -- 960,000 pixels, HALF AS MANY AGAIN as
+       the Mega Drive rect that was measured throttling its own core (645,120,
+       and capping it returned three Sega systems to ~97.7% of full speed).
+       video_submit costs roughly 4.7 ms + 20.7 ns/px, so those 960,000 pixels
+       are ~24.6 ms of presentation against a 16.7 ms frame; the emulator
+       would be starved by the picture. Scale 4 is 960x640 = 614,400 px, which
+       is a shade UNDER the capped Mega Drive's rect and therefore inside
+       ground this project has already measured. The device figures are in
+       TESTED.md; do not raise this without re-measuring, because the core
+       here is far more expensive than Genesis Plus GX and has less headroom
+       to give away. */
+    { ".gba", "gpsp_libretro.so", 4 }, /* Game Boy Advance, gpSP -- ceiling above */
     /* THE FIRST EXTENSION IN THIS TABLE THAT IS NOT A SYSTEM'S OWN, and the
        decision behind it is the interesting part of adding arcade.
        An arcade "ROM" is a ZIP of the individual EPROM dumps off one PCB,
@@ -463,6 +488,44 @@ int config_layout_for_rom(const char *rom_path)
     if (ends_with_ext(rom_path, ".sfc")) return KOBOY_LAYOUT_LCD;
     if (ends_with_ext(rom_path, ".smc")) return KOBOY_LAYOUT_LCD;
     if (ends_with_ext(rom_path, ".md"))  return KOBOY_LAYOUT_LCD;
+    /* THE GAME BOY ADVANCE IS HERE FOR A DIFFERENT REASON FROM THE OTHER
+       THREE, and the difference is worth stating because the rule above --
+       "their pads do not fit the DMG faceplate" -- does NOT send it here.
+
+       It fits. A GBA is a d-pad, A, B, START, SELECT and two shoulders; the
+       DMG faceplate has A, B, START, SELECT, MENU and two spare disc pockets,
+       so L and R would both have a home and nothing would be unreachable. By
+       the reachability test alone this system belongs with the other eleven
+       and moving it would be churn.
+
+       WHAT SENDS IT HERE IS WHERE THE TWO SPARE POCKETS ARE. They are FACE
+       pockets -- (905, 790), and the stacked column at (470, 700)/(470, 830)
+       -- one below the A disc and two between the d-pad and B. A GBA's L and
+       R are not face buttons: they are a LEFT one and a RIGHT one, at
+       opposite ends of the machine, and every title's own control screen
+       treats them as a pair with a side each. The DMG faceplate has no
+       position that says "left shoulder" and no position that says "right"; a
+       disc in the middle of the case saying L is a control in the wrong
+       PLACE, which this project has already had to write down once (see the
+       Mega Drive's X and Z in config_lcd_pad_for_rom) and which it treats as
+       a real cost rather than a cosmetic one.
+
+       The LCD strip has exactly one left/right pair -- the outermost two
+       slots of its lower band, drawn narrower than SELECT and START so they
+       read as shoulders -- and that is where L and R go. It also has a face
+       arrangement per system, so a GBA gets TWO discs rather than the
+       diamond's four; see KOBOY_LCD_FACE_PAIR2 in koboy.h for why four would
+       be an invention and not a rounding error.
+
+       AND IT COSTS NOTHING IN PICTURE, which is the part that would have
+       decided it the other way. Measured on a 1264x1680 panel, resolving a
+       240x160 frame through config_resolve_profile_par in both layouts at
+       this system's ceiling of 4: DMG gives 960x640 at (152, 84), LCD gives
+       960x640 at (152, 310). The same rect, the same scale, the same
+       integer 4x -- the ceiling binds before either layout's own limit does,
+       so the only difference is that the LCD centres it vertically instead of
+       parking it under the top bezel. */
+    if (ends_with_ext(rom_path, ".gba")) return KOBOY_LAYOUT_LCD;
     return KOBOY_LAYOUT_DMG;
 }
 
@@ -601,6 +664,40 @@ void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path)
         snprintf(l->lcd.l1, sizeof l->lcd.l1, "%s", "L");
         snprintf(l->lcd.r1, sizeof l->lcd.r1, "%s", "R");
         snprintf(l->lcd.select, sizeof l->lcd.select, "%s", "SELECT");
+        return;
+    }
+
+    /* THE GAME BOY ADVANCE, whose whole control set is A, B, L, R, START and
+       SELECT -- and whose retropad map is the identity, read off gpSP's own
+       descriptor block (libretro/libretro.c, set_input_descriptors):
+
+         JOYPAD_B -> B     JOYPAD_A -> A     JOYPAD_L -> L     JOYPAD_R -> R
+         JOYPAD_START -> Start        JOYPAD_SELECT -> Select
+
+       So unlike the Mega Drive there is nothing to transpose, and unlike the
+       SNES there is nothing to shorten: the labels below are the console's
+       own names and they happen to be the retropad's too.
+
+       THEY ARE SET EXPLICITLY ANYWAY, for the reason the SNES's are: a test
+       can then assert that a .gba really was recognised here, and an empty
+       field is indistinguishable from "no case matched".
+
+       WHAT THE OTHER TWO RETROPAD BITS DO, so nobody looks for the discs:
+       gpSP binds JOYPAD_X and JOYPAD_Y to "Turbo A" and "Turbo B", and
+       JOYPAD_R2 to a fast-forward. All three are front-end conveniences that
+       no Game Boy Advance has, and none is reachable here -- deliberately.
+       That is the whole argument for KOBOY_LCD_FACE_PAIR2 (koboy.h): a disc
+       labelled X that fires A twenty times a second is a control the hardware
+       does not have, which is the defect this layout was built to stop. */
+    if (ends_with_ext(rom_path, ".gba")) {
+        l->lcd.face = KOBOY_LCD_FACE_PAIR2;
+        snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "A");
+        snprintf(l->lcd.b, sizeof l->lcd.b, "%s", "B");
+        snprintf(l->lcd.l1, sizeof l->lcd.l1, "%s", "L");
+        snprintf(l->lcd.r1, sizeof l->lcd.r1, "%s", "R");
+        snprintf(l->lcd.select, sizeof l->lcd.select, "%s", "SELECT");
+        /* x and y are left cleared, and that is not an omission: PAIR2 draws
+           no disc for either bit, so a label for one could never appear. */
         return;
     }
 

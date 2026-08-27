@@ -291,6 +291,18 @@ TEST_MAIN({
         CHECK_EQ_INT(config_layout_for_rom("SUPER METROID.SMC"), KOBOY_LAYOUT_LCD);
         CHECK_EQ_INT(config_layout_for_rom("Sonic.md"), KOBOY_LAYOUT_LCD);
         CHECK_EQ_INT(config_layout_for_rom("SONIC.MD"), KOBOY_LAYOUT_LCD);
+        /* The Game Boy Advance is on the strip for a reason the other three
+           do not share: its pad FITS the DMG faceplate (A, B, START, SELECT
+           and two spare pockets is exactly enough), and it is here because
+           the two spare pockets are FACE pockets while L and R are a left one
+           and a right one. The strip's outermost two pills are the only
+           left/right pair koboy draws. See config_layout_for_rom. */
+        CHECK_EQ_INT(config_layout_for_rom("Metroid Fusion.gba"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("/r/GBA/METROID FUSION.GBA"), KOBOY_LAYOUT_LCD);
+        /* And .gb is NOT .gba: the prefix collision that .sms/.smc already
+           cost this project a round on, from the other side. */
+        CHECK_EQ_INT(config_layout_for_rom("tetris.gb"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("zelda.gbc"), KOBOY_LAYOUT_DMG);
 
         /* THE THREE NEAR MISSES, and each is a real trap rather than a
            formality.
@@ -350,6 +362,57 @@ TEST_MAIN({
         CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("tetris.gb"), false);
         CHECK_EQ_INT(config_lcd_rect_from_max_for_rom(""), false);
         CHECK_EQ_INT(config_lcd_rect_from_max_for_rom(NULL), false);
+    }
+
+    /* THE GAME BOY ADVANCE'S CEILING, and it is the tightest cap in the
+     * table because a GBA frame is the smallest one koboy scales UP the most.
+     * 240x160 with square pixels auto-fits to scale 5 on the verified panel:
+     * 1200x800, 960,000 px -- half as many again as the Mega Drive rect that
+     * was measured throttling its own core, and that one was capped. Scale 4
+     * is 614,400, a shade under the capped Mega Drive's, which is ground this
+     * project has already measured.
+     *
+     * The PAIR shape again, for the same reason: only a capped and an uncapped
+     * resolve at identical geometry measures the cap rather than the
+     * arithmetic. */
+    {
+        koboy_config gc; config_defaults(&gc);
+        gc.layout_mode = config_layout_for_rom("Golden Sun.gba");
+        gc.lcd_rect_from_max = config_lcd_rect_from_max_for_rom("Golden Sun.gba");
+        gc.scale_ceiling = config_scale_ceiling_for_rom("Golden Sun.gba");
+        CHECK_EQ_INT(gc.scale_ceiling, 4);
+        CHECK(!gc.lcd_rect_from_max);
+
+        koboy_profile gp;
+        CHECK(config_resolve_profile(&gp, &gc, 1264, 1680, 240, 160, 240, 160));
+        CHECK_EQ_INT(gp.scale, 4);
+        CHECK_EQ_INT(gp.game_w, 240 * 4);
+        CHECK_EQ_INT(gp.game_h, 160 * 4);
+        int gtop = chrome_controls_top(KOBOY_LAYOUT_LCD, &gc.layout, 1264, 1680);
+        CHECK(gp.game_y + gp.game_h <= gtop);
+
+        /* The control: the SAME resolver, the SAME geometry, no ceiling --
+           which takes the whole panel width and 1.73x the area. */
+        koboy_config uc = gc;
+        uc.scale_ceiling = 0;
+        koboy_profile up;
+        CHECK(config_resolve_profile(&up, &uc, 1264, 1680, 240, 160, 240, 160));
+        CHECK_EQ_INT(up.game_w, 1264);
+        CHECK(up.game_w * up.game_h > gp.game_w * gp.game_h * 17 / 10);
+
+        /* AND THE PICTURE IS THE SAME IN THE OTHER LAYOUT, which is what
+           makes the layout choice free. Same rect, same scale; only the
+           vertical position differs, because the DMG faceplate parks it under
+           the top bezel and the strip centres it. If this ever stops holding,
+           config_layout_for_rom's argument needs re-making. */
+        koboy_config dc = gc;
+        dc.layout_mode = KOBOY_LAYOUT_DMG;
+        koboy_profile dp;
+        CHECK(config_resolve_profile(&dp, &dc, 1264, 1680, 240, 160, 240, 160));
+        CHECK_EQ_INT(dp.scale, gp.scale);
+        CHECK_EQ_INT(dp.game_w, gp.game_w);
+        CHECK_EQ_INT(dp.game_h, gp.game_h);
+        CHECK_EQ_INT(dp.game_x, gp.game_x);
     }
 
     /* THE PER-SYSTEM SCALE CEILING SURVIVES THE MOVE TO THE LCD LAYOUT.
@@ -1209,6 +1272,28 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("A.chd"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.toc"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.m3u"), "gambatte_libretro.so") == 0);
+
+        /* .gba -> gpSP. The SECOND system the v1 spec ruled out on CPU
+           grounds and the measurement overturned; see TESTED.md.
+
+           THE PREFIX COLLISION IS THE POINT HERE, and it runs BOTH WAYS,
+           which no other row in this table does. `.gb` is a strict prefix of
+           `.gba`, and both are claimed -- by different cores. Matched by the
+           table's order alone this would be a coin flip; matched by
+           ends_with_ext it is not, and these six lines are what says so. A
+           .gba routed to gambatte is a Game Boy emulator handed a 32 MB ARM
+           cartridge, and a .gb routed to gpSP is the reverse. */
+        CHECK(strcmp(config_core_for_rom("METROID.gba"), "gpsp_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("METROID.GBA"), "gpsp_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("METROID.Gba"), "gpsp_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/gba/Golden Sun (USA, Europe).gba"),
+                     "gpsp_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("ZELDA.gb"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("ZELDA.gbc"), "gambatte_libretro.so") == 0);
+        /* ...and neither claims the other's near misses. */
+        CHECK(strcmp(config_core_for_rom("A.gbax"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.agb"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.ga"),   "gambatte_libretro.so") == 0);
 
         /* Superstring and prefix for the four new extensions, the same guard
            every other row gets. `.md` is the dangerous one this time: two

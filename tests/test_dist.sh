@@ -75,6 +75,14 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
         echo "FAIL: ships a KoboRoot.tgz"; exit 1
     fi
 
+    # EVERY SHIPPED CORE IS NAMED HERE, and the last three were added after
+    # this list was found to have DRIFTED: snes9x2005 and beetle-pce-fast had
+    # been shipping for a batch without an entry, and gpSP was added to the
+    # dist rule's prerequisites but not to its `cp` block -- a package that
+    # built, zipped and passed everything while missing a whole system's core.
+    # The failure is silent by construction: a listed .gba loads nothing and
+    # says "cannot open core", which reads as a broken emulator. When a core
+    # is added to the Makefile, it goes here in the same commit.
     for f in .adds/koboy/koboy .adds/koboy/koboy-probe .adds/koboy/koboy.sh \
              .adds/koboy/koboy.ini .adds/koboy/gambatte_libretro.so \
              .adds/koboy/gw_libretro.so \
@@ -86,6 +94,9 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
              .adds/koboy/gearcoleco_libretro.so \
              .adds/koboy/freeintv_libretro.so \
              .adds/koboy/genesis_plus_gx_libretro.so \
+             .adds/koboy/snes9x2005_libretro.so \
+             .adds/koboy/mednafen_pce_fast_libretro.so \
+             .adds/koboy/gpsp_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
              .adds/koboy/README.md .adds/koboy/TESTED.md \
              .adds/koboy/roms/README.txt; do
@@ -114,7 +125,13 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # (galaga.zip). An arcade set is content exactly like a .nes is, and it is
     # the first content type whose extension collides with the container it
     # would be smuggled in.
-    BAD='\.(min|nes|gb|gbc|mgw|ws|wsc|ngp|ngc|a26|col|int|sms|gg|zip|srm|ngf|flash|rom|bin)$'
+    #
+    # .sfc/.smc/.pce/.gba joined later, and one extension CANNOT join: `.md`.
+    # The package deliberately carries README.md and TESTED.md, so a `md` alt
+    # here would fail every build. That is the same collision src/config.c
+    # refused `.bin` over, from the packaging side, and it is why the Mega
+    # Drive has no entry in this guard.
+    BAD='\.(min|nes|gb|gbc|gba|mgw|ws|wsc|ngp|ngc|a26|col|int|sms|gg|sfc|smc|pce|zip|srm|ngf|flash|rom|bin)$'
     if unzip -Z1 "$Z" | grep -qiE "$BAD"; then
         echo "FAIL: the package contains content or a BIOS:"
         unzip -Z1 "$Z" | grep -iE "$BAD"
@@ -127,7 +144,7 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # to copy anything for. Extracted and read, not assumed from the Makefile.
     rd=$(mktemp -d)
     unzip -qo "$Z" .adds/koboy/roms/README.txt -d "$rd"
-    for ext in .gb .gbc .mgw .nes .min .ws .wsc .ngp .ngc .a26 .col .int .sms .gg .zip; do
+    for ext in .gb .gbc .gba .mgw .nes .min .ws .wsc .ngp .ngc .a26 .col .int .sms .gg .zip; do
         grep -qF -- "$ext" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not mention $ext"; rm -rf "$rd"; exit 1; }
     done

@@ -250,8 +250,18 @@ static void recompute_lcd(koboy_input *in, uint16_t b)
            form is inert twice over, since chrome_lcd_layout zeroes the pills
            under ROWS6 and in_rect_xywh cannot match a zero-width rect. */
         uint16_t hit = 0;
-        if (in_circle(x, y, c.x_cx, c.x_cy, c.face_r)) hit |= KOBOY_BTN_X;
-        if (in_circle(x, y, c.y_cx, c.y_cy, c.face_r)) hit |= KOBOY_BTN_Y;
+        /* GATED ON face_n, NOT ON THE ZERO. PAIR2 (a Game Boy Advance) leaves
+           x_* and y_* at the origin because that machine has no third and
+           fourth face button -- and unlike an absent PILL, an absent DISC is
+           not inert on its own: in_circle(x, y, 0, 0, face_r) matches every
+           touch within face_r of the panel's top-left corner, which is inside
+           the game rect on every panel koboy supports. The same hazard
+           koboy.h's koboy_extra_btn note records for r == 0, from the other
+           direction. */
+        if (c.face_n >= 4) {
+            if (in_circle(x, y, c.x_cx, c.x_cy, c.face_r)) hit |= KOBOY_BTN_X;
+            if (in_circle(x, y, c.y_cx, c.y_cy, c.face_r)) hit |= KOBOY_BTN_Y;
+        }
         if (in_circle(x, y, c.a_cx, c.a_cy, c.face_r)) hit |= KOBOY_BTN_A;
         if (in_circle(x, y, c.b_cx, c.b_cy, c.face_r)) hit |= KOBOY_BTN_B;
         if (c.face_n == 6) {
