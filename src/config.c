@@ -100,6 +100,7 @@ void config_defaults(koboy_config *c)
        which needs a drag that a drawn cross gives no hint of: the user could not
        steer at all in relative mode and could immediately in cross mode. Set
        dpad_mode = relative for the thumb-pad behaviour. */
+    c->pixel_aspect = true;
     c->dpad_mode = KOBOY_DPAD_CROSS;
     c->dpad_deadzone = 24;
     c->dpad_hysteresis = 10;
@@ -691,6 +692,7 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "cleanup_interval")) c->cleanup_interval = atoi(v);
         else if (!strcmp(k, "cleanup_max_ms"))   c->cleanup_max_ms = atoi(v);
         else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v, c->force_dither);
+        else if (!strcmp(k, "pixel_aspect"))     c->pixel_aspect = as_bool(v, c->pixel_aspect);
         else if (!strcmp(k, "grab_input"))       c->grab_input   = as_bool(v, c->grab_input);
         else if (!strcmp(k, "dpad_deadzone"))    c->dpad_deadzone = atoi(v);
         else if (!strcmp(k, "dpad_hysteresis"))  c->dpad_hysteresis = atoi(v);

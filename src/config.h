@@ -36,6 +36,16 @@ typedef struct {
                                      every absolute timing this project has
                                      measured moved by up to a factor of 2.2
                                      between sessions -- see config/koboy.ini. */
+    bool     pixel_aspect;       /* honour a core's reported pixel aspect. ON by
+                                    default -- eight systems render wrongly
+                                    without it, the Atari 2600 by 1.75x. It is a
+                                    key rather than a constant because it
+                                    changed the presentation of every system but
+                                    the Game Boy and Game & Watch, and NONE of
+                                    that has been seen on a real panel: if
+                                    non-integer scaling turns out to read badly
+                                    on e-ink, this is the way back without a
+                                    rebuild. Same reasoning as gray_map. */
     bool     force_dither;
     /* koboy_gray_map, held as an int for the same reason dpad_mode is: this
        struct is memset to zero and parsed from text, and an enum-typed field

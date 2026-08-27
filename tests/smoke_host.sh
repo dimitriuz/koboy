@@ -116,6 +116,42 @@ echo "$out" | grep -q "game 800x720" || {
     exit 1; }
 echo "PASS smoke_host pixel aspect 800x720 square / 960x720 at 4:3"
 
+# ...and `pixel_aspect = false` puts it back, end to end. The correction
+# changed the presentation of EIGHT systems and none of it has been seen on an
+# e-ink panel, so there has to be a way back that is not a rebuild -- the same
+# argument that made gray_map a key. Asserted through the real binary because
+# the value is read in main.c: config.c could parse the key perfectly and
+# main.c still ignore it, which is the wire this file exists to test.
+d_pa=$(mktemp -d)
+cat > "$d_pa/off.ini" <<EOF
+pixel_aspect = false
+EOF
+rc=0
+out=$(KOBOY_STUB_ASPECT=1.33333 SDL_VIDEODRIVER=dummy ./build/koboy \
+        --config "$d_pa/off.ini" --core build/stub_core.so --rom "$ROM" \
+        --panel 1264x1680 --frames 3 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: pixel_aspect=false run exited $rc"; echo "$out"; rm -rf "$d_pa"; exit 1; }
+# Asserted as the ABSENCE of the widened rect, not the presence of the square
+# one. "game 800x720" is also what the PLACEHOLDER profile line says before the
+# core's geometry is known, and that line is printed on every run whatever the
+# aspect -- so grepping for it passes with the key honoured, ignored, or never
+# parsed at all. Confirmed: both mutants (main.c ignoring the key, config.c
+# never parsing it) sailed through that version of this check.
+#
+# 960x720 appears only on the re-resolved line, which is emitted only when the
+# aspect actually widens the rect. Its absence is therefore the thing that can
+# only be true when the key was read AND honoured, and the positive half is
+# already asserted twenty lines above.
+echo "$out" | grep -q "game 960x720" && {
+    echo "FAIL: pixel_aspect=false still widened the rect"
+    echo "$out" | grep -E "game [0-9]+x[0-9]+"
+    rm -rf "$d_pa"; exit 1; }
+echo "$out" | grep -q "presented=" || {
+    echo "FAIL: pixel_aspect=false run never reached the emulator loop"
+    rm -rf "$d_pa"; exit 1; }
+rm -rf "$d_pa"
+echo "ok: pixel_aspect = false restores the square-pixel presentation"
+
 # The startup flow (MAIN MENU -> ALL GAMES -> the browser) is invisible to
 # every other test in this suite, because they all pass --rom and take the
 # MODE_PLAY fast path straight past it. That is precisely the shape of the

@@ -69,9 +69,24 @@ static uint16_t on_input(void *ud) { return input_state((koboy_input *)ud)->butt
    KOBOY_ASPECT_ONE for a square-pixel core, which is what makes every rect and
    every fit below identical to what they were before non-square pixels
    existed. Base and not max: see config_resolve_profile_par in config.h. */
-static uint32_t core_par(const koboy_core *c, int base_w, int base_h)
+/* The core's DISPLAY aspect as the pipeline should treat it: what the core
+   reported, or "absent" when the owner has turned the correction off. Every
+   reader of the core's aspect goes through this or through core_par below --
+   video_set_aspect included, which is a second path into the same decision
+   and would otherwise leave video scaling corrected while the rect was not. */
+static uint32_t core_aspect(const koboy_config *cfg, const koboy_core *c)
 {
-    return video_pixel_aspect(core_display_aspect(c), base_w, base_h);
+    return cfg->pixel_aspect ? core_display_aspect(c) : 0u;
+}
+
+static uint32_t core_par(const koboy_config *cfg, const koboy_core *c,
+                         int base_w, int base_h)
+{
+    /* The one place the pixel_aspect key is read, so turning it off cannot
+       leave half the pipeline corrected and half not: every rect and every
+       fit downstream derives from this value, and KOBOY_ASPECT_ONE is
+       exactly what they all saw before non-square pixels existed. */
+    return video_pixel_aspect(core_aspect(cfg, c), base_w, base_h);
 }
 
 static const char *layout_name(int mode)
@@ -1034,7 +1049,7 @@ int main(int argc, char **argv)
            filled rbw/rbh -- computing it here would read them uninitialised. */
         uint32_t rpar = prof_par;
         if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
-            ((rpar = core_par(core, rbw, rbh)) != prof_par ||
+            ((rpar = core_par(&cfg, core, rbw, rbh)) != prof_par ||
              rbw != prof.base_w || rbh != prof.base_h ||
              rmw != prof.max_w  || rmh != prof.max_h ||
              cfg.layout_mode != prof.layout_mode)) {
@@ -1084,7 +1099,7 @@ int main(int argc, char **argv)
        frames are to be PRESENTED, both are lost when a koboy_video is
        destroyed, and a presentation that has one without the other is wrong
        in a way that looks like a broken core rather than a missing line. */
-    if (vid) video_set_aspect(vid, core_display_aspect(core));
+    if (vid) video_set_aspect(vid, core_aspect(&cfg, core));
     if (vid) say("koboy: gray_map %s\n", video_gray_map_name(video_get_gray_map(vid)));
     if (vid && core_rotation(core))
         say("koboy: core asked for %u quarter turn%s; presenting %dx%d\n",
@@ -1465,8 +1480,8 @@ int main(int argc, char **argv)
                too), and every pixel of the fit moves when it does -- hence the
                invalidate, which prev would otherwise make a half-old frame
                out of. Cheap when nothing changed: one uint32 compare. */
-            if (video_get_aspect(vid) != core_display_aspect(core)) {
-                video_set_aspect(vid, core_display_aspect(core));
+            if (video_get_aspect(vid) != core_aspect(&cfg, core)) {
+                video_set_aspect(vid, core_aspect(&cfg, core));
                 video_invalidate(vid);
             }
             int rbw, rbh, rmw, rmh;
@@ -1488,7 +1503,7 @@ int main(int argc, char **argv)
                and gambatte never sends these commands at all). */
             uint32_t rpar2 = prof_par;
             if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
-                ((rpar2 = core_par(core, rbw, rbh)) != prof_par ||
+                ((rpar2 = core_par(&cfg, core, rbw, rbh)) != prof_par ||
                  rbw != prof.base_w || rbh != prof.base_h ||
                  rmw != prof.max_w  || rmh != prof.max_h)) {
                 /* A pixel-aspect change re-fits the RECT, not just the frame
@@ -1542,7 +1557,7 @@ int main(int argc, char **argv)
                    WonderSwan toggling its display orientation mid-session is
                    the case that exercises it. */
                 if (vid) video_set_rotation(vid, (int)core_rotation(core));
-                if (vid) video_set_aspect(vid, core_display_aspect(core));
+                if (vid) video_set_aspect(vid, core_aspect(&cfg, core));
                 if (!vid) {
                     fatal("out of memory");
                     mode = MODE_QUIT;
