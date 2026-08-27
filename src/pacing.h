@@ -17,6 +17,27 @@ typedef struct { uint64_t start_us, frames; int divisor; uint32_t frame_us; } ko
    a zero would make every frame due at start_us -- an unpaced spin. */
 void     pacer_init(koboy_pacer *p, uint64_t now_us, int divisor, uint32_t frame_us);
 
+/* Change how many core frames pass per presented frame, on a RUNNING pacer.
+
+   For the in-game FRAMES entry (src/main.c), which is a subjective judgement
+   about how a reflective panel looks in motion and therefore has to be
+   changeable while the game is on the panel. Deliberately NOT a plain
+   assignment at the call site: `divisor > 0 ? divisor : 1` is the guard that
+   keeps pacer_tick's `frames % divisor` from dividing by zero, and a second
+   copy of it at a second call site is the way that guard eventually goes
+   missing from one of them.
+
+   Unlike pacer_set_frame_us this does NOT rebase, and must not: the pacer's
+   wall clock is start_us + frames * frame_us, which the divisor does not
+   appear in at all -- it selects which of those core frames reach the panel,
+   not when any of them are due. What DOES change is the phase: the next
+   presented frame is the next one whose index is a multiple of the new
+   divisor, so raising it mid-run can delay presentation by up to
+   divisor - 1 core frames (134 ms at the top of the shipped ladder, 60 Hz).
+   That is invisible next to the panel's own latency, and main.c's
+   return-from-menu path repaints unconditionally anyway. */
+void     pacer_set_divisor(koboy_pacer *p, int divisor);
+
 /* Re-anchor the wall clock to `now_us` WITHOUT touching the frame counter.
 
    For coming back from a UI mode. Rebasing the clock is necessary -- a menu

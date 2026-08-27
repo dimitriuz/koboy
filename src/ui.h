@@ -87,6 +87,24 @@ void      ui_fit_label(const char *s, int avail_px, int px,
    worth reading. Always NUL-terminated; truncates rather than overruns. */
 void      ui_gray_label(char *out, size_t outsz, koboy_gray_map map);
 
+/* The in-game MENU's FRAMES row, e.g. "FRAMES: EVERY 3RD" -- and, for a
+   divisor of 1, "FRAMES: EVERY FRAME", because "EVERY 1ST" is not English.
+
+   Here rather than in main.c for exactly the reason ui_gray_label is: main.c
+   is not linked into the test binaries (the Makefile's SRC filter), so a
+   label built inline there could be asserted against nothing, and a row that
+   always read "FRAMES" would look right on the panel and prove nothing.
+
+   The word is FRAMES and not `present_divisor` on purpose. The menu is read
+   by someone holding the device, and "how many core frames pass per presented
+   frame" is a sentence about the implementation; "every 3rd" is a sentence
+   about what they are about to see.
+
+   Accepts any int -- the ordinal rule is the general one and is tested past
+   the range the clamp permits. Always NUL-terminated; truncates rather than
+   overruns. */
+void      ui_divisor_label(char *out, size_t outsz, int divisor);
+
 #define UI_TITLE_CHARS 40
 
 /* Builds a breadcrumb title -- `head` alone when `sub` is empty, otherwise

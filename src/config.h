@@ -170,6 +170,51 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b);
    setting, not two: the menu writes the same key config_load reads. */
 bool config_save_gray_map(const char *path, koboy_gray_map map);
 
+/* Is `v` a present_divisor koboy will actually run at? [1, KOBOY_PRESENT_DIVISOR_MAX].
+
+   A predicate rather than a clamp, because the two answers a clamp could give
+   are both wrong. Clamping a hand-edited `present_divisor = 0` (or a
+   non-numeric value, which atoi also reports as 0) DOWN to 1 hands the user
+   the fastest-smearing setting there is -- the measured worst of the three
+   values anyone has looked at, see KOBOY_PRESENT_DIVISOR_DEFAULT -- as the
+   consequence of a typo. Clamping `= 100000` down to 8 silently invents an
+   intent nobody expressed. Rejecting keeps the default, which is the one
+   value a full game has been played at.
+
+   The lower bound is load-bearing beyond taste: pacer_tick computes
+   `frames % divisor`, so a zero that reached the pacer would be a division by
+   zero. pacer_set_divisor guards that too -- this is the belt, that is the
+   braces, and neither should be removed on the grounds that the other exists. */
+bool config_present_divisor_ok(int v);
+
+/* The next value the in-game FRAMES entry should show, given the current one:
+   the first entry above `cur` on the shipped ladder, wrapping to the lowest.
+
+   The LADDER, and why it is not simply 1..8. What the user is trading is
+   PRESENTED frames per second, which goes as 1/divisor, so equal steps in the
+   divisor are wildly unequal steps in the thing being judged -- 1 to 2 halves
+   the presented rate, 7 to 8 moves it by an eighth. 1, 2, 3, 4, 6, 8 keeps
+   every step worth looking at and keeps the cycle short, which matters
+   because selecting this row returns to the GAME (that is the point of it),
+   so each step costs two taps.
+
+   Off-ladder values are not an error and are not snapped: an ini saying 5 or
+   7 is inside the valid range, runs as written, and cycles UP to the next
+   ladder entry rather than jumping somewhere unrelated. Anything at or above
+   the top wraps to the bottom, which is also what a value the ladder does not
+   contain does at the top of the range. */
+int  config_next_present_divisor(int cur);
+
+/* Rewrites `path` with exactly one `present_divisor = N` line, the same way
+   config_save_gray_map does for the greyscale mapping and through the same
+   rewrite_ini underneath.
+
+   Refuses a value config_present_divisor_ok rejects rather than writing it:
+   the ini key and the menu entry are ONE setting, and a file holding a value
+   config_load throws away is exactly the disagreement between them that
+   having one key exists to prevent. */
+bool config_save_present_divisor(const char *path, int divisor);
+
 /* Should a frame whose dirty rect covers dirty_px of a whole_px game rect be
    promoted from the fast waveform to the flashing one? Lives here, and is
    tested, because the shipped default turns the promotion off and "off" is only

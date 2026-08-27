@@ -34,9 +34,20 @@ TEST_MAIN({
     pacer_init(&q, 0, 1, 0);
     CHECK(pacer_tick(&q)); CHECK(pacer_tick(&q)); CHECK(pacer_tick(&q));
 
-    /* a nonsense divisor is clamped rather than dividing by zero */
+    /* A nonsense divisor is clamped rather than dividing by zero.
+
+       THE FIELD IS ASSERTED FIRST, and that ordering is the point. Until this
+       line existed, the only thing here was the pacer_tick below, which with
+       an unclamped 0 computes `frames % 0` -- undefined behaviour that on
+       x86-64 raises SIGFPE and kills the process before the harness can print
+       a single FAIL. Mutation-checked while adding pacer_set_divisor: the
+       binary exited 136 having said nothing at all, so a reader of the output
+       could not tell a broken clamp from a broken test. Same class as the
+       chrome_bands guard band in CLAUDE.md's testing-culture note: stop
+       observing the UB, assert the clamped value. */
     koboy_pacer r;
     pacer_init(&r, 0, 0, 0);
+    CHECK_EQ_INT(r.divisor, 1);
     CHECK(pacer_tick(&r));
 
     /* Coming back from a UI mode REBASES the clock and KEEPS the count.
@@ -187,5 +198,51 @@ TEST_MAIN({
         /* 0 means the Game Boy's rate here too, not "unpaced". */
         pacer_set_frame_us(&s, 5000000, 0);
         CHECK_EQ_INT(s.frame_us, KOBOY_FRAME_US);
+    }
+
+    /* Changing the DIVISOR mid-run, which is what the in-game FRAMES entry
+       does. Distinct from the block above in what it must NOT touch: the
+       divisor is not in the pacer's wall-clock model at all, so a
+       pacer_set_divisor that rebased (or that reset the frame counter, the
+       bug pacer_rebase exists to avoid) would break a --frames budget and the
+       core's timing for a setting that has nothing to do with either. */
+    {
+        koboy_pacer d;
+        pacer_init(&d, 1000, 3, 0);
+        for (int i = 0; i < 12; i++) pacer_tick(&d);      /* 4 presented of 12 */
+        uint64_t start_before = d.start_us;
+
+        pacer_set_divisor(&d, 6);
+        CHECK_EQ_INT(d.divisor, 6);
+        CHECK_EQ_INT(d.frames, 12);                       /* budget survives */
+        CHECK_EQ_INT(d.start_us, start_before);           /* clock untouched */
+        CHECK_EQ_INT(d.frame_us, KOBOY_FRAME_US);         /* rate untouched */
+
+        /* And it takes effect on the NEXT tick, which is the whole claim the
+           menu entry makes. Counting presented frames rather than reading
+           d.divisor back is what makes this able to tell 3 from 6: frame 12
+           presents under both (12 % 3 == 12 % 6 == 0), and only the twelve
+           frames after it separate them -- 4 presented at 3, 2 at 6. */
+        int presented = 0;
+        for (int i = 0; i < 12; i++) presented += pacer_tick(&d) ? 1 : 0;
+        CHECK_EQ_INT(presented, 2);
+
+        pacer_set_divisor(&d, 3);
+        presented = 0;
+        for (int i = 0; i < 12; i++) presented += pacer_tick(&d) ? 1 : 0;
+        CHECK_EQ_INT(presented, 4);
+
+        /* THE DIVIDE-BY-ZERO GUARD, live. pacer_tick computes
+           frames % divisor, so a 0 reaching the pacer is not a wrong picture,
+           it is a SIGFPE. config_present_divisor_ok rejects such a value
+           before it ever gets here; this is the second of the two guards, and
+           neither should be deleted on the grounds that the other exists. */
+        pacer_set_divisor(&d, 0);
+        CHECK_EQ_INT(d.divisor, 1);
+        pacer_set_divisor(&d, -7);
+        CHECK_EQ_INT(d.divisor, 1);
+        presented = 0;
+        for (int i = 0; i < 5; i++) presented += pacer_tick(&d) ? 1 : 0;
+        CHECK_EQ_INT(presented, 5);                       /* 1 means every frame */
     }
 })

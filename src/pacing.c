@@ -5,11 +5,18 @@
 #define KOBOY_FPS_MIN  10.0
 #define KOBOY_FPS_MAX 300.0
 
+/* Contract in pacing.h. The clamp is HERE and only here, so pacer_init and the
+   in-game FRAMES entry cannot disagree about what a nonsense divisor means. */
+void pacer_set_divisor(koboy_pacer *p, int divisor)
+{
+    p->divisor = divisor > 0 ? divisor : 1;
+}
+
 void pacer_init(koboy_pacer *p, uint64_t now_us, int divisor, uint32_t frame_us)
 {
     p->start_us = now_us;
     p->frames = 0;
-    p->divisor = divisor > 0 ? divisor : 1;
+    pacer_set_divisor(p, divisor);
     p->frame_us = frame_us ? frame_us : (uint32_t)KOBOY_FRAME_US;
 }
 

@@ -46,7 +46,7 @@ void config_defaults(koboy_config *c)
        only through the drawn faceplate, same as they always were. */
     c->key_start = KOBOY_KEY_BTN_TL;
     c->key_select = KOBOY_KEY_BTN_TR;
-    c->present_divisor = 3;
+    c->present_divisor = KOBOY_PRESENT_DIVISOR_DEFAULT;
     /* Ghosting mitigation, DISABLED BY DEFAULT, and the history matters
        because "off" looks like an oversight otherwise.
 
@@ -883,7 +883,15 @@ bool config_load(koboy_config *c, const char *path)
             c->scale = atoi(v);
             c->scale_explicit = (c->scale != KOBOY_SCALE_LEGACY_DEFAULT);
         }
-        else if (!strcmp(k, "present_divisor"))  c->present_divisor = atoi(v);
+        /* REJECTED, not clamped, and not accepted as written: see
+           config_present_divisor_ok in config.h for why neither clamp
+           direction is defensible. atoi gives 0 for a non-numeric value too,
+           so `present_divisor = fast` lands here and keeps the default rather
+           than dividing by zero in pacer_tick. */
+        else if (!strcmp(k, "present_divisor")) {
+            int d = atoi(v);
+            if (config_present_divisor_ok(d)) c->present_divisor = d;
+        }
         else if (!strcmp(k, "cleanup_interval")) c->cleanup_interval = atoi(v);
         else if (!strcmp(k, "cleanup_max_ms"))   c->cleanup_max_ms = atoi(v);
         else if (!strcmp(k, "force_dither"))     c->force_dither = as_bool(v, c->force_dither);
@@ -1294,5 +1302,40 @@ bool config_save_gray_map(const char *path, koboy_gray_map map)
     snprintf(block, sizeof block,
              "# written by the in-game GREYSCALE menu entry\ngray_map = %s\n",
              video_gray_map_name(map));
+    return rewrite_ini(path, drop, 1, block);
+}
+
+/* The values the in-game FRAMES entry cycles through, ascending. Contract and
+   the reasoning for these six and not 1..8 are on config_next_present_divisor
+   in config.h. Kept here, in the one file that both the loader and the menu's
+   policy live in, so the ini's valid range and the menu's offer cannot drift:
+   tests/test_config.c asserts the last entry is KOBOY_PRESENT_DIVISOR_MAX. */
+static const int PRESENT_DIVISOR_LADDER[] = { 1, 2, 3, 4, 6, 8 };
+#define PRESENT_DIVISOR_LADDER_N \
+    ((int)(sizeof PRESENT_DIVISOR_LADDER / sizeof PRESENT_DIVISOR_LADDER[0]))
+
+bool config_present_divisor_ok(int v)
+{
+    return v >= 1 && v <= KOBOY_PRESENT_DIVISOR_MAX;
+}
+
+int config_next_present_divisor(int cur)
+{
+    for (int i = 0; i < PRESENT_DIVISOR_LADDER_N; i++)
+        if (PRESENT_DIVISOR_LADDER[i] > cur) return PRESENT_DIVISOR_LADDER[i];
+    return PRESENT_DIVISOR_LADDER[0];
+}
+
+bool config_save_present_divisor(const char *path, int divisor)
+{
+    static const char *const drop[] = { "present_divisor" };
+    char block[128];
+    /* Checked before the write, not after: rewrite_ini would happily produce a
+       file config_load then ignores, and a menu whose choice silently does not
+       survive the relaunch is worse than one that reports it could not save. */
+    if (!config_present_divisor_ok(divisor)) return false;
+    snprintf(block, sizeof block,
+             "# written by the in-game FRAMES menu entry\npresent_divisor = %d\n",
+             divisor);
     return rewrite_ini(path, drop, 1, block);
 }

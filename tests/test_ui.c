@@ -698,4 +698,72 @@ TEST_MAIN({
         ui_gray_label(guard, 0, KOBOY_GRAY_DEFAULT);
         CHECK_EQ_INT(guard[0], 'Q');
     }
+
+    /* ------------------------------------------- the MENU's FRAMES row
+       Every value the shipped ladder can put on the panel, spelled out in
+       full rather than rebuilt from the same format string the implementation
+       uses -- a check that formats its own expectation agrees with any
+       format. The strings are the assertion. */
+    {
+        static const struct { int d; const char *want; } cases[] = {
+            /* The whole ladder. */
+            { 1, "FRAMES: EVERY FRAME" },
+            { 2, "FRAMES: EVERY 2ND"   },
+            { 3, "FRAMES: EVERY 3RD"   },
+            { 4, "FRAMES: EVERY 4TH"   },
+            { 6, "FRAMES: EVERY 6TH"   },
+            { 8, "FRAMES: EVERY 8TH"   },
+            /* In range but off-ladder: an ini can say either, so the row has
+               to read correctly for them too. */
+            { 5, "FRAMES: EVERY 5TH"   },
+            { 7, "FRAMES: EVERY 7TH"   },
+            /* Past the clamp. Unreachable from the menu today, and asserted
+               anyway: the function is public, takes an int, and these are the
+               cases the single-digit ordinal shortcut would have got wrong
+               ("11ST") the day KOBOY_PRESENT_DIVISOR_MAX is raised. Cheap
+               here, silent and wrong there. */
+            { 11, "FRAMES: EVERY 11TH" },
+            { 12, "FRAMES: EVERY 12TH" },
+            { 13, "FRAMES: EVERY 13TH" },
+            { 21, "FRAMES: EVERY 21ST" },
+            { 22, "FRAMES: EVERY 22ND" },
+            { 23, "FRAMES: EVERY 23RD" },
+            { 111, "FRAMES: EVERY 111TH" },
+            /* Nonsense in, English out: no "EVERY 0TH", no "EVERY -1ST". */
+            { 0,  "FRAMES: EVERY FRAME" },
+            { -3, "FRAMES: EVERY FRAME" },
+        };
+        char lab[64];
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            ui_divisor_label(lab, sizeof lab, cases[i].d);
+            CHECK(strcmp(lab, cases[i].want) == 0);
+            if (strcmp(lab, cases[i].want) != 0)
+                fprintf(stderr, "  divisor %d gave \"%s\"\n", cases[i].d, lab);
+        }
+
+        /* Distinct rows for distinct values -- a label that dropped the number
+           would look plausible on the panel and say nothing. */
+        char a[64], b[64];
+        ui_divisor_label(a, sizeof a, 3);
+        ui_divisor_label(b, sizeof b, 6);
+        CHECK(strcmp(a, b) != 0);
+
+        /* Fits a MENU row on the narrowest supported panel. */
+        for (int d = 1; d <= KOBOY_PRESENT_DIVISOR_MAX; d++) {
+            ui_divisor_label(lab, sizeof lab, d);
+            CHECK((int)strlen(lab) <= UI_TITLE_CHARS);
+        }
+
+        /* Truncates rather than overruns, and always terminates. */
+        char tiny[6];
+        memset(tiny, 'Z', sizeof tiny);
+        ui_divisor_label(tiny, sizeof tiny, 3);
+        CHECK_EQ_INT((int)strlen(tiny), 5);
+        CHECK(strcmp(tiny, "FRAME") == 0);
+
+        /* A zero-size buffer writes nothing at all. */
+        char guard2[2] = { 'Q', 'Q' };
+        ui_divisor_label(guard2, 0, 3);
+        CHECK_EQ_INT(guard2[0], 'Q');
+    }
 })

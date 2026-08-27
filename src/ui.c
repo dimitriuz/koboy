@@ -164,6 +164,35 @@ void ui_gray_label(char *out, size_t outsz, koboy_gray_map map)
     out[i] = '\0';
 }
 
+/* The general English ordinal rule, not the single-digit shortcut, even though
+   the clamp (config_present_divisor_ok) means only 1..8 can reach here from
+   the menu today. ui_divisor_label takes an int and tests/test_ui.c calls it
+   with 11, 12, 13 and 21 directly, so this branch is reachable and failable by
+   a test -- which the shortcut's 11 -> "11ST" would not have been, and which
+   is the whole difference between a guard and a comment. */
+static const char *ordinal_suffix(int n)
+{
+    int last2 = n % 100, last1 = n % 10;
+    if (last2 >= 11 && last2 <= 13) return "TH";
+    if (last1 == 1) return "ST";
+    if (last1 == 2) return "ND";
+    if (last1 == 3) return "RD";
+    return "TH";
+}
+
+/* Contract, and why it is not in main.c, in ui.h. */
+void ui_divisor_label(char *out, size_t outsz, int divisor)
+{
+    if (!out || outsz == 0) return;
+    /* "EVERY 1ST" is not English, and a divisor of 1 is the one value whose
+       meaning a reader is most likely to want stated outright. Anything at or
+       below 1 lands here, so a nonsense value cannot print a nonsense ordinal
+       -- config_load already rejects those, but this function is public and
+       takes an int. */
+    if (divisor <= 1) { snprintf(out, outsz, "FRAMES: EVERY FRAME"); return; }
+    snprintf(out, outsz, "FRAMES: EVERY %d%s", divisor, ordinal_suffix(divisor));
+}
+
 void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
 {
     if (!out || !outsz) return;

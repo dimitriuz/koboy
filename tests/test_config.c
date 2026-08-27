@@ -1297,4 +1297,166 @@ TEST_MAIN({
 
         remove(path); remove(dir);
     }
+
+    /* ----------------------------------------- present_divisor as a setting
+       The in-game FRAMES entry and the ini key are ONE setting, so what the
+       menu can produce and what the loader will accept are tested together. */
+    {
+        char dir[] = "/tmp/koboy_div_XXXXXX";
+        CHECK(mkdtemp(dir) != NULL);
+        char path[512];
+        snprintf(path, sizeof path, "%s/koboy.ini", dir);
+
+        koboy_config c; config_defaults(&c);
+        CHECK_EQ_INT(c.present_divisor, KOBOY_PRESENT_DIVISOR_DEFAULT);
+        CHECK_EQ_INT(KOBOY_PRESENT_DIVISOR_DEFAULT, 3);   /* the shipped value */
+
+        /* THE LADDER, walked once around. Written as an expected SEQUENCE
+           rather than as a loop over the same table the implementation uses:
+           a loop reading config.c's own array would agree with any array. */
+        {
+            static const int want[] = { 2, 3, 4, 6, 8, 1 };
+            int d = 1;
+            for (int i = 0; i < 6; i++) {
+                d = config_next_present_divisor(d);
+                CHECK_EQ_INT(d, want[i]);
+            }
+            /* Six steps is a full cycle: back where it started. */
+            CHECK_EQ_INT(d, 1);
+            /* The ladder's top IS the range's top. If these ever disagree the
+               menu offers a value config_load throws away, or the ini permits
+               one the menu can never return to. */
+            CHECK_EQ_INT(config_next_present_divisor(KOBOY_PRESENT_DIVISOR_MAX - 1),
+                         KOBOY_PRESENT_DIVISOR_MAX);
+            CHECK_EQ_INT(config_next_present_divisor(KOBOY_PRESENT_DIVISOR_MAX), 1);
+
+            /* Off-ladder but in range: cycles UP to the next rung, it does not
+               snap sideways or stick. 5 and 7 are the only two such values. */
+            CHECK_EQ_INT(config_next_present_divisor(5), 6);
+            CHECK_EQ_INT(config_next_present_divisor(7), 8);
+            /* And a value the clamp would have rejected still leaves the menu
+               somewhere usable rather than looping on itself. */
+            CHECK_EQ_INT(config_next_present_divisor(0), 1);
+            CHECK_EQ_INT(config_next_present_divisor(-4), 1);
+            CHECK_EQ_INT(config_next_present_divisor(99999), 1);
+        }
+
+        /* THE RANGE. */
+        CHECK(config_present_divisor_ok(1));
+        CHECK(config_present_divisor_ok(3));
+        CHECK(config_present_divisor_ok(KOBOY_PRESENT_DIVISOR_MAX));
+        CHECK(!config_present_divisor_ok(0));
+        CHECK(!config_present_divisor_ok(-1));
+        CHECK(!config_present_divisor_ok(KOBOY_PRESENT_DIVISOR_MAX + 1));
+
+        /* Every in-range value round-trips through the file, INCLUDING the
+           off-ladder 5 and 7: the ini is not restricted to what the menu
+           cycles, and a loader that quietly snapped to the nearest rung would
+           be a different setting from the one documented. Started from a
+           fresh config each time so nothing carries over. */
+        for (int d = 1; d <= KOBOY_PRESENT_DIVISOR_MAX; d++) {
+            FILE *f = fopen(path, "w");
+            CHECK(f != NULL);
+            fprintf(f, "present_divisor = %d\n", d);
+            fclose(f);
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.present_divisor, d);
+        }
+
+        /* THE REJECTION PATH, which is the one with teeth: 0 reaching
+           pacer_tick is a division by zero, not a wrong picture.
+
+           Each case is driven from a NON-DEFAULT prior value (a preceding
+           `present_divisor = 6` line in the same file), so the assertion can
+           tell "the bad value was rejected and 6 kept" from "the bad value
+           was rejected and everything reset to the default 3" -- and, more
+           to the point, from "the bad value was accepted", which asserting
+           against the default 3 could not distinguish from a loader that
+           simply never read the key at all. */
+        {
+            static const char *const bad[] = {
+                "0", "-1", "-999", "9", "100000", "fast", "", "3.9",
+            };
+            /* 3.9 is here because atoi truncates it to 3, which IS in range:
+               it must therefore be ACCEPTED as 3, not rejected. Listed with
+               the rejects on purpose, so the expectation below has to name
+               each outcome rather than assume one rule fits all eight. */
+            static const int want[] = { 6, 6, 6, 6, 6, 6, 6, 3 };
+            for (int i = 0; i < 8; i++) {
+                FILE *f = fopen(path, "w");
+                CHECK(f != NULL);
+                fprintf(f, "present_divisor = 6\npresent_divisor = %s\n", bad[i]);
+                fclose(f);
+                config_defaults(&c);
+                CHECK(config_load(&c, path));
+                CHECK_EQ_INT(c.present_divisor, want[i]);
+            }
+        }
+
+        /* config_save_present_divisor: writes the key, preserves the rest,
+           and stays idempotent -- the same three properties config_save_keys
+           and config_save_gray_map are held to, through the same rewrite_ini
+           underneath. */
+        {
+            FILE *f = fopen(path, "w");
+            CHECK(f != NULL);
+            fputs("# a comment\nscale = 4\npresent_divisor = 3\n"
+                  "grab_input = false\n", f);
+            fclose(f);
+            CHECK(config_save_present_divisor(path, 6));
+
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.present_divisor, 6);
+            CHECK_EQ_INT(c.scale, 4);
+            CHECK_EQ_INT(c.grab_input, 0);
+
+            f = fopen(path, "r");
+            CHECK(f != NULL);
+            char line[1024]; int nkey = 0, ncomment = 0;
+            while (fgets(line, sizeof line, f))
+                { if (strstr(line, "present_divisor")) nkey++;
+                  if (strstr(line, "a comment")) ncomment++; }
+            fclose(f);
+            CHECK_EQ_INT(nkey, 1);
+            CHECK_EQ_INT(ncomment, 1);
+
+            /* A second save replaces rather than appends, and lands on a
+               value distinguishable from the first. */
+            CHECK(config_save_present_divisor(path, 8));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.present_divisor, 8);
+
+            /* REFUSES a value config_load would then throw away, and leaves
+               the file alone when it does. A writer that produced
+               `present_divisor = 0` would give a menu whose choice silently
+               did not survive the relaunch -- exactly the file/menu
+               disagreement one shared key exists to prevent. */
+            CHECK(!config_save_present_divisor(path, 0));
+            CHECK(!config_save_present_divisor(path, -1));
+            CHECK(!config_save_present_divisor(path, KOBOY_PRESENT_DIVISOR_MAX + 1));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.present_divisor, 8);      /* the refused writes changed nothing */
+
+            /* The two ini writers do not clobber each other's key. They share
+               rewrite_ini, so a regression in the shared drop-filter shows up
+               as one erasing the other -- the mutant that was actually caught
+               when gray_map's writer was added. 304/305, not the 193/194
+               defaults, for the reason spelled out at that check. */
+            CHECK(config_save_keys(path, 304, 305));
+            CHECK(config_save_gray_map(path, KOBOY_GRAY_VALUE));
+            CHECK(config_save_present_divisor(path, 4));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.present_divisor, 4);
+            CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_VALUE);
+            CHECK_EQ_INT(c.key_a, 304);
+            CHECK_EQ_INT(c.key_b, 305);
+        }
+
+        remove(path); remove(dir);
+    }
 })

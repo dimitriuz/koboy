@@ -342,8 +342,8 @@ static bool load_rom_into(koboy_core *core, koboy_config *cfg,
 }
 
 enum {
-    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_CHOOSE_ROM,
-    MENU_RESUME, MENU_QUIT,
+    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_FRAMES,
+    MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
     MENU_COUNT
 };
 
@@ -355,16 +355,18 @@ enum {
    nobody knows the value of. */
 static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                     int stride, int pw, int ph, bool has_states,
-                    koboy_gray_map map,
-                    const koboy_input_state *script, int script_n)
+                    koboy_gray_map map, int divisor,
+                    const koboy_input_state *script, int *script_i, int script_n)
 {
     const char *items[MENU_COUNT];
-    static char gray_label[48];
+    static char gray_label[48], divisor_label[48];
     ui_gray_label(gray_label, sizeof gray_label, map);
+    ui_divisor_label(divisor_label, sizeof divisor_label, divisor);
     items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
     items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
     items[MENU_RESET]       = "RESET GAME";
     items[MENU_GRAY]        = gray_label;
+    items[MENU_FRAMES]      = divisor_label;
     items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
     items[MENU_RESUME]      = "RESUME";
     items[MENU_QUIT]        = "QUIT";
@@ -374,10 +376,11 @@ static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    /* NULL script_i: run_menu is never scripted (see run_list's own comment
-       on why -- no --ui-script hook reaches here), so there is no cursor to
-       share across screens. */
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, NULL, script_n, -1);
+    /* The cursor is shared with every other screen a --ui-script run drives:
+       the `menu` verb opens this screen from inside the emulator loop, and
+       whatever the script has left over goes on driving it. See run_list's
+       script_i comment. */
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
     if (pick < 0) return MENU_RESUME;
     if ((pick == MENU_SAVE || pick == MENU_LOAD) && !has_states) return MENU_RESUME;
     return pick;
@@ -1216,6 +1219,12 @@ int main(int argc, char **argv)
     uint32_t frame_us = pacer_frame_us_from_fps(core_hz);
     say("koboy: core reports %.4f fps; pacing at %u us/frame\n", core_hz, frame_us);
     pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor, frame_us);
+    /* Read back off the LIVE pacer, not off cfg, for the reason the gray_map
+       line above it is: a log line that reports what config.c parsed proves
+       config.c, while this one fails if main.c hands the pacer the wrong
+       value -- which is the plumbing nothing else can see. It is also the
+       only place the clamp inside pacer_set_divisor is observable. */
+    say("koboy: present_divisor %d\n", pace.divisor);
 
     koboy_stats stats;
     stats_reset(&stats);
@@ -1242,7 +1251,8 @@ int main(int argc, char **argv)
         if (input_take_menu_request(in)) {
             size_t ssz = core_state_size(core);
             int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
-                               (koboy_gray_map)cfg.gray_map, NULL, 0);
+                               (koboy_gray_map)cfg.gray_map, cfg.present_divisor,
+                               NULL, NULL, 0);
 
             if (act == MENU_SAVE || act == MENU_LOAD) {
                 int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
@@ -1310,6 +1320,43 @@ int main(int argc, char **argv)
                     say("koboy: gray_map = %s (this session only -- "
                         "could not write %s)\n",
                         video_gray_map_name((koboy_gray_map)cfg.gray_map), ini_path);
+            } else if (act == MENU_FRAMES) {
+                /* Cycles and returns to the GAME, exactly like GREYSCALE above
+                   and for the same reason: how many updates per second an
+                   e-ink panel wants is a judgement about smearing against
+                   choppiness, and it can only be made while looking at the
+                   game in motion.
+
+                   THE LADDER GOES ABOVE THE DEFAULT, which is the point of
+                   this entry rather than an afterthought. Residue accumulates
+                   per panel UPDATE, so the untested direction -- fewer
+                   updates -- is the one the evidence points at, and every
+                   value ever tried was 3 or below (docs/FOLLOWUPS.md #26).
+
+                   No pacer_rebase and no video_invalidate needed here beyond
+                   what the return-from-menu path below already does: the
+                   divisor changes WHICH core frames reach the panel, not what
+                   any of them contain and not when the core runs, so nothing
+                   half-drawn can survive it. The unconditional redraw_chrome
+                   + video_invalidate below is what puts a whole frame back on
+                   the panel after the menu, and it runs whatever was picked.
+
+                   Live immediately: pacer_set_divisor changes the running
+                   pacer, so the very next presented frame is already on the
+                   new pacing -- no reload, and nothing stale in between,
+                   because the pacer holds no per-divisor state other than the
+                   divisor itself. */
+                cfg.present_divisor = config_next_present_divisor(cfg.present_divisor);
+                pacer_set_divisor(&pace, cfg.present_divisor);
+                /* One setting, two doors. A failure to write is not fatal and
+                   must not be silent -- the new pacing is live for this
+                   session either way, it just will not survive a relaunch
+                   (a read-only .adds being the likely cause). */
+                if (config_save_present_divisor(ini_path, cfg.present_divisor))
+                    say("koboy: present_divisor = %d\n", cfg.present_divisor);
+                else
+                    say("koboy: present_divisor = %d (this session only -- "
+                        "could not write %s)\n", cfg.present_divisor, ini_path);
             } else if (act == MENU_QUIT) {
                 mode = MODE_QUIT;
             } else if (act == MENU_CHOOSE_ROM) {

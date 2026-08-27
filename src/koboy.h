@@ -7,6 +7,30 @@
 #define KOBOY_GB_W 160
 #define KOBOY_GB_H 144
 #define KOBOY_FRAME_US 16742          /* 1e6 / 59.7275 */
+
+/* present_divisor: core frames run per frame sent to the panel. The core is
+   paced at its own rate regardless (pacer_delay_us), so this trades PRESENTED
+   frame rate for something the frame counter cannot see -- e-ink residue,
+   which accumulates per panel UPDATE and not per second. Fewer updates, less
+   smearing, choppier motion.
+
+   3 is the shipped default and the only value a full game has been played at.
+   MEASURED (docs/FOLLOWUPS.md #26, Darkwing Duck, 600 core frames): 3 -> 76
+   presented, 2 -> 102, 1 -> 115, at an unchanged 10.24 s wall clock, and the
+   owner judged 2 "the same or even worse" on the panel. Every value tried
+   before this task was 3 or below; the direction the evidence points is UP,
+   which is why the in-game FRAMES entry offers 4, 6 and 8.
+
+   The MAX is a usability floor, not a technical one. At 8 the ceiling is 7.5
+   presented frames per second on a 60 Hz core, which is already at the
+   measured presented rate of the shipped default (7.4 fps) -- above it the
+   divisor stops being what limits the picture and video_submit's ~17 ms does
+   (docs/FOLLOWUPS.md #23), so raising it further costs motion and buys
+   nothing. It is also what stops a hand-edited `present_divisor = 100000`
+   from looking exactly like a hang: config_load rejects anything outside
+   [1, MAX] and keeps the default. */
+#define KOBOY_PRESENT_DIVISOR_DEFAULT 3
+#define KOBOY_PRESENT_DIVISOR_MAX     8
 /* 16.16 fixed point 1.0. The unit for every aspect ratio this project
    carries, and fixed point rather than float for the reason the scaler is:
    the numbers end up in the pixel path, and nothing in the pixel path
