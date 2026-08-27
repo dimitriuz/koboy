@@ -894,3 +894,144 @@ rect resolved for a different aspect: the rebuild path runs, so it should be
 fine, but no core in reach announces an aspect change at all (measured: the
 Game & Watch core, the only one that re-announces anything, reports
 `aspect_ratio = 0` on all 59 titles). Nothing to do until a core does it.
+
+## Mega Drive, SNES and PC Engine (added 2026-08-27)
+
+Fourteen systems now. The device was off the LAN for the whole session --- it
+did not answer ICMP, let alone port 22, from the first probe to the last ---
+so everything below is host-side, and item 67 is the consequence.
+
+### 67. THE BIGGEST ONE: SNES and PC Engine are presented at less than half the Game Boy's area, because the rect is sized from a MAX geometry neither core ever draws
+
+Measured through koboy's own pipeline on the verified 1264x1680 panel:
+
+| System | core frame | core's declared max | presented | pixels |
+|---|---|---|---|---|
+| Game Boy | 160x144 | 160x144 | 800x720 | 576,000 |
+| Mega Drive | 320x224 | 348x240 | 878x672 | 590,016 |
+| PC Engine | 352x243 | **512x243** | 583x486 | **283,338** |
+| SNES | 256x224 | **512x512** | 597x448 | **267,456** |
+
+`config_resolve_profile` sizes the reserved rect as `max_w x max_h` times an
+integer scale. snes9x2005 declares 512x512 for an interlaced hi-res mode that
+almost nothing uses, and a 512-tall reservation cannot exceed scale 1 under
+`chrome_controls_top` --- so a SNES game is presented at 597x448 where sizing
+from its ACTUAL 256x224 frame would allow roughly 896x672, about **2.2x the
+area**. Mega Drive escapes because its max (348x240) is close to its real
+frame.
+
+This is the same family as #51 and is unfixed for the same reason: the fix is
+in `video.c`/`config.c`'s fitting path, which is the one presentation this
+project has verified on hardware. It is nonetheless the **largest single
+presentation win available**, and worth more to a player than any core-speed
+work.
+
+**Two things to know before attempting it.** First, "size from base instead of
+max" is not safe on its own: the max exists so a core that grows its frame
+mid-run has somewhere to put it, and PC Engine grows its frame mid-run
+constantly (see #69). Something like "size from the largest base seen so far,
+re-fit upward when it grows" is the shape, and it must not thrash. Second and
+less obvious: **a bigger rect costs more `video_submit`**, which is still the
+bottleneck (#23), so these two systems' per-frame CPU budgets SHRINK as their
+pictures grow. SNES currently gets a 12.1 ms budget partly because it is being
+presented small. Fixing the picture and fixing the speed pull in opposite
+directions here, and the trade should be made deliberately rather than
+discovered.
+
+### 68. Every device figure for these three systems rests on a TWO-POINT FIT whose two points disagree
+
+`scripts/corebench.c` re-measured the only two cores with real on-device
+numbers. A single host-to-device ratio does not fit both:
+
+| core | host (corebench) | device `core` (TESTED.md) | implied ratio |
+|---|---|---|---|
+| gambatte, Zelda | 98.2 us | 2.3 ms | 23.4x |
+| fceumm, SMB / Kirby | 258.0 us | 4.3--4.6 ms | 17.2x |
+
+The linear fit `device ~= 13.45 * host + 979 us` reconciles them and has a
+physical reading (koboy's `core` stage includes per-frame front-end work that
+`corebench` does not, roughly constant per frame). But it is two points, the
+additive term is ~1 ms, and for the cheapest PC Engine titles that term is a
+third of the predicted cost.
+
+**What closes this is one ssh session**, not more analysis: run
+`build/corebench-arm` (already cross-built) on the device against three or
+four of these titles and compare. That would also settle whether the additive
+term is real or an artifact of the two host measurements being taken years and
+compilers apart from the device ones. Until then, do not compare these numbers
+with the arcade section's flat 7x --- that one scaled koboy's own instrument
+and this one scales a different one.
+
+### 69. A PC Engine resolution switch throws away the dirty-rect history, so every scene change is a full-rect redraw
+
+Titles alternate between 256 and 352 pixel widths; Military Madness does it
+five times in 2500 frames. Each switch drives `main.c`'s re-fit, which
+destroys and recreates the video pipeline --- and with it the previous-frame
+buffer the 8x8 tile diff works against, so the next submitted frame is 100%
+dirty.
+
+The presentation itself is CORRECT and better than expected (both modes have
+the same display width, so with pixel aspect on the picture is 583x486 centred
+at x=632 in both --- same size, same place). This is purely about the e-ink
+cost of the redraw, which has never been seen on a panel. On the numbers it is
+five full refreshes in ~42 seconds of play, which is roughly what
+`full_refresh_permille` was disabled for causing. Worth watching for on the
+first PC Engine playtest, and cheap to fix if it shows: a re-fit that keeps the
+same rect dimensions (which these switches do --- 850x486 and 1168x486 differ,
+but the FITTED picture does not) could preserve the diff buffer.
+
+### 70. `.sgx`, `.chd`, `.bin` and `.gen` are refused, and each will eventually be asked about
+
+Recorded so the next person answers from the decision rather than re-deriving
+it. `.bin`/`.gen` for Mega Drive: the owner ruled `.md` only, and the file
+counts back it (`.bin` belongs to 723 TI-99/4A files and eight other systems
+before it belongs to 36 Mega Drive ones, plus the two Intellivision BIOS
+files). 36 of their 1777 Mega Drive files do not list. `.sgx`: 7 files,
+beetle-pce-fast implements neither the SuperGrafx's second VDC nor its
+priority mixer, so it would draw one WRONG rather than refuse --- running
+them needs `beetle-supergrafx` or the full `beetle-pce`, i.e. a second core
+and a CPU bill, for 7 titles. `.chd`: 48 files, needs a system-card BIOS
+nobody ships plus CD emulation and a different save path. None of these is a
+bug report; if one is reopened it should be reopened as a decision.
+
+### 71. Mega Drive and SNES are the first systems where a battery save is NORMAL, and no `.srm` from either has survived a real session
+
+Every previous system was mostly saveless --- 0 bytes of `RETRO_MEMORY_SAVE_RAM`
+on all 82 Atari titles, all 28 ColecoVision, all 26 Intellivision, all 227
+arcade boards. These two are the opposite. Measured with `corebench`, which
+prints the save length at load and again after a warmup:
+
+| core | at load | running |
+|---|---|---|
+| Genesis Plus GX (Sonic, Phantasy Star IV) | 65,536 | **0** |
+| snes9x2005 (Zelda, Chrono Trigger, Metroid) | 8,192 | 8,192 |
+| snes9x2005 (Super Mario World) | 2,048 | 2,048 |
+| beetle-pce-fast (Military Madness) | 2,048 | 2,048 |
+
+So `core_sram`'s pin-at-load (`1fb3802`) is **load-bearing for Mega Drive** ---
+without it koboy would write a zero-length `.srm` over a real save --- and
+merely harmless for the other two, whose lengths are constant and per-cartridge.
+None of this has been round-tripped on hardware. Given that #3 closed by
+finding a destructive truncation bug on the FIRST battery-backed title this
+project ever ran, these two systems deserve the same treatment before anyone
+calls them done.
+
+One PC Engine oddity to know first: its battery RAM is the 2 KB "Backup Unit"
+SHARED by every title that uses it, not a per-cartridge chip. koboy names the
+`.srm` after the ROM like every other system, so each title gets its own copy
+of what real hardware shared. Correct per title and free, but not what the
+console did, and a reader will wonder.
+
+### 72. The SNES crash guard covers one core; nothing tells us which other cores do worse than refuse
+
+snes9x2005 SIGFPEs on a `.sfc`/`.smc` under 8192 bytes instead of refusing it
+(`% Memory.CalculatedSize` in `LoROMMap`, where `CalculatedSize` rounds down to
+whole 8 KB blocks). `config_min_rom_bytes` now floors it at the load site.
+
+What was NOT done is the same sweep for the other twelve cores. The sweep that
+found this one was "load all 7,741 files in the collection and see what
+happens", and it was run only for the three systems in this batch. A truncated
+download or a `._*` stub is possible for every system koboy lists, and the
+cheap version of this check is `corebench --frames 1` over a directory of
+deliberately short files, one per extension. Anything that exits 136 or 139
+rather than reporting a rejection needs a row in `config_min_rom_bytes`.
