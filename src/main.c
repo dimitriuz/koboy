@@ -1517,10 +1517,22 @@ int main(int argc, char **argv)
            did not fire, so a scripted run that somehow also sees a live MENU
            tap spends one, not both. */
         bool want_menu = input_take_menu_request(in);
-        if (!want_menu && ui_scr && script_i < ui_script_n &&
-            ui_script_menu[script_i]) {
-            script_i++;
-            want_menu = true;
+        if (!want_menu && ui_scr) {
+            /* Step over the cleared states a list screen left behind before
+               looking for a marker -- uiscript_state_is_idle says why, and
+               why this cannot swallow a tap. Without it a script can open the
+               in-game MENU exactly once: every screen selects on touch-down
+               and leaves the release, so the cursor parks on that release and
+               nothing here ever moves it again. A second `menu` verb was
+               unreachable, and so was any test that switches games twice --
+               which is the one shape the session loop most needs tested. */
+            while (script_i < ui_script_n && !ui_script_menu[script_i] &&
+                   uiscript_state_is_idle(&ui_script[script_i]))
+                script_i++;
+            if (script_i < ui_script_n && ui_script_menu[script_i]) {
+                script_i++;
+                want_menu = true;
+            }
         }
         if (want_menu) {
             size_t ssz = core_state_size(core);

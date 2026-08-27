@@ -1700,3 +1700,59 @@ echo "$out" | grep -qx "koboy: core $d_sw/genesis_plus_gx_libretro.so" || {
     echo "$out" | grep "koboy: core"; rm -rf "$d_sw" "$sw_script" "$sw_script2"; exit 1; }
 rm -rf "$d_sw" "$sw_script" "$sw_script2"
 echo "ok: a .md started from the startup RECENT list gets its own core too"
+
+# ------------------------- AND THE SAME TRIP THREE TIMES, because the session
+# loop's whole job is being re-entered. One switch proves the teardown runs;
+# it does not prove the teardown can run AGAIN -- a core handle not cleared,
+# an SRAM pointer left dangling, a video destroyed twice all survive a single
+# pass and fail on the second or third.
+#
+# gb -> md -> gb -> md, four sessions in one process. Every session must open
+# a core and wear the faceplate its own extension asks for, so the two log
+# lines have to ALTERNATE; a run that quietly stopped switching after the
+# first one would still exit 0.
+#
+# This script is also the reason the emulator loop steps over cleared states
+# while looking for a `menu` marker (uiscript_state_is_idle): without that a
+# script could open the in-game MENU exactly once, and this test could not be
+# written at all.
+d_sw3="$(mktemp -d)"
+cp build/koboy        "$d_sw3/koboy"
+cp build/stub_core.so "$d_sw3/gambatte_libretro.so"
+cp build/stub_core.so "$d_sw3/genesis_plus_gx_libretro.so"
+mkdir -p "$d_sw3/roms" "$d_sw3/save"
+printf '\0' > "$d_sw3/roms/AAA.gb"
+head -c 32768 /dev/zero > "$d_sw3/roms/ZZZ.md"
+sw3="$(mktemp)"
+# Three switches. Each is: menu, CHOOSE ROM (row 5), ALL GAMES (row 1), then
+# the browser row -- 104 for AAA.gb, 168 for ZZZ.md.
+{ printf 'menu\ntap 200 424\ntap 200 168\ntap 200 168\n'
+  printf 'menu\ntap 200 424\ntap 200 168\ntap 200 104\n'
+  printf 'menu\ntap 200 424\ntap 200 168\ntap 200 168\n'; } > "$sw3"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 60 "$d_sw3/koboy" --rom "$d_sw3/roms/AAA.gb" \
+        --rom-dir "$d_sw3/roms" --save-dir "$d_sw3/save" --ui-script "$sw3" \
+        --panel 1264x1680 --frames 200 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: switching three times exited $rc"
+    echo "$out" | tail -20; rm -rf "$d_sw3" "$sw3"; exit 1; }
+got=$(echo "$out" | grep -E "^koboy: core /" | sed "s|$d_sw3/||;s|_libretro.so||" | tr '\n' ' ')
+[ "$got" = "koboy: core gambatte koboy: core genesis_plus_gx koboy: core gambatte koboy: core genesis_plus_gx " ] || {
+    echo "FAIL: the four sessions did not alternate cores"
+    echo "      got: $got"
+    rm -rf "$d_sw3" "$sw3"; exit 1; }
+faces=$(echo "$out" | grep -c "faceplate")
+[ "$faces" -eq 4 ] || {
+    echo "FAIL: $faces faceplate lines across four sessions, wanted 4"
+    echo "$out" | grep -i faceplate; rm -rf "$d_sw3" "$sw3"; exit 1; }
+echo "$out" | grep -q '^presented=' || {
+    echo "FAIL: the fourth session never reached the emulator loop"
+    echo "$out"; rm -rf "$d_sw3" "$sw3"; exit 1; }
+# ONE summary for the run, not one per session: the counters live outside the
+# session loop precisely so `presented=` keeps meaning what it always meant.
+nsum=$(echo "$out" | grep -c '^presented=')
+[ "$nsum" -eq 1 ] || {
+    echo "FAIL: $nsum presented= lines, wanted 1 -- the run's counters went per-session"
+    rm -rf "$d_sw3" "$sw3"; exit 1; }
+rm -rf "$d_sw3" "$sw3"
+echo "ok: four sessions in one process, each with its own core and faceplate"

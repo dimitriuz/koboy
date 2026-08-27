@@ -42,6 +42,22 @@
 
 #define UISCRIPT_MAX 256
 
+/* True if `st` is a state with NOTHING pressed -- no button, no finger. That
+   is what `idle` writes, what the release half of every `tap` and `key`
+   writes, and what a `menu` marker's own (never-read) slot holds.
+
+   It exists because the emulator loop is the one consumer that cannot use
+   such a state for anything: it drives no list, so a cleared slot sitting at
+   the cursor is not an idle frame there, it is a wall. Every list screen
+   selects on touch-DOWN and leaves the matching release behind, so after a
+   script walks MAIN MENU -> ALL GAMES -> a ROM, the cursor is parked on that
+   release -- and a `menu` verb written after it could never fire, because
+   the loop only ever advances the cursor past a marker. Skipping cleared
+   states while LOOKING for a marker is what lets one script open the in-game
+   MENU more than once, which is what a test that switches games twice needs.
+   It cannot swallow a tap or a key: those states have something pressed. */
+bool uiscript_state_is_idle(const koboy_input_state *st);
+
 /* Returns the number of states written, or -1 on any error: a missing file, an
    unknown verb, a malformed argument, or a NULL array. An error must fail the
    run rather than silently pass a test that exercised nothing.

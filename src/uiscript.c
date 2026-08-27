@@ -14,6 +14,22 @@ static int push(koboy_input_state *out, unsigned char *is_menu, int *n, int max,
 
 static void clear(koboy_input_state *st) { memset(st, 0, sizeof *st); }
 
+bool uiscript_state_is_idle(const koboy_input_state *st)
+{
+    if (!st) return true;
+    /* Field by field, not memcmp against a zeroed struct: the states this
+       predicate is asked about come from clear() today, so every padding byte
+       happens to be zero and memcmp would work -- but it would silently stop
+       working the day a state arrives from anywhere else, and "nothing is
+       pressed" is a question about the FIELDS. pointer.x/y are deliberately
+       not read: they keep their last value when pressed goes false (koboy.h),
+       so a released pointer at a non-zero coordinate is still idle. */
+    if (st->buttons) return false;
+    for (int i = 0; i < KOBOY_MAX_TOUCH; i++)
+        if (st->touch[i].down) return false;
+    return !st->pointer.pressed;
+}
+
 int uiscript_load(const char *path, koboy_input_state *out,
                   unsigned char *is_menu, int max)
 {
