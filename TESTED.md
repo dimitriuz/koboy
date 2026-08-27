@@ -1772,3 +1772,53 @@ Emblem 20,223 bytes; Aria of Sorrow 32,768; Advance Wars 2 1,548 at offset
 61,440; Pokemon Mystery Dungeon 470; Metroid Fusion 192; Super Mario Advance
 2 1,504). Golden Sun, FFTA and both Pokemon titles wrote nothing, because
 none of them had reached a save point.
+
+## A ROM that will not load, on the device, 2026-08-27
+
+Reported from the device twice: **selecting a game from RECENT exits koboy
+back to Nickel.** Verified fixed on the Libra 2, with `--ui-script` runs over
+ssh (Nickel up, never `scripts/koboy.sh`), all against isolated
+`--save-dir`/`--rom-dir` trees under `/tmp` so the owner's own saves and play
+history were never written to.
+
+The failure is real rather than simulated: a 212-byte `.sfc`, which is the
+one refusal that can be produced from outside the process without a core that
+lies (`config_min_rom_bytes`; snes9x2005 SIGFPEs on it).
+
+| Path | What ran | Result |
+|---|---|---|
+| RECENT | 8,192-byte `BAD.sfc` recorded, truncated to 212, then selected | panel drew `COULD NOT LOAD / BAD.sfc / too short…`, returned to MAIN MENU, second pick (`ZGOOD.gb`) loaded and played, **exit 0** |
+| ALL GAMES | same file selected from the browser | same, and the core moved `snes9x2005 -> gambatte` and the faceplate `LCD -> DMG` on the retry |
+| MENU -> CHOOSE ROM | `menu`, CHOOSE ROM, ALL GAMES, the bad file, ALL GAMES, a good one | `switched to /tmp/kt3/roms/ZGOOD.gb`, **exit 0** |
+
+Everything derived from the extension --- core, faceplate, buttons, ceiling
+--- is re-derived per attempt, and the LCD -> DMG move in row two is the
+device's own confirmation of it.
+
+**The error message holds the panel for 20 seconds** when nothing taps: the
+run above measured exactly 20 s between the failed ROM and the MAIN MENU.
+That is `platform_kobo_fatal`'s acknowledgement wait, unchanged, now reached
+by a non-terminal message too. See `docs/FOLLOWUPS.md` #90.
+
+### The owner's corrupted RECENT row, repaired against their own file
+
+`.adds/koboy/recent.dat` (md5 `94ad597d…`, 10 entries) carried the row
+`4652789` was reported for: path `…/GBA/Advance Wars 2 - Black Hole Rising
+(USA).gba`, display `Pokemon - Emerald Version (USA, Europe).gba`. It also
+carried a second, harmless divergence nobody had noticed: `…/roms/gbc/Hamtaro
+- Ham-Hams Unite! (USA).gbc` displayed as `gbc/Hamtaro - Ham-Hams Unite!
+(USA).gbc`, a relative name left over from the flattened browser.
+
+A COPY of that file was run through the fixed binary: selecting the Advance
+Wars row loaded Advance Wars (`gpsp_libretro.so`, `gamepak code match for :
+AW2E`), and the rewritten copy names every row after its own path, both
+divergences included.
+
+**The device's own `recent.dat` was not modified** --- md5 `94ad597d…` before
+and after, with backups at `/tmp/recent.dat.bak` on the device and in the
+session scratchpad. It repairs itself the next time RECENT is opened by a
+build carrying this fix, because the derivation runs in `recent_load`.
+
+The fixed binary is on the device as `.adds/koboy/koboy-test`, beside the
+shipped `koboy`, which was left untouched: nothing launches it, so the device
+still runs exactly what it ran before.

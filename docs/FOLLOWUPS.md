@@ -1551,3 +1551,68 @@ What would settle whether it matters is a playtest. 99.1% of full speed is
 below the threshold anyone can see; the question is whether the p95 frames
 CLUSTER (a visible stutter on entering a room) or scatter. A mean cannot
 answer that and neither can `--walk`.
+
+## A failed load no longer ends the run (added 2026-08-27)
+
+### 88. The RECENT list's `display` field is now vestigial, and the record cannot shrink without a version
+
+`recent_name_from_path` derives a row's name from its path, and both
+`recent_touch` and `recent_load` call it, so nothing reads a byte of the
+stored `display` that the current build did not write. It is dead weight in a
+6,720-byte file.
+
+It stays because the record is FIXED-SIZE and that is the whole framing
+scheme: `recent_load` asks `safefile_read_exact` for exactly
+`KOBOY_RECENT_MAX * sizeof(entry)` bytes, so a length mismatch alone
+identifies a corrupt or foreign file with no version byte anywhere. Dropping
+the field changes the length, and every `recent.dat` already on a device
+becomes "foreign" and loads as EMPTY --- ten entries of play history, gone,
+to save 1,600 bytes.
+
+The cheap version of this is to keep writing the derived name into the field
+forever (what happens today) and never look at it. The real version needs a
+framing change: a version byte, or a length that is allowed to vary. Nobody
+needs it yet. Written down so that "why is this field here?" has an answer
+other than "nobody noticed".
+
+### 89. `recent_prune_missing` deletes the history of an unmounted card
+
+`access(path, F_OK)` fails for every ROM on an SD card that is not mounted,
+so opening RECENT with the card out silently drops every row that lived on
+it --- permanently, since the next successful pick writes the pruned list
+back. This predates the load-failure work and was not introduced by it, but
+the fix made it more visible: a stale row is now a recoverable, explained
+event rather than a crash, so pruning is no longer the only thing standing
+between the user and a dead row.
+
+The Libra 2 has no card slot, so this cannot bite the one verified device.
+The Clara, Elipsa and Sage entries in the panel table are a different story.
+A fix would need to distinguish "the file is gone" from "the whole mount
+point is gone" --- `stat()` the ROM's directory, or the mount root, before
+concluding anything about the file.
+
+### 90. A failed load holds the panel for 20 seconds unless someone taps
+
+`platform_kobo_fatal` draws the message and then waits for a key or a touch,
+bounded at 20 seconds so an unattended run cannot hang. That was written for
+messages that preceded an exit; it now also runs on the way BACK to the MAIN
+MENU, and a device session measured exactly 20 s of dead panel between the
+failed ROM and the menu because nothing tapped.
+
+With a user present this is right --- the message stays until they have read
+it. Unattended it costs 20 s per failed ROM, which is why the host smoke
+tests wrap these runs in `timeout 30`. If a future run ever needs to fail
+several ROMs in a row, this wait wants an argument (or a shorter deadline for
+the non-terminal case), not a deletion: an error nobody sees is the thing
+this project keeps saying it will not ship.
+
+### 91. Nothing has typed a WRONG ROM into the device's real UI by hand
+
+Every device run of this fix was `--ui-script` over ssh with Nickel up, into
+isolated `--save-dir`/`--rom-dir` trees. That covers the code path
+end-to-end, and the panel really did draw "COULD NOT LOAD". What it does not
+cover is the same failure under the takeover (`scripts/koboy.sh`), where the
+message competes with a full-screen game and the acknowledgement wait is
+serviced by a real finger on a real touchscreen rather than by a 20-second
+deadline. That is the same gap `TESTED.md` already records for MODE_MENU, and
+this adds one more thing to try in the same sitting.
