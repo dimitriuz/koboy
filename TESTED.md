@@ -1049,9 +1049,27 @@ other side.
 | Scrolling | "not bad" --- previously unplayable |
 | Residual | some background ghosting remains |
 
-**Still unknown:** which of the two 1-bit rungs is better --- the owner
-reported both as improved without separating them --- and DU has never been
-TIMED on any panel (`FOLLOWUPS` #96). `koboy-probe --coexist` measures it with
+**RESOLVED 2026-08-27, on the panel:** the two 1-bit rungs are
+**visually indistinguishable** to the owner. The win is the CONTENT being
+two-valued, not the forced waveform --- AUTO already selects something that
+completes a two-level transition. So `MENU -> MOTION`'s DU rung buys nothing
+observable, and the waveform does not belong in any model built on this.
+
+**Also measured by hand:** `present_divisor = 8` "flashes much less on
+scrolling" than 4. Presenting LESS often during a full-area change largely
+removes the wash-out --- which brackets the panel's settle time for a
+full-rect update between roughly 67 ms (divisor 4, visibly too fast) and
+133 ms (divisor 8, mostly settling in time). That bracket comes from the panel
+doing the real job, so it outranks any synthetic probe number that disagrees
+with it.
+
+The cost of that manual fix is 7.5 fps EVERYWHERE --- menus, static screens,
+and the Game & Watch titles that never scroll at all. That is what
+area-aware pacing exists to avoid.
+
+**Still unknown:** DU has never been TIMED on any panel (`FOLLOWUPS` #96);
+"identical to AUTO" and "arrives too rarely to play against" are different
+findings and this result does not separate them. `koboy-probe --coexist` measures it with
 Nickel up.
 
 **The Game Boy is the case with most to lose** and has not been judged: its
