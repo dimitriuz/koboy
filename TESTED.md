@@ -303,12 +303,17 @@ estimated from #23's 4.7 ms + 20.7 ns per destination pixel:
 | Game Gear 160x144 | 1440x1920 | 4 | 1136x960 | 960x864 | 21.9 ms |
 | (Game Boy, for scale) | 1264x1680 | 5 | 800x720 | 800x720 | 16.6 ms |
 
-**The Game Gear / Game Boy collision, handled deliberately.** A Game Gear
+**The Game Gear / Game Boy collision, handled deliberately --- AND THEN THE
+ARITHMETIC IT RELIED ON CHANGED; see the ceiling section below.** A Game Gear
 frame is 160x144 -- byte for byte the Game Boy's geometry -- and
 `config_resolve_profile` really does key its scale default on that geometry.
 It is keyed on MAX, and Genesis Plus GX reports max 284x240, so a Game Gear
-is not caught by it. It does not need to be: auto-fitting lands its picture
-at exactly **800x720**, the Game Boy's scale-5 presentation, by arithmetic.
+is not caught by it. At the time this was written it did not need to be:
+auto-fitting landed its picture at exactly **800x720**, the Game Boy's
+scale-5 presentation, by arithmetic. *That stopped being true when
+`pixel_aspect` shipped* --- the widened 192x144 rect auto-fits to 6 instead,
+and the picture jumped to 1152x864, 1.73x the area, with nothing to notice
+because the reasoning lived in a comment. A `ceiling` now holds it.
 Nothing else keys on that geometry, and in particular the greyscale mapping
 does not -- a Game Gear is a COLOUR system and gets the colour treatment.
 `tests/test_video_gray.c` pins both halves and the mutant that would have

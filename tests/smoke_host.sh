@@ -1162,8 +1162,54 @@ grep -q "^present_divisor = 4\$" "$mini" || {
     echo "FAIL: the LCD-layout menu did not write the divisor back"
     cat "$mini"; rm -rf "$d_sc" "$mini" "$mscript"; exit 1; }
 rm -f "$mini" "$mscript"
-rm -rf "$d_sc"
 echo "ok: the in-game MENU opens and acts under the LCD layout"
+
+# THE THREE SEGA CEILINGS, end to end, and they are here because these three
+# rects were the largest koboy produced and the owner reported all three as
+# slow in play. Device numbers behind each value are in src/config.c's
+# `ceiling` comment and TESTED.md.
+#
+# Each is a PAIR at identical stub geometry with only the INI differing: the
+# shipped default (which takes the ceiling) against an explicit `scale =` big
+# enough to reach the uncapped fit (which by design overrides it). That is the
+# only control available for the Game Gear, and it is the reason the whole
+# loop is written this way rather than against a .gb: a .gb at 160x144 IS the
+# Game Boy by max geometry, so it takes the measured 5 and lands on exactly
+# the answer the ceiling produces. A pair that compared those two would agree
+# with the ceiling deleted.
+#
+# The Game Gear row is the one worth reading: the SAME 160x144 frame gives
+# 960x864 uncapped and 800x720 capped, and 800x720 is the Game Boy's own
+# picture. That is where this system was believed to be for months.
+for row in "sms 256x192 4 768x576 1024x768" \
+           "gg  160x144 6 800x720 960x864" \
+           "md  320x224 6 960x672 1264x884"; do
+    set -- $row
+    ext=$1; geom=$2; free_scale=$3; want_cap=$4; want_free=$5
+    d_sg=$(mktemp -d)
+    cp build/stub_core.so "$d_sg/"
+    head -c 32768 /dev/zero > "$d_sg/GAME.$ext"
+    printf 'scale = %s\n' "$free_scale" > "$d_sg/free.ini"
+    out=$(KOBOY_STUB_GEOM=$geom SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+            --core "$d_sg/stub_core.so" --rom "$d_sg/GAME.$ext" \
+            --panel 1264x1680 --frames 2 2>&1) || {
+        echo "FAIL: .$ext ceiling run"; rm -rf "$d_sg"; exit 1; }
+    echo "$out" | grep -q "game $want_cap" || {
+        echo "FAIL: a .$ext did not take its ceiling (wanted game $want_cap)"
+        echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sg"; exit 1; }
+    out=$(KOBOY_STUB_GEOM=$geom SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+            --core "$d_sg/stub_core.so" --rom "$d_sg/GAME.$ext" \
+            --config "$d_sg/free.ini" --panel 1264x1680 --frames 2 2>&1) || {
+        echo "FAIL: .$ext uncapped control run"; rm -rf "$d_sg"; exit 1; }
+    echo "$out" | grep -q "game $want_free" || {
+        echo "FAIL: an explicit scale did not reach .$ext's uncapped $want_free,"
+        echo "      so the pair above is not measuring the ceiling"
+        echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sg"; exit 1; }
+    rm -rf "$d_sg"
+done
+echo "ok: .sms, .gg and .md each take their own measured ceiling"
+
+rm -rf "$d_sc"
 
 rm -rf "$d"
 

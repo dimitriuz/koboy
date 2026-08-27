@@ -1220,13 +1220,24 @@ today. The LCD strip would add L1/R1, which only six-button boards want (#62).
    other. Rendered both and looked: the DMG integer 3x is clean and the LCD
    fit visibly alias. This is the exact artifact `video_fit_par`'s
    integer-vertical rule was chosen to avoid.
-2. **The LCD rect is still sized from MAX, and FBNeo's max is SQUARE**
-   (side = max(w,h), so both orientations fit one buffer). A vertical board
-   therefore gets a 1216x1260 rect holding a 945x1260 picture --- 135 px of
-   permanent white band down each side, inside the recess. That is the
-   artifact this task just removed from the PC Engine, reintroduced. Fixing
-   it means base-sizing the LCD rect too, which is exactly what a Game &
-   Watch title must not have (it changes base several times a second).
+2. ~~**The LCD rect is still sized from MAX, and FBNeo's max is SQUARE**~~
+   --- **ANSWERED 2026-08-27**, by the task that moved SNES and Mega Drive
+   into this layout. Which geometry the LCD rect comes from is now a
+   PER-SYSTEM question (`config_lcd_rect_from_max_for_rom`): Game & Watch
+   keeps max because its frame changes several times a second, and anything
+   else takes base. So the objection below is no longer a reason not to move
+   arcade --- it would take base like the two consoles do, and FBNeo's square
+   max would never reach the rect.
+
+   The original text, because the artifact it describes is real for anyone
+   who reverts that flag: FBNeo's max is square (side = max(w,h), so both
+   orientations fit one buffer), so a vertical board would get a 1216x1260
+   rect holding a 945x1260 picture --- 135 px of permanent white band down
+   each side, inside the recess.
+
+   **Costs 1 and 3 below are untouched and are now the whole case.** The
+   fractional-scaling artifact on arcade pixel art was rendered and looked
+   at; FBNeo has still never been benchmarked on the device.
 3. **Cost.** 1.2 Mpx is SNES-at-scale-4 territory, and that is the size that
    cost Kirby 18 points of speed. **FBNeo has never been benchmarked on the
    device at all** (#56 is still open), so there is no number to weigh this

@@ -466,16 +466,56 @@ TEST_MAIN({
             unlink(path);
         }
 
-        /* A system with no ceiling is untouched by any of this -- the Mega
-           Drive fits fractionally to the panel width, which is the point of
-           the layout. Same call, same resolver, different system. */
+        /* THE SYSTEM IN THIS LAYOUT THAT HAS NO CEILING still fits
+           fractionally to the panel width, which is the point of the layout
+           and the thing a cap applied to everybody would destroy. Game &
+           Watch is that system -- a .mgw title's whole purpose here is to
+           fill the panel -- so it is the honest control rather than a config
+           with the field hand-zeroed. */
         koboy_config mc; config_defaults(&mc);
-        mc.layout_mode = KOBOY_LAYOUT_LCD;
-        CHECK_EQ_INT(config_scale_ceiling_for_rom("Sonic.md"), 0);
-        mc.scale_ceiling = config_scale_ceiling_for_rom("Sonic.md");
+        mc.layout_mode       = config_layout_for_rom("Donkey Kong.mgw");
+        mc.lcd_rect_from_max = config_lcd_rect_from_max_for_rom("Donkey Kong.mgw");
+        mc.scale_ceiling     = config_scale_ceiling_for_rom("Donkey Kong.mgw");
+        CHECK_EQ_INT(mc.scale_ceiling, 0);
         koboy_profile mp2;
-        CHECK(config_resolve_profile(&mp2, &mc, 1264, 1680, 293, 224, 348, 240));
+        CHECK(config_resolve_profile(&mp2, &mc, 1264, 1680, 654, 396, 654, 396));
         CHECK_EQ_INT(mp2.game_w, 1264);
+
+        /* THE WHOLE CEILING TABLE, because four systems carry one now and
+           each number is a device measurement rather than arithmetic. A
+           regression here is a silent speed or picture change on a real
+           panel, and the values are the only record of what was measured:
+
+             SNES        3   Star Fox 67% -> 79%, Kirby 78% -> 95%
+             Master Sys  3   Sonic Chaos 1172x768 83% -> 879x576 98%
+             Game Gear   5   Sonic Chaos 1152x864 79% -> 960x720
+             Mega Drive  3   Sonic 1264x966 -> 879x672
+
+           The Game Gear's 5 is asserted as DIFFERENT from its neighbours', not
+           just as nonzero: it shares Genesis Plus GX with the other two, and
+           a table that gave one number to "the GPGX systems" would pass every
+           check that only asked for a cap. */
+        CHECK_EQ_INT(config_scale_ceiling_for_rom("Star Fox.sfc"), 3);
+        CHECK_EQ_INT(config_scale_ceiling_for_rom("Metroid.smc"), 3);
+        CHECK_EQ_INT(config_scale_ceiling_for_rom("Sonic Chaos.sms"), 3);
+        CHECK_EQ_INT(config_scale_ceiling_for_rom("Sonic Chaos.gg"), 5);
+        CHECK_EQ_INT(config_scale_ceiling_for_rom("Sonic.md"), 3);
+        CHECK(config_scale_ceiling_for_rom("Sonic Chaos.gg") !=
+              config_scale_ceiling_for_rom("Sonic Chaos.sms"));
+        CHECK(config_scale_ceiling_for_rom("Sonic Chaos.gg") !=
+              config_scale_ceiling_for_rom("Sonic.md"));
+        /* ...and NINE systems still have none, which is a statement about
+           what has been measured rather than about what is safe -- see
+           docs/FOLLOWUPS.md #73. Listed rather than counted, so adding a
+           ceiling to one of them has to come here and say so. */
+        {
+            static const char *uncapped[] = {
+                "a.mgw", "a.nes", "a.min", "a.ws", "a.wsc", "a.ngp", "a.ngc",
+                "a.a26", "a.col", "a.int", "a.pce", "a.zip", "a.gb",
+            };
+            for (size_t u = 0; u < sizeof uncapped / sizeof uncapped[0]; u++)
+                CHECK_EQ_INT(config_scale_ceiling_for_rom(uncapped[u]), 0);
+        }
     }
 
     /* WHAT THE LCD STRIP'S CONTROLS SAY, per system. The bits do not change

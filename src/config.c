@@ -184,16 +184,56 @@ static bool ends_with_ext(const char *s, const char *ext)
    romlist_is_rom, and a table makes the pair reviewable side by side.
    Extensions are lowercase because ends_with_ext lowercases only the
    candidate, not the pattern. */
-/* `ceiling` caps the auto-fitted scale for this system, 0 meaning no cap.
-   It exists because the rect is now sized from the frame a core really draws
-   (commit ae03e76), which quadrupled SNES's picture and, MEASURED on the
-   device, cost its heaviest titles real speed: Star Fox 93%->67%, Kirby Super
-   Star 96%->78%, while Mario World and Zelda stayed at 98%. At scale 3 the
-   picture is still 2.25x what it was and every measured title is back at 95%
-   or better, so the cap buys universal playability with a quarter of the
-   area. A per-system number rather than a global one because the global
-   `scale` is shared with thirteen other systems that pay nothing for 4x, and
-   an explicit `scale =` in the ini still overrides this. */
+/* `ceiling` caps the auto-fitted scale for this system, 0 meaning no cap. In
+   KOBOY_LAYOUT_LCD, where the fit is fractional and has no integer step, it
+   caps the picture at `ceiling` times the source instead -- same number, same
+   meaning, see config_resolve_profile_par.
+
+   IT EXISTS BECAUSE A BIGGER PICTURE COSTS REAL, MEASURED SPEED, and the
+   pipeline that spends it (video_submit) is this project's bottleneck on
+   every system. Sizing the rect from the frame a core really draws (ae03e76)
+   quadrupled SNES's picture and cost its heaviest titles: Star Fox
+   93%->67%, Kirby Super Star 96%->78%, while Mario World and Zelda stayed at
+   98%.
+
+   FOUR SYSTEMS CARRY ONE NOW, and every number is a device measurement, not
+   arithmetic. Kobo Libra 2, 1264x1680, `--frames 900` against an ideal
+   15,024 ms, ten seconds of idle between runs, the presented-frame count
+   identical across each system's own sweep so the rows are comparable:
+
+     .sfc/.smc  SNES         3   Star Fox 67% -> 79%, Kirby 78% -> 95%
+     .sms       Master Sys.  3   Sonic Chaos 1172x768 83% -> 879x576 98%
+     .gg        Game Gear    5   Sonic Chaos 1152x864 79% -> 960x720
+     .md        Mega Drive   3   Sonic 1264x966 -> 879x672
+
+   The three Sega rows are the same finding twice over: THE THREE LARGEST
+   RECTS koboy PRODUCES WERE ALL SEGA, all over 900k pixels, and all reported
+   as slow in play. Master System's 1172x768 and Game Gear's 1152x864 are 1.6x
+   and 1.7x the Game Boy's 800x720, on frames that are SMALLER than the Game
+   Boy's or the same size.
+
+   THE GAME GEAR IS THE INSTRUCTIVE ONE. Its frame is 160x144 -- byte for
+   byte the Game Boy's -- and TESTED.md recorded for months that it "lands on
+   exactly 800x720, the Game Boy's scale-5 picture, by arithmetic, so it needs
+   no exemption". That was true, and then `pixel_aspect` made the rect 192
+   columns wide, the auto-fit went from 5 to 6, and the picture became
+   1152x864 with nothing watching. Its ceiling is 5 because 5 is the number
+   that was MEASURED for a 160x144 frame on this panel in the first place --
+   the Game Boy's -- and the widened 960x720 is that picture with the pixel
+   aspect the correction added. Sub-scale steps do not exist, so 4 (768x576,
+   smaller than the Game Boy) is the only alternative and it gives up picture
+   for speed that 5 already has.
+
+   NOBODY HAS MEASURED THE OTHER NINE. The honest version of this table
+   measures each system's heaviest title at each scale it can reach; see
+   docs/FOLLOWUPS.md #73. A row here without a number beside it in this
+   comment is a guess and should be treated as one.
+
+   A per-system number rather than a global one because the global `scale` is
+   shared with systems that pay nothing for their fit, and an explicit
+   `scale =` in the ini still overrides this. The shipped ini's `scale = 5`
+   is NOT explicit -- see KOBOY_SCALE_LEGACY_DEFAULT -- so these ceilings are
+   what a real device runs. */
 static const struct { const char *ext; const char *core; int ceiling; } g_core_by_ext[] = {
     { ".mgw", "gw_libretro.so", 0 },   /* Game & Watch, gw-libretro   */
     { ".nes", "fceumm_libretro.so", 0 },   /* NES, libretro-fceumm        */
@@ -222,8 +262,8 @@ static const struct { const char *ext; const char *core; int ceiling; } g_core_b
        deliberately absent: nobody's collection here has them, and an
        extension the browser lists but nobody has loaded is an untested
        claim. */
-    { ".sms", "genesis_plus_gx_libretro.so", 0 }, /* Master System, GPGX     */
-    { ".gg",  "genesis_plus_gx_libretro.so", 0 }, /* Game Gear, same core    */
+    { ".sms", "genesis_plus_gx_libretro.so", 3 }, /* Master System -- ceiling above */
+    { ".gg",  "genesis_plus_gx_libretro.so", 5 }, /* Game Gear, same core, own cap */
     /* MEGA DRIVE, and it is the SAME .so as the two rows above -- Genesis
        Plus GX is natively a Mega Drive core and always was; the comment
        above used to say the Mega Drive list was "deliberately absent"
@@ -250,7 +290,7 @@ static const struct { const char *ext; const char *core; int ceiling; } g_core_b
        rule a reader can hold in their head: one system, one extension.
        roms/README.txt says so on the device, which is where somebody
        wondering why a file is missing will actually look. */
-    { ".md",  "genesis_plus_gx_libretro.so", 0 }, /* Mega Drive, same core   */
+    { ".md",  "genesis_plus_gx_libretro.so", 3 }, /* Mega Drive -- ceiling above */
     /* SNES, and the interesting part is that the v1 design spec ruled this
        system OUT on CPU grounds. That judgement was re-tested rather than
        inherited -- see scripts/build-snes-core.sh for the three-core

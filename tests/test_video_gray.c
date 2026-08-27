@@ -217,13 +217,24 @@ TEST_MAIN({
           exemption applied anywhere in video_create/video_submit is caught
           and not just one in video_rgb565_to_gray.
 
-       2. The presentation the Game Gear ends up with, stated as a number:
-          its 160x144 frame is fitted to 800x720 -- pixel for pixel the
-          Game Boy's scale-5 picture, reached by auto-fitting a rect sized
-          from a 284x240 max rather than by any Game-Boy special case. That
-          is the claim worth pinning, because it is what makes leaving
-          config_resolve_profile alone the right call: a Game Gear needs no
-          exemption to look right.
+       2. The presentation the Game Gear ends up with, stated as a number.
+          THIS CLAIM HAS BEEN WRONG TWICE and both corrections are worth
+          keeping, because the shape of the mistake was the same each time:
+          a number that came out right by arithmetic, with the reasoning in a
+          comment and nothing watching it.
+            - It was "800x720, pixel for pixel the Game Boy's scale-5
+              picture, so a Game Gear needs no exemption". True until the
+              rect started being sized from base rather than max (ae03e76).
+            - It became 960x864, asserted below. True until `pixel_aspect`
+              made the rect 192 columns wide, at which point the auto-fit
+              went to 6 and the DEVICE picture became 1152x864 -- 1.73x the
+              area of the Game Boy's, on the same 160x144 frame, and slow
+              enough that the owner reported it (78.7% of full speed on
+              Sonic Chaos, measured).
+          So the Game Gear DID need an exemption in the end, and it is a
+          `ceiling` in g_core_by_ext like the SNES's -- asserted separately
+          below, because the two profiles in this block are built with
+          config_defaults and carry no ceiling at all.
 
        MUTANT-VERIFIED: adding `if (p->max_w == KOBOY_GB_W && p->max_h ==
        KOBOY_GB_H) map = KOBOY_GRAY_LUMA;` to video_create makes the first
@@ -281,6 +292,44 @@ TEST_MAIN({
         /* And it is not black -- otherwise "both the same" would also pass
            against a pipeline that gave BOTH of them the Rec.601 treatment. */
         CHECK(out[0] != KOBOY_DU4_LEVELS[0]);
+
+        /* THE CEILING THE GAME GEAR TURNED OUT TO NEED, and the grey it gets
+           through it. Both halves matter: the cap is the thing the narrative
+           above was missing, and re-reading the sky through the capped
+           profile is what says a smaller picture is still a COLOUR picture --
+           if a size ever did reach the reduction, this is where it would
+           show. Built through config_scale_ceiling_for_rom rather than a
+           literal, so the table is what is under test. */
+        {
+            koboy_config cc; config_defaults(&cc);
+            cc.scale_ceiling = config_scale_ceiling_for_rom("Sonic Chaos.gg");
+            CHECK(cc.scale_ceiling > 0);
+            koboy_profile cp;
+            CHECK(config_resolve_profile(&cp, &cc, 1264, 1680, 160, 144, 284, 240));
+            CHECK_EQ_INT(cp.scale, cc.scale_ceiling);
+            CHECK(cp.game_w * cp.game_h < gg.game_w * gg.game_h);
+            /* AND WHAT THAT NUMBER ACTUALLY DRAWS, which is the half a
+               "scale == ceiling" check cannot see: with square pixels the cap
+               of 5 puts a Game Gear at 800x720 -- pixel for pixel the Game
+               Boy's picture, which is where this system was believed to be
+               all along and where the ceiling deliberately puts it back. On
+               the device the pixel aspect widens it to 960x720; the rows are
+               the Game Boy's either way, and the rows are what 5 was measured
+               for. Asserted as the geometry so a different ceiling fails here
+               even though "scale == ceiling" would still hold. */
+            CHECK_EQ_INT(cp.game_w, 800);
+            CHECK_EQ_INT(cp.game_h, 720);
+            CHECK_EQ_INT(cp.game_w, gb.game_w);
+            CHECK_EQ_INT(cp.game_h, gb.game_h);
+            koboy_video *cv = video_create(&cp, false, KOBOY_GRAY_DEFAULT);
+            CHECK(cv != NULL);
+            video_submit(cv, sky, 160, 144, 160 * sizeof(uint16_t),
+                         KOBOY_PIXFMT_RGB565);
+            koboy_rect cr; video_frame_rect(cv, &cr);
+            CHECK_EQ_INT(video_buffer(cv)[(size_t)(cr.y + cr.h / 2) * video_stride(cv)
+                                          + cr.x + cr.w / 2], out[0]);
+            video_destroy(cv);
+        }
     }
 
     /* An out-of-range map arrives from an int field in koboy_config and must
