@@ -89,12 +89,15 @@ bool config_load(koboy_config *c, const char *path);
    once after retro_load_game -- config.c has no core.h dependency of its own
    (layering: config is lower-level than core), so the caller resolves the
    query and passes the four numbers through as plain ints rather than this
-   header taking on a struct koboy_core it does not otherwise need. max_w and
-   max_h drive the scale search and the resulting game rect (see the
-   koboy_profile comment in koboy.h for why max, not base); both must be >= 1
-   or this returns false the same way an impossibly small panel already does.
-   base_w/base_h are carried into the profile unchanged, for callers that want
-   to know what the core is actually rendering right now. */
+   header taking on a struct koboy_core it does not otherwise need.
+
+   WHICH PAIR DRIVES THE SCALE SEARCH AND THE GAME RECT DEPENDS ON THE
+   LAYOUT: base_w/base_h in KOBOY_LAYOUT_DMG, max_w/max_h in
+   KOBOY_LAYOUT_LCD. See the koboy_profile comment in koboy.h for why, and
+   config.c's own note where rect_w is computed for what it bought and what
+   makes it safe. All four must be >= 1 or this returns false, the same way an
+   impossibly small panel already does -- base included, now that it is
+   divided by. Both pairs are carried into the profile unchanged. */
 bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
                             int panel_w, int panel_h,
                             int base_w, int base_h, int max_w, int max_h);
@@ -125,6 +128,29 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
                                 int panel_w, int panel_h,
                                 int base_w, int base_h, int max_w, int max_h,
                                 uint32_t par);
+/* Do these two resolved profiles present the game the same way -- same rect,
+   in the same place, at the same scale, in the same layout, out of a buffer
+   the same size? Compares only what config_resolve_profile_par decides, and
+   deliberately NOT base_w/base_h: "the core is drawing a different frame now"
+   is the question the caller already knows the answer to; this one asks
+   whether that made any difference worth a rebuild for.
+
+   It exists because main.c's geometry poll cannot decide that from the inputs
+   any more. The DMG rect is sized from base, so a base change CAN move it
+   (SNES entering a 512-wide hi-res mode); the LCD rect is not, so a base
+   change never does (Game & Watch, which toggles base several times a second
+   and must not pay a video rebuild and a full faceplate repaint for it). The
+   two cases are indistinguishable without resolving both and looking.
+
+   max_w/max_h are in the comparison even though they do not size the DMG rect:
+   video_create allocates its intermediate buffer from them, so a max that
+   moved needs the rebuild whatever the rect did.
+
+   NULL on either side is false -- two things one of which does not exist are
+   not the same presentation. */
+bool config_profile_presentation_same(const koboy_profile *a,
+                                      const koboy_profile *b);
+
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b);
 
 /* Rewrites `path` with exactly one `gray_map = <name>` line, preserving every

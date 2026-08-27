@@ -177,32 +177,41 @@ TEST_MAIN({
     }
 
     /* THE ATARI. A rect resolved for the 2600's real numbers, and the frame
-       fitted into it: 840x630, which is 4:3 to the pixel and is exactly the
-       shape docs/FOLLOWUPS.md #51 predicted by hand before any of this code
-       was written. The vertical stays at an integer 3. */
+       fitted into it: 4:3 to the pixel, exactly the shape docs/FOLLOWUPS.md
+       #51 predicted by hand before any of this code was written. The
+       vertical stays an exact integer.
+
+       The numbers grew by one whole step when the rect started coming from
+       the core's BASE geometry rather than its max: stella2014 declares
+       320x256 (PAL's tallest) and draws 210 lines on an NTSC title, so the
+       rect used to reserve 46 rows of scale that nothing was ever going to
+       fill, and the height is what bound the fit. 840x630 in a 840x768 rect
+       became 1120x840 in a 1120x840 one -- the same picture, a third larger,
+       and now with no dead band above and below it (oy == 0). */
     {
         koboy_profile p;
         uint32_t par_base = video_pixel_aspect(DAR(1.33333), 320, 210);
         CHECK(config_resolve_profile_par(&p, &c, 1264, 1680, 320, 210, 320, 256, par_base));
-        CHECK_EQ_INT(p.game_w, 840); CHECK_EQ_INT(p.game_h, 768);
+        CHECK_EQ_INT(p.game_w, 1120); CHECK_EQ_INT(p.game_h, 840);
 
         int fs, dw, ox, oy;
         uint32_t par = video_pixel_aspect(DAR(1.33333), 160, 210);
         video_fit_par(&p, 160, 210, par, &fs, &dw, &ox, &oy);
-        CHECK_EQ_INT(fs, 3);           /* vertical: an exact integer, 630 rows */
-        CHECK_EQ_INT(dw, 840);         /* horizontal: 160 * 3 * 1.75          */
+        CHECK_EQ_INT(fs, 4);           /* vertical: an exact integer, 840 rows */
+        CHECK_EQ_INT(dw, 1120);        /* horizontal: 160 * 4 * 1.75          */
         CHECK_EQ_INT(ox, 0);
-        CHECK_EQ_INT(oy, (768 - 630) / 2);
-        /* 840:630 IS 4:3. Stated as the ratio and not just as two numbers,
+        CHECK_EQ_INT(oy, 0);           /* the rect IS the picture now         */
+        /* 1120:840 IS 4:3. Stated as the ratio and not just as two numbers,
            because two numbers can be right for the wrong reason. */
-        CHECK_EQ_INT(dw * 3, (630) * 4);
+        CHECK_EQ_INT(dw * 3, (840) * 4);
 
         /* What it used to do, kept as the counter-example: square scaling of
-           the same frame in the same rect is 480x630, i.e. 1.75x too tall. */
+           the same frame in the same rect is 640x840, i.e. 1.75x too tall
+           for its width. */
         int sfs, sox, soy;
         video_fit(&p, 160, 210, &sfs, &sox, &soy);
-        CHECK_EQ_INT(160 * sfs, 480);
-        CHECK_EQ_INT(210 * sfs, 630);
+        CHECK_EQ_INT(160 * sfs, 640);
+        CHECK_EQ_INT(210 * sfs, 840);
     }
 
     /* A PIXEL NARROWER THAN IT IS TALL, which is half the measured population
@@ -214,7 +223,9 @@ TEST_MAIN({
         CHECK(config_resolve_profile_par(&p, &c, 1264, 1680, 320, 224, 348, 240, par_base));
         int fs, dw, ox, oy;
         video_fit_par(&p, 320, 224, par_base, &fs, &dw, &ox, &oy);
-        CHECK_EQ_INT(fs, 3);
+        /* 4, not the 3 this asserted while the rect came from Genesis Plus
+           GX's 348x240 max -- a geometry no Mega Drive title renders. */
+        CHECK_EQ_INT(fs, 4);
         CHECK(dw < 320 * fs);                       /* narrower than square */
         CHECK(dw > 320 * fs * 9 / 10);              /* but only by ~8.6%    */
         CHECK(ox > 0);                              /* centred, not flush   */
@@ -348,15 +359,21 @@ TEST_MAIN({
         video_submit(v, fb, 160, 210, 320, KOBOY_PIXFMT_RGB565);
 
         koboy_rect fr; video_frame_rect(v, &fr);
-        CHECK_EQ_INT(fr.w, 840); CHECK_EQ_INT(fr.h, 630);
+        CHECK_EQ_INT(fr.w, 1120); CHECK_EQ_INT(fr.h, 840);
 
         const uint8_t *buf = video_buffer(v);
         int st = video_stride(v);
         int mid = fr.y + fr.h / 2;
-        /* 160 source columns across 840 destination ones is 5.25 each; the
-           scaler is nearest-neighbour, so a run is 5 or 6. Square scaling
-           would make every run exactly 3, which is the value this rejects. */
-        int five = 0, six = 0, other = 0;
+        /* 160 source columns across 1120 destination ones is EXACTLY 7, and
+           that is new: the base-sized rect put NTSC stella on 4 vertical
+           steps, and 4 * 1.75 is a whole number, so the horizontal comb this
+           block was written to catch is not present on this geometry any
+           more. Square scaling would make every run 4, which is the value
+           this rejects -- and the run count is still what does the
+           rejecting, not the rect width, because a rect assertion cannot
+           tell a wide pixel from a bigger scale. The genuinely fractional
+           case moved to the PAL block below. */
+        int seven = 0, other = 0;
         /* The first run at an arbitrary x is a PARTIAL one -- the scan starts
            in the middle of it -- so it is stepped over rather than counted,
            and the loop stops far enough from the right edge that the last
@@ -365,21 +382,60 @@ TEST_MAIN({
         x0 += run_w(buf, st, x0, mid, fr.x + fr.w);
         for (int x = x0; x + 8 < fr.x + fr.w - 12; ) {
             int r = run_w(buf, st, x, mid, fr.x + fr.w);
-            if (r == 5) five++; else if (r == 6) six++; else other++;
+            if (r == 7) seven++; else other++;
             x += r;
         }
-        CHECK(five > 0); CHECK(six > 0); CHECK_EQ_INT(other, 0);
+        CHECK(seven > 0); CHECK_EQ_INT(other, 0);
 
-        /* And the ROWS are still exactly 3 deep -- the vertical scale stayed
-           an integer, which is the property that keeps a 210-line frame from
+        /* And the ROWS are exactly 4 deep -- the vertical scale stayed an
+           integer, which is the property that keeps a 210-line frame from
            acquiring a 3/4-row comb. */
         {
             int col = fr.x + fr.w / 2;
             int r = 0;
             uint8_t v0 = buf[(size_t)fr.y * st + col];
             while (fr.y + r < fr.y + fr.h && buf[(size_t)(fr.y + r) * st + col] == v0) r++;
-            CHECK_EQ_INT(r % 3, 0);
+            CHECK_EQ_INT(r % 4, 0);
         }
+        video_destroy(v);
+    }
+
+    /* THE SAME PROPERTY WHERE THE RATIO IS NOT A WHOLE NUMBER, which is what
+       the NTSC block above used to test before its rect grew. PAL stella:
+       320x250 declared, 160x250 delivered, 25:12 pixels -- 1000 destination
+       columns over 160 source ones is 6.25, so the nearest-neighbour scaler
+       must produce a MIX of 6-wide and 7-wide runs and nothing else. Square
+       scaling would make every one of them exactly 3.
+
+       Kept as its own block rather than folded into the sweep below: a comb
+       is only visible if you count the teeth. */
+    {
+        koboy_profile p;
+        uint32_t par_base = video_pixel_aspect(DAR(1.33333), 320, 250);
+        CHECK(config_resolve_profile_par(&p, &c, 1264, 1680, 320, 250, 320, 256, par_base));
+        static uint16_t fb[160 * 250];
+        fill_cols(fb, 160, 250, 0x0000, 0xFFFF);
+
+        koboy_video *v = video_create(&p, false, KOBOY_GRAY_DEFAULT);
+        CHECK(v != NULL);
+        video_set_aspect(v, DAR(1.33333));
+        video_submit(v, fb, 160, 250, 320, KOBOY_PIXFMT_RGB565);
+
+        koboy_rect fr; video_frame_rect(v, &fr);
+        CHECK_EQ_INT(fr.w, 1000); CHECK_EQ_INT(fr.h, 750);
+
+        const uint8_t *buf = video_buffer(v);
+        int st = video_stride(v);
+        int mid = fr.y + fr.h / 2;
+        int six = 0, seven = 0, other = 0;
+        int x0 = fr.x + 12;
+        x0 += run_w(buf, st, x0, mid, fr.x + fr.w);
+        for (int x = x0; x + 8 < fr.x + fr.w - 12; ) {
+            int r = run_w(buf, st, x, mid, fr.x + fr.w);
+            if (r == 6) six++; else if (r == 7) seven++; else other++;
+            x += r;
+        }
+        CHECK(six > 0); CHECK(seven > 0); CHECK_EQ_INT(other, 0);
         video_destroy(v);
     }
 
@@ -520,13 +576,14 @@ TEST_MAIN({
 
     /* And the Atari's rect, the other end of the same formula: 320 declared
        columns at 0.875 (the aspect read against the DECLARED base, which is
-       the one that is a lie) is 280, times scale 3. It comes out NARROWER
-       than the 960 square scaling reserved -- and holds a bigger picture. */
+       the one that is a lie) is 280, times scale 4. Narrower per unit of
+       scale than square scaling reserved -- and it holds a bigger picture,
+       which is the whole point. */
     {
         koboy_profile p;
         uint32_t par = video_pixel_aspect(DAR(1.33333), 320, 210);
         CHECK(config_resolve_profile_par(&p, &c, 1264, 1680, 320, 210, 320, 256, par));
-        CHECK_EQ_INT(p.game_w, 840);
+        CHECK_EQ_INT(p.game_w, 1120);
         CHECK_EQ_INT(p.max_w, 320);      /* max itself is NOT rewritten */
         CHECK_EQ_INT(p.max_h, 256);
     }

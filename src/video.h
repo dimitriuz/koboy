@@ -221,6 +221,16 @@ void video_fit_frac(int src_w, int src_h, int avail_w, int avail_h,
    rather than merely looking wrong, and this function is what keeps it from
    having to fire.
 
+   "NEVER WIDER OR TALLER" IS NOW A PROMISE FOR EVERY FRAME IN [1, max], not
+   an inherited property of the reserved rect. It used to be the latter: the
+   DMG rect was max_w x max_h times an integer, so it held any frame the
+   bounds guard accepted and the integer fit could never be asked to shrink.
+   The rect is now sized from the core's BASE geometry
+   (config_resolve_profile_par), so a bigger-than-base frame CAN be bigger
+   than the rect, and the DMG branch drops to the fractional fit when it is.
+   That is the safety argument for the whole rect-sizing change; it is swept
+   over every system's real geometry in tests/test_video_pipeline.c.
+
    `par` is the pixel aspect from video_pixel_aspect. KOBOY_ASPECT_ONE
    reproduces this function's pre-anisotropy answer exactly, on both
    branches. */

@@ -156,9 +156,15 @@ TEST_MAIN({
        The fourth is a synthetic base != max case (a plausible "folds to a
        smaller view" shape for a multi-screen title, not a reproduction of
        any specific title's behaviour observed here) to exercise the one
-       field pairing item 3 of the task exists to distinguish: game_w/game_h
-       come from max_w/max_h, not base_w/base_h, which base == max in the
-       first three cases cannot tell apart.
+       field pairing this sweep exists to distinguish: in KOBOY_LAYOUT_DMG
+       game_w/game_h come from base_w/base_h, NOT max_w/max_h, which base ==
+       max in the first three cases cannot tell apart.
+
+       That pairing was the other way round until the rect started being
+       sized from the frame a core actually draws (see the long note in
+       config.c where rect_w is computed). The synthetic row is what moved:
+       its scale went from a flat 1 on every panel to 2/2/3/3, because a
+       431x322 rect fits where a 692x759 one did not.
 
        want_scale[] is MEASURED the same way the Game Boy's "5" above is --
        by running config_resolve_profile itself against the shipped
@@ -181,7 +187,7 @@ TEST_MAIN({
             { 658, 395, 658, 395, { 1, 1, 2, 2 }, "Parachute (measured)"   },
             { 973, 532, 973, 532, { 1, 1, 1, 1 }, "Mario Bros. (measured)" },
             { 606, 748, 606, 748, { 1, 1, 1, 1 }, "Donkey Kong (measured)" },
-            { 431, 322, 692, 759, { 1, 1, 1, 1 }, "synthetic base!=max"    },
+            { 431, 322, 692, 759, { 2, 2, 3, 3 }, "synthetic base!=max"    },
         };
 
         for (size_t g = 0; g < sizeof geoms / sizeof geoms[0]; g++) {
@@ -196,15 +202,22 @@ TEST_MAIN({
                             pp.scale, geoms[g].want_scale[i]);
                 CHECK_EQ_INT(pp.scale, geoms[g].want_scale[i]);
 
-                /* game_w/game_h come from max_w/max_h, not base_w/base_h --
+                /* game_w/game_h come from base_w/base_h, not max_w/max_h --
                    asserted directly, not just implied by the scale matching,
                    because a config_resolve_profile that silently sized the
-                   rect off base while still reporting the max-derived scale
+                   rect off max while still reporting the base-derived scale
                    would pass a scale-only check. The first three geometries
                    (base == max) cannot distinguish this at all; only the
-                   fourth actually exercises it. */
-                CHECK_EQ_INT(pp.game_w, geoms[g].max_w * pp.scale);
-                CHECK_EQ_INT(pp.game_h, geoms[g].max_h * pp.scale);
+                   fourth actually exercises it, and it is the one row whose
+                   expected scale moved when the rule did. */
+                CHECK_EQ_INT(pp.game_w, geoms[g].base_w * pp.scale);
+                CHECK_EQ_INT(pp.game_h, geoms[g].base_h * pp.scale);
+                /* ...and it is not merely that max HAPPENS to agree: on the
+                   synthetic row the two answers differ by hundreds of
+                   pixels, so this is a real discrimination rather than a
+                   restatement. */
+                if (geoms[g].base_w != geoms[g].max_w)
+                    CHECK(pp.game_w != geoms[g].max_w * pp.scale);
                 CHECK_EQ_INT(pp.base_w, geoms[g].base_w);
                 CHECK_EQ_INT(pp.base_h, geoms[g].base_h);
                 CHECK_EQ_INT(pp.max_w,  geoms[g].max_w);
@@ -240,6 +253,12 @@ TEST_MAIN({
         koboy_profile bad;
         CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 0, 0, 0, 0));
         CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 100, 100, -1, 50));
+        /* BASE is degenerate now too, and it is a separate guard from max's:
+           the DMG branch divides the panel by base, so a zero there is a
+           division by zero rather than merely a rect nobody wants. Max is
+           valid in both of these, so only the base check can refuse them. */
+        CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 0, 100, 200, 200));
+        CHECK(!config_resolve_profile(&bad, &dc, 1264, 1680, 100, -3, 200, 200));
         /* ...and in the LCD layout too, which takes a completely separate
            branch and would otherwise divide by max_w in its own arithmetic. */
         koboy_config lbad; config_defaults(&lbad);

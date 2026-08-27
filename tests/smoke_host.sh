@@ -716,26 +716,56 @@ echo "$out" | grep -q "scale 5, game 800x720 at (232,84)" \
     || { echo "FAIL: the Game Boy rect moved"; rm -rf "$d"; exit 1; }
 echo "ok: .gb keeps the DMG faceplate at scale 5"
 
-# GEOMETRY CHURN: base-only changes must not re-fit; a max change must.
+# GEOMETRY CHURN: a re-fit happens when, and only when, the RECT moves.
 #
-# A Game & Watch title alternates between the whole unit and the LCD alone
-# several times a second. The reserved rect, the chrome around it and video's
-# buffers are all sized from MAX, so a base change leaves them all correct and
-# re-fitting is pure waste -- a video_destroy/video_create, a full faceplate
-# repaint and a forced full-rect refresh, several times a second, on e-ink.
-# koboy therefore logs "geometry settled" only when max moves.
+# main.c used to decide this from the inputs -- max moved, re-fit; base moved,
+# do not -- and that was right while the reserved rect was max_w x max_h times
+# an integer. It is not right any more: in KOBOY_LAYOUT_DMG the rect is sized
+# from BASE (see config.c), so a base change there really does move the rect,
+# the chrome drawn around it and the buffers underneath it. main.c now
+# resolves the candidate profile and compares the ANSWER
+# (config_profile_presentation_same), which is the only way to tell the two
+# layouts apart.
 #
-# Both directions are asserted. Checking only that base churn stays quiet
-# would pass just as well against a frontend that ignored geometry entirely,
-# which is the failure mode this pair exists to rule out.
+# THREE runs, and all three are needed. The LCD one alone would pass against a
+# frontend that never re-fits at all; the DMG one alone would pass against one
+# that re-fits on every announcement, which is the several-times-a-second
+# video_destroy/video_create + full faceplate repaint + forced full-rect
+# refresh this whole branch exists to avoid on e-ink.
+
+# (1) LCD, base churn: SILENT. This is the real case -- a Game & Watch title
+#     alternates between the whole unit and the LCD alone several times a
+#     second, and the LCD rect comes from max, so nothing about the
+#     presentation moves.
+rc=0
+out=$(KOBOY_STUB_OSCILLATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$d/GAME.mgw" --frames 120 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: LCD oscillating-base run exited $rc"; exit 1; }
+echo "$out" | grep -q "LCD layout" \
+    || { echo "FAIL: the .mgw oscillating run did not get the LCD layout"; exit 1; }
+n=$(echo "$out" | grep -c "geometry settled" || true)
+[ "$n" -eq 0 ] || { echo "FAIL: LCD base churn re-fit $n time(s); its rect comes from max"; exit 1; }
+echo "$out" | grep -q "presented=" || { echo "FAIL: LCD oscillating run never presented"; exit 1; }
+echo "ok: base-only churn does not re-fit in the LCD layout"
+
+# (2) DMG, base churn: RE-FITS, and the log has to show the rect actually
+#     following base. The stub alternates base between its 160x144 max and
+#     half of it, so at the Game Boy's scale 5 the rect must be seen at BOTH
+#     800x720 and 400x360. Asserting the two rects rather than just a nonzero
+#     count is what makes this measure the base-sized rect instead of merely
+#     measuring that something was logged.
 rc=0
 out=$(KOBOY_STUB_OSCILLATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom "$ROM" --frames 120 2>&1) || rc=$?
-[ "$rc" -eq 0 ] || { echo "FAIL: oscillating-base run exited $rc"; exit 1; }
+[ "$rc" -eq 0 ] || { echo "FAIL: DMG oscillating-base run exited $rc"; exit 1; }
 n=$(echo "$out" | grep -c "geometry settled" || true)
-[ "$n" -eq 0 ] || { echo "FAIL: base-only churn re-fit $n time(s); max never moved"; exit 1; }
-echo "$out" | grep -q "presented=" || { echo "FAIL: oscillating run never presented"; exit 1; }
-echo "ok: base-only geometry churn does not re-fit"
+[ "$n" -gt 0 ] || { echo "FAIL: DMG base churn never re-fit; the rect is sized from base"; exit 1; }
+echo "$out" | grep -q "game 800x720" \
+    || { echo "FAIL: the full-base DMG rect is not 800x720"; exit 1; }
+echo "$out" | grep -q "game 400x360" \
+    || { echo "FAIL: the half-base DMG rect is not 400x360 -- the rect is not following base"; exit 1; }
+echo "$out" | grep -q "presented=" || { echo "FAIL: DMG oscillating run never presented"; exit 1; }
+echo "ok: base churn re-fits in the DMG layout, and the rect follows base ($n re-fits)"
 
 rc=0
 out=$(KOBOY_STUB_MAXGROW=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \

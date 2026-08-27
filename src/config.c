@@ -956,6 +956,12 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
        Refusing here keeps that division safe without every caller having to
        re-derive the same check. */
     if (max_w < 1 || max_h < 1) return false;
+    /* LIVE GUARD, and it is new with the base-sized rect below: base_w/base_h
+       used to be carried through untouched and could be anything, because
+       nothing divided by them. The DMG branch now does. A caller that has not
+       got a geometry yet (main.c's placeholder profile passes the Game Boy's,
+       so it is not that one) would otherwise divide by zero. */
+    if (base_w < 1 || base_h < 1) return false;
 
     /* Both layouts reserve the game rect clear of whatever controls their
        faceplate draws, and both ask the same function where those start --
@@ -978,9 +984,41 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
        exact failure this parameter exists to remove, reintroduced by a
        rounding mode. */
     if (par == 0) par = KOBOY_ASPECT_ONE;
-    int rect_w = max_w;
-    if (par != KOBOY_ASPECT_ONE && max_w > 0) {
-        rect_w = (int)((((uint64_t)max_w * par) + 65535u) >> 16);
+
+    /* WHICH GEOMETRY THE RECT IS SIZED FROM, and the two layouts answer
+       differently on purpose.
+
+       LCD keeps MAX. Its fit is fractional, so a frame smaller than max costs
+       nothing but margin, and a Game & Watch title changes base several times
+       a second (654x396 <-> 305x191 on Donkey Kong): sizing that rect from
+       base would resize the artwork, redraw the strip and repaint the panel
+       at that rate. Nothing about the Game & Watch presentation changes here.
+
+       DMG takes BASE -- what the core is drawing NOW -- and that is the
+       change. Max was chosen when the only two cores had base == max, and it
+       is wrong for a core whose max is a mode it never enters: snes9x2005
+       declares 512x512 for an interlaced hi-res mode almost nothing uses and
+       then draws 256x224 forever, and a 512-tall reservation cannot exceed
+       scale 1 under chrome_controls_top. MEASURED on the verified 1264x1680
+       panel: 597x448 presented, against the Game Boy's 800x720 -- 46% of the
+       area, on a system with 1.8x the Game Boy's pixels. From base it is
+       1196x896.
+
+       What made max safe was that a frame anywhere in [1, max] could not
+       spill out of the rect. That defence has MOVED rather than gone:
+       video_fit_rect now falls back to the fractional fit for any frame the
+       integer one cannot shrink to size (its 1x floor could not), so a frame
+       larger than base is presented SMALLER inside the rect instead of
+       overflowing it. Check that before believing this comment -- it is the
+       whole safety argument, and it is asserted by sweep in
+       tests/test_video_pipeline.c.
+
+       The BUFFER is still allocated from max (video_create). That is memory
+       safety and it did not move. */
+    int rect_w = max_w, rect_h = max_h;
+    if (c->layout_mode != KOBOY_LAYOUT_LCD) { rect_w = base_w; rect_h = base_h; }
+    if (par != KOBOY_ASPECT_ONE) {
+        rect_w = (int)((((uint64_t)rect_w * par) + 65535u) >> 16);
         if (rect_w < 1) rect_w = 1;
     }
 
@@ -999,7 +1037,7 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
            whatever centring leaves over. */
         if (panel_w < 1 || ctrl_top < 1) return false;
         int gw = 0, gh = 0;
-        video_fit_frac(rect_w, max_h, panel_w, ctrl_top, &gw, &gh);
+        video_fit_frac(rect_w, rect_h, panel_w, ctrl_top, &gw, &gh);
         if (gw < 1 || gh < 1) return false;
 
         p->panel_w = panel_w;
@@ -1026,7 +1064,7 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     }
 
     int fit_w = panel_w / rect_w;
-    int fit_h = panel_h / max_h;
+    int fit_h = panel_h / rect_h;
     int max_fit = fit_w < fit_h ? fit_w : fit_h;
     if (max_fit < 1) return false;
     /* The configured scale is the GAME BOY's scale unless the user said
@@ -1037,7 +1075,14 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
        Boy today lands on 6 (measured by mutating this very branch off: the
        chrome goldens and test_config's sweep both go red at 6), so the 5 is a
        deliberate choice against the panel's maximum, not a coincidence of the
-       arithmetic. None of that reasoning transfers. A Pokemon Mini is 96x64, so scale 5 is
+       arithmetic.
+
+       KEYED ON MAX, not on the base the rect is now sized from, and that is
+       load-bearing rather than leftover: a Game Gear's BASE is 160x144 --
+       byte for byte the Game Boy's -- while its max is 284x240, so keying
+       this on base would hand the Game Gear the Game Boy's measured 5 and
+       shrink it. Genesis Plus GX is the core that makes those two questions
+       different. None of that reasoning transfers. A Pokemon Mini is 96x64, so scale 5 is
        480x320 -- a postage stamp on a 1264x1680 panel, and precisely the
        complaint the Game & Watch layout was rebuilt to answer.
 
@@ -1065,7 +1110,7 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
 
     while (s > 1) {
         int game_w = rect_w * s;
-        int game_h = max_h * s;
+        int game_h = rect_h * s;
         int game_x = (panel_w - game_w) / 2;
         int game_y = panel_h / 20;
         int left_margin   = game_x;
@@ -1083,8 +1128,8 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
         s--;
     }
     /* The floor stays 1 rather than becoming a failure: at scale 1 the rect is
-       max_w x max_h and every panel spec §3 supports (>= 1072x1448) clears the
-       control band by hundreds of pixels for the shipped Game Boy core's
+       rect_w x rect_h and every panel spec §3 supports (>= 1072x1448) clears
+       the control band by hundreds of pixels for the shipped Game Boy core's
        160x144 (this is unreachable there) -- and on some hypothetical tiny
        panel, or a core whose max geometry is itself large, running with a
        slightly overlapped control band still beats refusing to start.
@@ -1098,20 +1143,30 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     p->base_h  = base_h;
     p->max_w   = max_w;
     p->max_h   = max_h;
-    /* game_w/game_h -- and therefore the reserved rect chrome lays out
-       around -- come from max_w/max_h, not base_w/base_h. video_submit
-       accepts any frame up to the core's max, so sizing the rect (and, in
-       video_create, the buffer) off max is what guarantees a legitimately
-       larger-than-base frame still lands entirely inside the reserved area
-       instead of spilling onto the chrome or a live touch control -- the
-       exact bug class the ctrl_top reservation above was already added to
-       stop, now for a resolution axis that did not exist when that fix
-       landed. */
+    /* game_w/game_h -- and therefore the reserved rect chrome lays out around
+       -- come from rect_w/rect_h, which for this layout is the core's BASE
+       geometry. See the long note where rect_w is computed for why that is
+       now safe and what it bought; the short version is that the rect no
+       longer has to hold every frame the core COULD send, because
+       video_fit_rect shrinks the ones it cannot hold. video_create's buffer
+       still comes from max, and that is the part that is memory safety. */
     p->game_w  = rect_w * s;
-    p->game_h  = max_h * s;
+    p->game_h  = rect_h * s;
     p->game_x  = (panel_w - p->game_w) / 2;
     p->game_y  = panel_h / 20;           /* small top margin, chrome fills the rest */
     return true;
+}
+
+bool config_profile_presentation_same(const koboy_profile *a,
+                                      const koboy_profile *b)
+{
+    if (!a || !b) return false;
+    return a->game_x == b->game_x && a->game_y == b->game_y &&
+           a->game_w == b->game_w && a->game_h == b->game_h &&
+           a->scale  == b->scale  &&
+           a->layout_mode == b->layout_mode &&
+           a->max_w  == b->max_w  && a->max_h  == b->max_h &&
+           a->panel_w == b->panel_w && a->panel_h == b->panel_h;
 }
 
 /* Rewrites `path`, dropping every assignment whose key is in `drop` and

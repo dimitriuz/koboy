@@ -167,13 +167,30 @@ typedef struct {
     /* The core's geometry (retro_get_system_av_info, queried once at ROM
        load -- see core_get_geometry's comment in core.h). base_w/base_h is
        what the core is rendering right now; max_w/max_h is the upper bound
-       any single frame will report without a fresh load, and is what
-       game_w/game_h and video's intermediate buffer are actually sized
-       against, precisely so a frame anywhere in [1, max] fits inside the
-       reserved rect without ever spilling onto the chrome or the touch
-       controls drawn around it. For the Game Boy, base and max are both
-       always 160x144, which is why this generalisation changes nothing
-       about existing Game Boy behaviour. */
+       any single frame will report without a fresh load.
+
+       WHICH ONE SIZES WHAT, because the two answers are no longer the same
+       and the difference is worth a paragraph:
+
+       - video's intermediate buffer is sized from MAX. That is memory
+         safety -- video_pipeline_run accepts any frame up to max and writes
+         it there -- and it has never been anything else.
+       - game_w/game_h, the reserved rect, comes from BASE in
+         KOBOY_LAYOUT_DMG and from MAX in KOBOY_LAYOUT_LCD.
+
+       Max used to size the rect too, and the reason it did was real: a frame
+       anywhere in [1, max] then fitted the reserved rect by construction,
+       with no risk of spilling onto the chrome or a live touch control. It
+       stopped being worth its price when cores arrived whose max is a mode
+       they never enter -- snes9x2005 declares 512x512 and draws 256x224
+       forever, so a SNES was presented at 46% of the Game Boy's area on the
+       same panel. The defence moved rather than being dropped:
+       video_fit_rect now shrinks a frame the rect cannot hold at 1:1 instead
+       of writing past it.
+
+       For the Game Boy, base and max are both always 160x144, so none of
+       this generalisation reaches it -- which the chrome goldens are what
+       actually prove. */
     int      base_w, base_h, max_w, max_h;
     /* koboy_layout_mode, resolved from koboy_config's own layout_mode by
        config_resolve_profile. It travels in the PROFILE rather than being

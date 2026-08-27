@@ -658,7 +658,11 @@ void video_fit_frac(int src_w, int src_h, int avail_w, int avail_h,
 void video_fit_rect(const koboy_profile *p, int src_w, int src_h, uint32_t par,
                     int *dw_out, int *dh_out, int *ox_out, int *oy_out)
 {
-    int dw, dh;
+    /* 1x1, not undefined: video_fit_frac writes nothing for a degenerate
+       input (its own live guard), and BOTH branches can now reach it, so the
+       fallback value belongs at the declaration rather than being repeated in
+       front of each call. One row of picture beats a garbage rect. */
+    int dw = 1, dh = 1;
     if (par == 0) par = KOBOY_ASPECT_ONE;
 
     if (p->layout_mode == KOBOY_LAYOUT_LCD) {
@@ -692,13 +696,45 @@ void video_fit_rect(const koboy_profile *p, int src_w, int src_h, uint32_t par,
                    ? src_w
                    : (int)((((uint64_t)src_w * par) + 32768u) >> 16);
             if (ew < 1) ew = 1;
-            dw = 1; dh = 1;
             video_fit_frac(ew, src_h, p->game_w, p->game_h, &dw, &dh);
         }
     } else {
-        int fs, ox, oy;
-        video_fit_par(p, src_w, src_h, par, &fs, &dw, &ox, &oy);
-        dh = src_h * fs;
+        /* The frame's DISPLAYED width, computed once and used twice: to ask
+           whether an integer fit is possible at all, and (if it is not) as
+           the source shape the fractional fit must preserve. Same rounding as
+           video_fit_par's, on purpose -- the two must agree about whether a
+           frame is one pixel too wide. */
+        int ew = par == KOBOY_ASPECT_ONE
+               ? src_w
+               : (int)((((uint64_t)src_w * par) + 32768u) >> 16);
+        if (ew < 1) ew = 1;
+
+        if (ew > p->game_w || src_h > p->game_h) {
+            /* THE FRAME DOES NOT FIT EVEN AT 1:1, so there is no integer fit
+               to find: video_fit_par's scale floor is 1 (it must be, or a
+               frame smaller than the rect would round to nothing), which
+               means it cannot SHRINK -- it would hand back dh = src_h and the
+               scaler would write past the bottom of v->cur.
+
+               This became reachable when the DMG rect started being sized
+               from the core's BASE geometry (config_resolve_profile_par): the
+               rect no longer holds every frame in [1, max] by construction,
+               and snes9x2005's 512x512 max against its 256x224 base is
+               exactly the gap. Under the old max-sized rect it could not fire
+               at all -- game_w >= ceil(max_w * par) >= ew and
+               game_h >= max_h >= src_h for every frame the bounds guard in
+               video_pipeline_run accepts -- which is why nothing here needed
+               it before and why every existing fit is bit-for-bit unchanged.
+
+               Fractional rather than refusing the frame: a hi-res mode
+               presented slightly small is a picture, and a dropped frame is a
+               frozen screen. */
+            video_fit_frac(ew, src_h, p->game_w, p->game_h, &dw, &dh);
+        } else {
+            int fs, ox, oy;
+            video_fit_par(p, src_w, src_h, par, &fs, &dw, &ox, &oy);
+            dh = src_h * fs;
+        }
     }
 
     int ox = (p->game_w - dw) / 2;

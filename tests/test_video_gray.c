@@ -258,12 +258,23 @@ TEST_MAIN({
                be what is being read. */
             out[i] = video_buffer(v)[(size_t)(fr.y + fr.h / 2) * video_stride(v)
                                      + fr.x + fr.w / 2];
-            /* Claim 2: both end up as the SAME 800x720 picture. The Game Boy
-               gets there at its configured scale 5 with the rect exactly the
-               frame's size; the Game Gear gets there by fitting 160x144 into
-               a rect sized from 284x240. */
-            CHECK_EQ_INT(fr.w, 800);
-            CHECK_EQ_INT(fr.h, 720);
+            /* Claim 2 USED TO BE "both end up as the same 800x720 picture",
+               and that stopped being true when the reserved rect started
+               being sized from the frame a core actually draws rather than
+               from its max (config.c, where rect_w is computed). The Game
+               Boy is unchanged -- its configured 5 against a rect exactly
+               the frame's size, 800x720. The Game Gear's rect used to come
+               from Genesis Plus GX's 284x240 max, which is a Master System
+               frame the Game Gear never renders; from its own 160x144 base
+               at 6:5 pixels it now fits 960x864.
+
+               The claim this block is actually making is the one below --
+               that the two are the same GREY -- and it never depended on
+               them being the same size. The sizes are asserted anyway,
+               separately, because "the Game Gear got bigger" is a visible
+               change somebody should have to justify rather than discover. */
+            CHECK_EQ_INT(fr.w, i == 0 ? 800 : 960);
+            CHECK_EQ_INT(fr.h, i == 0 ? 720 : 864);
             video_destroy(v);
         }
         CHECK_EQ_INT(out[0], out[1]);

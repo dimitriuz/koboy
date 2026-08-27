@@ -1524,41 +1524,36 @@ int main(int argc, char **argv)
                 video_invalidate(vid);
             }
             int rbw, rbh, rmw, rmh;
-            /* Only a change to MAX re-fits. The reserved rect, the chrome
-               drawn around it and video's buffers are all sized from max
-               (koboy.h), so a change to base alone leaves every one of them
-               correct and there is nothing to redo: video_fit places each
-               frame inside the existing rect per submit.
+            /* RESOLVE FIRST, THEN COMPARE THE ANSWER -- not the inputs.
 
-               Testing base here as well -- which this did -- made every base
-               change tear down video, rebuild it and repaint the whole
-               faceplate. That is not a theoretical cost: a Game & Watch title
-               alternates between the whole unit and the LCD alone several
-               times a second, so the device log showed the pair
-               654x396 <-> 305x191 repeating, each toggle paying a full
-               video_destroy/video_create plus a chrome redraw plus the
-               forced full-rect refresh a fresh video_create implies. The
-               Game Boy never reaches either branch (base == max == 160x144,
-               and gambatte never sends these commands at all). */
+               This used to test which INPUT had moved and skip the whole
+               rebuild for a base-only change, on the reasoning that the rect,
+               the chrome and video's buffers were all sized from max. Two
+               thirds of that is still true (the buffers are max-sized, and
+               the LCD rect still is), but the DMG rect is now sized from BASE
+               (config_resolve_profile_par), so a base change there really can
+               move the rect and the input test would leave the faceplate
+               drawn around the wrong one.
+
+               The cost that test existed to avoid has not gone away, and it
+               is not theoretical: a Game & Watch title alternates
+               654x396 <-> 305x191 several times a second, and a
+               video_destroy/video_create + chrome redraw + forced full-rect
+               refresh at that rate is what the device log showed. So the
+               skip is kept -- keyed on the RESOLVED PRESENTATION being
+               identical rather than on which field changed. That is both
+               safer and stricter: it catches a base change that does move the
+               rect (SNES dropping into a 512-wide hi-res mode) and still
+               skips one that does not (Game & Watch, whose LCD rect comes
+               from max; PC Engine's 256 <-> 352 switch, whose display width
+               is the same in both modes so the rect is byte for byte the
+               same). The Game Boy never reaches any of this: base == max ==
+               160x144 and gambatte never sends these commands at all. */
             uint32_t rpar2 = prof_par;
             if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
                 ((rpar2 = core_par(&cfg, core, rbw, rbh)) != prof_par ||
                  rbw != prof.base_w || rbh != prof.base_h ||
                  rmw != prof.max_w  || rmh != prof.max_h)) {
-                /* A pixel-aspect change re-fits the RECT, not just the frame
-                   inside it: the rect is sized as max_w times the aspect
-                   (config_resolve_profile_par), so leaving it alone would
-                   make the fit drop an integer step to squeeze the newly
-                   widened picture into a rect built for a narrower one --
-                   which is the 585x480 regression that parameter exists to
-                   prevent. Hence the aspect is tested here and not only in
-                   the video_set_aspect branch above. */
-                if (rpar2 == prof_par && rmw == prof.max_w && rmh == prof.max_h) {
-                    /* Base-only: record what the core is rendering now, for
-                       the log and for anything that asks, and keep going. */
-                    prof.base_w = rbw; prof.base_h = rbh;
-                    goto geometry_done;
-                }
                 koboy_profile real_prof;
                 if (!config_resolve_profile_par(&real_prof, &cfg, pw, ph,
                                                 rbw, rbh, rmw, rmh, rpar2)) {
@@ -1566,6 +1561,16 @@ int main(int argc, char **argv)
                          pw, ph, rmw, rmh);
                     mode = MODE_QUIT;
                     goto sram_check;
+                }
+                /* Nothing a rebuild would change: same rect in the same
+                   place, same scale, and the same max the buffers were
+                   allocated from. Record what the core is rendering now --
+                   base is what changed, and the log and video's own fit both
+                   want it current -- and keep going. */
+                if (config_profile_presentation_same(&real_prof, &prof)) {
+                    prof.base_w = rbw; prof.base_h = rbh;
+                    prof_par = rpar2;
+                    goto geometry_done;
                 }
                 prof = real_prof;
                 prof_par = rpar2;

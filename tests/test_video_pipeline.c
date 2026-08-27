@@ -108,15 +108,28 @@ TEST_MAIN({
            every hardcoded 1000x750 below failed. Pinning keeps the test
            measuring its own subject. */
         gc.scale_explicit = true;
+        /* TEN, not the 5 that was pinned here while the rect came from max.
+           Every number in this block is expressed against a 1000x750 rect,
+           and holding that rect fixed across the sizing-rule change is what
+           keeps the block measuring its own subject (buffers from max,
+           smaller frames accepted, the margin clear, the bounds guard)
+           instead of turning into a second copy of the rect-sizing test.
+           100 * 10 is the same 1000 that 200 * 5 was.
+
+           It is not a free relabelling either: under the OLD max-sized rule
+           scale 10 would have asked for 2000x1500, which does not fit a
+           1264x1680 panel, so the fitting loop would have demoted it. The
+           two rules genuinely disagree here. */
+        gc.scale = 10;
         /* base != max on purpose (matches the config-level sweep in
            tests/test_config.c): the buffer is allocated at 200x150 (max),
-           the first real frame submitted is smaller (100x75, base), and
-           accepting it is exactly what "may legitimately render smaller
-           than its maximum" means. */
+           the first real frame submitted is the MAXIMUM one and the rect is
+           sized for the smaller base -- which is the case the fit has to
+           shrink rather than spill, and it is asserted directly below. */
         koboy_profile gp;
         CHECK(config_resolve_profile(&gp, &gc, 1264, 1680, 100, 75, 200, 150));
-        CHECK_EQ_INT(gp.scale, 5);
-        CHECK_EQ_INT(gp.game_w, 1000);   /* 200 * 5, from max -- not 100 * 5 */
+        CHECK_EQ_INT(gp.scale, 10);
+        CHECK_EQ_INT(gp.game_w, 1000);   /* 100 * 10, from base -- not 200 * 10 */
         CHECK_EQ_INT(gp.game_h, 750);
 
         koboy_video *gv = video_create(&gp, false, KOBOY_GRAY_DEFAULT);
@@ -483,6 +496,131 @@ TEST_MAIN({
         CHECK(oy + dh <= p.game_h);
     }
 
+    /* ---- CONTAINMENT: every frame in [1, max] fits the base-sized rect ---- */
+    /* THE SAFETY ARGUMENT FOR THE WHOLE RECT-SIZING CHANGE, swept rather than
+       argued.
+
+       The DMG rect used to be max_w x max_h times an integer, so "a frame the
+       core is allowed to send fits the rect it will be drawn into" was true
+       by construction and needed no test. The rect now comes from the core's
+       BASE geometry (config.c), which buys a SNES 4x its old picture area and
+       gives up that construction: a frame between base and max is bigger than
+       the rect, and video_fit_par's scale floor of 1 means the integer fit
+       cannot shrink it. video_fit_rect falls back to the fractional fit for
+       exactly those frames, and if it did not, video_pipeline_run's scaler
+       would write past the end of v->cur -- silent memory corruption, not a
+       wrong-looking picture.
+
+       Swept over every system koboy runs, at its MEASURED base/max/display
+       aspect (TESTED.md and scripts/probe_core.c), on all four panels the
+       design spec supports, against a grid of frame sizes covering the whole
+       legal range including both corners. The pixel aspect is re-derived per
+       FRAME, which is what video_pipeline_run does.
+
+       THE ROW THAT ACTUALLY FIRES THE FALLBACK is FinalBurn Neo's Tapper:
+       base 512x480 at 5:4 pixels is a 640x480 rect at scale 1 on the Libra 2,
+       and FBNeo declares a SQUARE max (side = max(w,h), so both orientations
+       fit one buffer) of 512x512 -- 32 rows taller than the rect. It is a
+       shipped board and not a hypothetical, which is why no synthetic
+       geometry is needed here. Asserted by name below the sweep so that a
+       future geometry change cannot quietly make this sweep vacuous. */
+    {
+        static const struct {
+            const char *name; int bw, bh, mw, mh; double dar;
+        } sys[] = {
+            { "Game Boy",      160, 144, 160, 144, 1.11111 },
+            { "NES",           256, 240, 256, 240, 1.21905 },
+            { "Pokemon Mini",  384, 256, 384, 256, 1.5     },
+            { "WonderSwan",    224, 144, 224, 224, 1.55556 },
+            { "WSwan portrait",144, 224, 224, 224, 1.55556 },
+            { "Neo Geo Pocket",160, 152, 160, 152, 1.05    },
+            { "Atari NTSC",    320, 210, 320, 256, 1.33333 },
+            { "Atari PAL",     320, 250, 320, 256, 1.33333 },
+            { "ColecoVision",  256, 192, 512, 288, 0.0     },
+            { "Intellivision", 352, 224, 352, 224, 1.57143 },
+            { "Master System", 256, 192, 284, 240, 1.52381 },
+            { "Game Gear",     160, 144, 284, 240, 1.33333 },
+            { "Mega Drive",    320, 224, 348, 240, 1.30612 },
+            { "SNES",          256, 224, 512, 512, 1.33333 },
+            { "SNES hi-res",   512, 448, 512, 512, 1.33333 },
+            { "PC Engine 256", 256, 243, 512, 243, 1.2     },
+            { "PC Engine 352", 352, 243, 512, 243, 1.2     },
+            { "Galaga (rot 3)",224, 288, 288, 288, 0.75    },
+            { "Defender",      292, 240, 292, 292, 1.33333 },
+            { "Tapper",        512, 480, 512, 512, 1.33333 },
+        };
+        static const struct { int w, h; } panels[] = {
+            { 1072, 1448 }, { 1264, 1680 }, { 1404, 1872 }, { 1440, 1920 }
+        };
+        int spills = 0, shrunk = 0;
+        const char *first_spill = NULL;
+        for (size_t i = 0; i < sizeof sys / sizeof sys[0]; i++) {
+            /* dar == 0 is libretro's "no answer" and falls back to
+               base_w/base_h, exactly as core_display_aspect does. */
+            uint32_t dar = sys[i].dar > 0.0
+                         ? (uint32_t)(sys[i].dar * 65536.0 + 0.5)
+                         : (uint32_t)(((uint64_t)sys[i].bw << 16) / (uint64_t)sys[i].bh);
+            for (size_t q = 0; q < sizeof panels / sizeof panels[0]; q++) {
+                koboy_config sc; config_defaults(&sc);
+                koboy_profile sp;
+                CHECK(config_resolve_profile_par(&sp, &sc, panels[q].w, panels[q].h,
+                                                 sys[i].bw, sys[i].bh,
+                                                 sys[i].mw, sys[i].mh,
+                                                 video_pixel_aspect(dar, sys[i].bw, sys[i].bh)));
+                /* Both corners of the legal range plus a grid through it.
+                   1x1 is what a core sends on a bad frame and the fit still
+                   has to land inside the rect. */
+                for (int fh = 1; fh <= sys[i].mh; fh += 17)
+                for (int fw = 1; fw <= sys[i].mw; fw += 19) {
+                    int w = fw, h = fh;
+                    if (fw + 19 > sys[i].mw) w = sys[i].mw;
+                    if (fh + 17 > sys[i].mh) h = sys[i].mh;
+                    int dw, dh, ox, oy;
+                    video_fit_rect(&sp, w, h, video_pixel_aspect(dar, w, h),
+                                   &dw, &dh, &ox, &oy);
+                    if (dw < 1 || dh < 1 || ox < 0 || oy < 0 ||
+                        ox + dw > sp.game_w || oy + dh > sp.game_h) {
+                        if (!spills) first_spill = sys[i].name;
+                        spills++;
+                    }
+                    /* Did this frame have to be SHRUNK -- i.e. did the
+                       fallback do any work? Counted so the sweep cannot pass
+                       by never reaching the branch it exists to guard. */
+                    if (h > sp.game_h) shrunk++;
+                }
+            }
+        }
+        if (spills) fprintf(stderr, "  first spill: %s\n", first_spill);
+        CHECK_EQ_INT(spills, 0);
+        CHECK(shrunk > 0);
+
+        /* Tapper by name, with the arithmetic written out, because "shrunk >
+           0" above is satisfied by any row and this is the one that carries
+           the property. 512x512 is square-pixel at this frame size (4:3
+           display aspect over a 512x512 frame), so it wants 683x512 shown; the
+           rect is 640x480, the width binds, and the fractional fit gives
+           640x479 rather than the 683x512 the integer path's 1x floor would
+           have written -- 43 columns and 32 rows past the buffer. */
+        {
+            koboy_config tc; config_defaults(&tc);
+            koboy_profile tp;
+            uint32_t dar = (uint32_t)(1.33333 * 65536.0 + 0.5);
+            CHECK(config_resolve_profile_par(&tp, &tc, 1264, 1680, 512, 480,
+                                             512, 512,
+                                             video_pixel_aspect(dar, 512, 480)));
+            CHECK_EQ_INT(tp.game_w, 640);
+            CHECK_EQ_INT(tp.game_h, 480);
+            int dw, dh, ox, oy;
+            video_fit_rect(&tp, 512, 512, video_pixel_aspect(dar, 512, 512),
+                           &dw, &dh, &ox, &oy);
+            CHECK_EQ_INT(dw, 640);
+            CHECK(dh <= 480);
+            CHECK(dh >= 470);            /* aspect kept, not squashed to nothing */
+            CHECK(ox + dw <= tp.game_w);
+            CHECK(oy + dh <= tp.game_h);
+        }
+    }
+
     /* ------------- the LCD layout end to end through video_submit ---------- */
     {
         /* A real .mgw geometry (Mickey Mouse, 654x396) resolved by the real
@@ -684,12 +822,26 @@ TEST_MAIN({
            reports (side = max(w,h)) precisely so that both orientations fit
            one buffer -- resolved on a panel big enough that the scale search
            cannot demote below 1. Scale is pinned to 1 explicitly so the
-           destination is the rotated frame with nothing added. */
+           destination is the rotated frame with nothing added.
+
+           BASE IS PER-ROTATION, and that is not a convenience: core.c's
+           core_get_geometry transposes base and max for an odd rotation
+           precisely so every consumer sees the picture AS PRESENTED, and
+           main.c re-resolves the profile when the rotation changes (core.c
+           sets geom_dirty for it). So a rot-1 board really does reach
+           config_resolve_profile as 2x4, not as the 4x2 the core renders
+           into, and resolving one profile for all four rotations models a
+           call sequence koboy cannot produce. It went unnoticed while the
+           rect came from the SQUARE max, which is the same either way; the
+           base-sized rect is what makes the two different. */
         koboy_config rc; config_defaults(&rc);
         rc.scale = 1; rc.scale_explicit = true;
-        koboy_profile rp;
-        CHECK(config_resolve_profile(&rp, &rc, 1264, 1680, 4, 2, 4, 4));
-        CHECK_EQ_INT(rp.scale, 1);
+        /* The two shapes the four rotations resolve to, hoisted because the
+           blocks below the loop need one each: rp_land for the un-turned
+           4x2 and rp_port for the quarter-turned 2x4. */
+        koboy_profile rp_land, rp_port;
+        CHECK(config_resolve_profile(&rp_land, &rc, 1264, 1680, 4, 2, 4, 4));
+        CHECK(config_resolve_profile(&rp_port, &rc, 1264, 1680, 2, 4, 4, 4));
 
         /* Expected destinations, derived from libretro's own definition (the
            value is 90-degree COUNTER-CLOCKWISE steps) and NOT from the
@@ -699,7 +851,9 @@ TEST_MAIN({
              rot 2 -> 4x2, out[y][x] = src[1-y][3-x]
              rot 3 -> 2x4, out[y][x] = src[1-x][y]            */
         for (int rot = 0; rot < 4; rot++) {
-            koboy_video *rv = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            const koboy_profile *rp = (rot & 1) ? &rp_port : &rp_land;
+            CHECK_EQ_INT(rp->scale, 1);
+            koboy_video *rv = video_create(rp, false, KOBOY_GRAY_DEFAULT);
             CHECK(rv != NULL);
             video_set_rotation(rv, rot);
             CHECK_EQ_INT(video_get_rotation(rv), rot);
@@ -768,16 +922,17 @@ TEST_MAIN({
            rot-1 and a rot-3 render of the same frame must DIFFER. An
            implementation that transposed without reflecting -- the easiest
            thing to get wrong, and invisible on a symmetric test pattern --
-           produces identical output for both. */
+           produces identical output for both. Both sides get the PORTRAIT
+           profile, which is what a quarter-turned board resolves to. */
         {
-            koboy_video *a = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
-            koboy_video *b = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            koboy_video *a = video_create(&rp_port, false, KOBOY_GRAY_DEFAULT);
+            koboy_video *b = video_create(&rp_port, false, KOBOY_GRAY_DEFAULT);
             CHECK(a && b);
             video_set_rotation(a, 1);
             video_set_rotation(b, 3);
             video_submit(a, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
             video_submit(b, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
-            size_t n = (size_t)video_stride(a) * (size_t)rp.game_h;
+            size_t n = (size_t)video_stride(a) * (size_t)rp_port.game_h;
             CHECK(memcmp(video_buffer(a), video_buffer(b), n) != 0);
             video_destroy(a); video_destroy(b);
         }
@@ -787,15 +942,15 @@ TEST_MAIN({
            depends on. Compared against a koboy_video that was never told
            about rotation at all, not against a second one set to 0, so a
            video_set_rotation that corrupted state on the way to 0 is caught
-           too. */
+           too. Landscape profile: rot 0 is the un-turned case. */
         {
-            koboy_video *a = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
-            koboy_video *b = video_create(&rp, false, KOBOY_GRAY_DEFAULT);
+            koboy_video *a = video_create(&rp_land, false, KOBOY_GRAY_DEFAULT);
+            koboy_video *b = video_create(&rp_land, false, KOBOY_GRAY_DEFAULT);
             CHECK(a && b);
             video_set_rotation(a, 0);
             video_submit(a, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
             video_submit(b, src, 4, 2, 4 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
-            size_t n = (size_t)video_stride(a) * (size_t)rp.game_h;
+            size_t n = (size_t)video_stride(a) * (size_t)rp_land.game_h;
             CHECK_EQ_INT(memcmp(video_buffer(a), video_buffer(b), n), 0);
             CHECK_EQ_INT(video_get_rotation(b), 0);   /* the default */
             video_destroy(a); video_destroy(b);
