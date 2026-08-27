@@ -1822,3 +1822,69 @@ build carrying this fix, because the derivation runs in `recent_load`.
 The fixed binary is on the device as `.adds/koboy/koboy-test`, beside the
 shipped `koboy`, which was left untouched: nothing launches it, so the device
 still runs exactly what it ran before.
+
+## Switching systems mid-session, on the device, 2026-08-27
+
+The owner's second report: playing a GBA game, MENU -> CHOOSE ROM, picked a
+Mega Drive game, koboy died to Nickel. Reproduced and fixed on the Libra 2,
+`--ui-script` over ssh with Nickel up, isolated `--save-dir` throughout.
+
+**The reproduction, on the binary the device was running** (`4febe63`, the
+one deployed at 14:17): `--rom` a GBA title, `menu`, CHOOSE ROM, ALL GAMES,
+into a Sega folder, pick a game.
+
+    koboy: core /mnt/onboard/.adds/koboy/gpsp_libretro.so
+    koboy: switched to .../MasterSystem/Sonic Chaos (Europe, Brazil).sms
+    gamepak code match for : AW2E
+    bad jump 8000000 (8000000)
+    Segmentation fault
+    EXIT=139
+
+One core line for two games. The GBA core was handed Sega data and executed
+it as ARM code. `.sms` here, `.md` in the owner's report -- the extension
+does not matter, only that it is not the one the open core was chosen for.
+
+**The same script on the fixed binary**, exit 0:
+
+| | first session | second session |
+|---|---|---|
+| core | `gpsp_libretro.so` | `genesis_plus_gx_libretro.so` |
+| faceplate | LCD | DMG |
+| geometry | 240x160 (max 240x160), game 960x640 | 256x192 (max 284x240), game 879x576 |
+| pacing | 59.7275 fps, 16742 us | 59.9227 fps, 16688 us |
+| save | `Advance Wars 2 ….srm` | `Sonic Chaos ….srm` |
+
+The frame rate is worth a line of its own: the old path kept the FIRST core's
+pacer, so even a switch that had not crashed would have run the second game
+at the first system's rate. Two `.srm` files, each named for its own ROM, is
+the other half -- a stale binding wrote the incoming game's memory into the
+outgoing game's save file, which is a silent corruption rather than a crash.
+
+The owner's exact case (GBA -> `MegaDrive/Sonic The Hedgehog (USA,
+Europe).md`) was run separately and also exits 0.
+
+### Four sessions in one process, with the real cores
+
+The session loop's whole job is being re-entered, and `core_close` on gpSP is
+a `dlclose` of a C++ core with a dynamic recompiler -- something core.h used
+to say was "avoidable, so it is avoided". It is now routine, so it was
+measured rather than assumed: two ROMs copied into a tmpfs directory, three
+switches in one run.
+
+    gpsp -> genesis_plus_gx -> gpsp -> genesis_plus_gx      exit 0
+    20 presented frames, 24 rects, both .srm files written
+
+gpSP was closed and reopened twice on the device without incident.
+
+### Three rc=139 crashes in the log, and only one of them is this bug
+
+`koboy.log` on the device holds three: 13:19:00, 13:20:06 and 14:20:34. Only
+the last is the switch, and only the last is on the deployed `4febe63`.
+
+The other two are on the 13:09 binary, involve no ROM switch at all, and both
+sit next to a `present_divisor` cycled up to 8 -- the first right after
+`present_divisor = 4 -> 6 -> 8` during play, the second on the very next
+launch, which started at 8 (the menu writes it back to the ini) and faulted
+before presenting a frame. **Not reproduced**: 60 frames of Pokemon Emerald
+at `present_divisor = 8` exits 0 on both the deployed binary and the fixed
+one. The device's live `koboy.ini` still says 8. See `docs/FOLLOWUPS.md` #92.

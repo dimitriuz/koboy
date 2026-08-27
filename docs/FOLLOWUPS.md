@@ -1616,3 +1616,58 @@ message competes with a full-screen game and the acknowledgement wait is
 serviced by a real finger on a real touchscreen rather than by a 20-second
 deadline. That is the same gap `TESTED.md` already records for MODE_MENU, and
 this adds one more thing to try in the same sitting.
+
+## Switching systems mid-session (added 2026-08-27)
+
+### 92. Two rc=139 crashes in the owner's log that are NOT the CHOOSE ROM bug
+
+`koboy.log` holds three `rc=139` lines. 14:20:34 is the mid-session switch,
+fixed and verified. The other two are 13:19:00 and 13:20:06, on the 13:09
+binary, and they are a different shape:
+
+- 13:19:00 follows a run of `gray_map` cycling and then `present_divisor =
+  4 -> 6 -> 8`, and faults with no ROM switch anywhere in the session.
+- 13:20:06 is the NEXT launch. It starts Pokemon Emerald on gpSP at
+  `present_divisor 8` (the menu wrote 8 back to the ini) and faults
+  immediately -- no presented frames, no "stopped" line.
+
+The pairing is suggestive and it is not evidence. **Not reproduced**: 60
+frames of Emerald at divisor 8 exits 0 on both the deployed binary and the
+fixed one, and the two crashes are on a build that has since been replaced.
+
+What makes this worth keeping: the device's live `koboy.ini` still says
+`present_divisor = 8`, so if the divisor really is involved the owner's next
+launch is on the value that did it. The divisor ladder above 3 is recent
+(#26, #75) and untested above 3 for anything except smoothness. If a third
+crash of this shape appears, the first thing to try is the same title at
+divisor 3.
+
+### 93. The video and input rebuild across a switch is a construction argument, not a test
+
+`koboy_video` and `koboy_input` are locals of the session loop -- created
+after the re-fit, destroyed at the loop's bottom, referenced nowhere else --
+so no variable can carry one across a switch. That is a strong argument and
+it is not a check: a mutant that deliberately keeps the video alive across a
+switch produces IDENTICAL output on the host harness, because both stub cores
+report 160x144 and only the layout differs, so nothing is dropped and nothing
+is malformed enough to see from outside the process.
+
+Making it observable needs two stub cores with DIFFERENT geometry in one
+process. `KOBOY_STUB_GEOM` is one environment variable read by one stub, so
+it cannot express that today. The cheapest fix is probably a stub that keys
+its reported geometry off the ROM's extension, which would also let the
+geometry re-fit be tested across a switch rather than only at startup.
+
+### 94. Nobody has timed a switch on the device
+
+A switch is now a full teardown and rebuild: `dlclose` the core, `dlopen` the
+next one, re-resolve the profile, repaint the faceplate, rebuild the video
+buffer, load the new ROM. gpSP is a C++ core with a dynamic recompiler and an
+8 MB cartridge behind it.
+
+Correctness is settled (TESTED.md: gpSP closed and reopened twice on the
+device, four sessions, exit 0). The COST is not measured at all -- there is
+no timestamp around it in `koboy.log` and nobody has watched the panel during
+one. If it turns out to be seconds rather than a moment, the answer is
+probably a progress line on the panel rather than a same-core fast path,
+which is the thing this design deliberately does not have.
