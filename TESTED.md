@@ -1136,8 +1136,51 @@ Everything about it is verified on the host --- the model, the hold, the
 clamps, and an end-to-end pair of runs spending the same 100 ms as a flat
 charge (205 frames held) and as an area charge (6 frames held).
 
-**ON THE DEVICE: not yet run.** The build cross-compiles and passes
-`verify-core.sh`; nothing of the pacing change has executed on the panel.
+**ON THE DEVICE, 2026-08-27.** `koboy --frames 900` run directly over ssh with
+Nickel up (never through `scripts/koboy.sh`), Sonic Chaos on the Master
+System, the owner's own settings (`gray_map = luma`, `force_dither = true`,
+`waveform_fast = du`), an 879x576 game rect. Four runs, ten seconds apart, the
+only variable being the divisor and whether the throttle is on:
+
+| present_divisor | settle_full_ms | presented | settle-held |
+|---|---|---|---|
+| 3 | 0 | **235** | 0 |
+| 3 | **150** | **112** | 387 |
+| 8 | 0 | 90 | 0 |
+| 8 | 150 | 89 | 7 |
+
+Read the four rows together, because each pair says something the other
+cannot:
+
+- **At divisor 3 the panel was being asked for more than twice what it can
+  finish.** 235 presents in 900 core frames is one every 64 ms against a
+  ~153 ms settle. The throttle cuts it to 112 --- one every 134 ms --- which
+  is what the panel can actually complete.
+- **At divisor 8 the throttle is very nearly inert: 90 -> 89, seven frames
+  held in nine hundred.** That is the strongest evidence in this table that
+  the model is right, and nobody arranged it: divisor 8 is the setting the
+  owner arrived at BY EYE, and the throttle independently agrees there is
+  almost nothing left to take away there.
+- **Divisor 3 with the throttle beats the owner's manual divisor 8 outright:
+  112 presented frames against 90, 24% MORE**, while never over-driving the
+  panel on the large updates. The extra frames are the small-area ones a flat
+  divisor throws away for nothing.
+
+So the recommendation to the owner is concrete: **put `present_divisor` back
+to 3.** The setting they raised to 8 by hand is now done automatically, only
+while the content needs it.
+
+Stage timings from the same runs, which reconfirm `docs/FOLLOWUPS.md` #23 on a
+larger rect than it was measured on: core 5.6 ms, **submit 20.3 ms**, blit
+2.2 ms, refresh 0.7 ms (mean per presented frame, 879x576 = 506k px).
+
+Device integrity after the session: `/mnt/onboard/.kobo/version` still carries
+the real serial, `fbink -e` still reports `deviceName='Libra 2'`,
+`Mark 9`, `hasEclipseWfm=1`, Nickel up throughout, `koboy.ini` untouched, the
+previous binary kept as `koboy.prev`.
+
+**What no `--frames` run can check is whether the flashing is GONE.** That is
+the owner's, playing a scroller and looking at it.
 
 **What no host can check is whether the flashing is gone.** That is the
 owner's, playing a scroller. Expect scrolling to present at about 6.6 fps

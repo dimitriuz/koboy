@@ -435,7 +435,15 @@ spec's appendices are the record; the short version:
   alone paced a two-tile sprite move and a whole-screen scroll identically.
   `settle_base_ms` / `settle_full_ms` charge each presented frame
   `base + full * dirty/whole` and hold the next present until it elapses;
-  the divisor remains a ceiling. Note `settle_base_ms` ships at **0** although
+  the divisor remains a ceiling. Measured on the device (Sonic Chaos, 900
+  core frames, 879x576 rect): at divisor 3 the throttle cuts 235 presents to
+  112 -- the panel was being asked for more than twice what it can finish --
+  and at divisor 8 it is nearly inert, 90 -> 89. That second row is the
+  evidence, and nobody arranged it: **divisor 8 is what the owner reached by
+  eye, and the model independently agrees there is nothing left to take away
+  there.** Divisor 3 with the throttle beats their manual divisor 8 outright,
+  112 presented frames against 90, because it gives back the small-area
+  frames a flat divisor throws away. Note `settle_base_ms` ships at **0** although
   the measured fixed term is 144 ms, and that is deliberate: the model decides
   when the next update does VISIBLE harm, not how long the last one takes, and
   charging 144 ms to everything pins the device to 6.5 fps on static screens
