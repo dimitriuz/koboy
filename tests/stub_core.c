@@ -78,6 +78,32 @@ int stub_ptr_count = -1;
 int stub_base_w = 160, stub_base_h = 144;
 int stub_max_w  = 160, stub_max_h  = 144;
 
+/* The other two things retro_get_system_av_info reports, poked the same way
+   and for the same reason -- both are consumed for the first time by the task
+   that gave koboy per-core pacing and non-square pixels.
+
+   stub_aspect 0.0 is not a placeholder: it is libretro's "no answer, assume
+   base_width/base_height", one shipped core (gearcoleco) really does report
+   it, and it is what every OTHER test in this binary keeps seeing, so the
+   fallback path in core_display_aspect is the default rather than a corner.
+
+   stub_fps is also readable from the environment as KOBOY_STUB_FPS, which
+   dlsym-poking cannot cover: tests/smoke_host.sh drives the real binary as a
+   subprocess and times it, and a wall-clock check is the only thing in this
+   project that can prove main.c actually PACES at the rate it resolved rather
+   than merely logging it. */
+double stub_aspect = 0.0;
+double stub_fps    = 59.7275;
+/* The rate a MID-RUN SET_SYSTEM_AV_INFO announces, when that differs from the
+   rate the load-time query answered with. 0 means "announce stub_fps", i.e.
+   no change -- which is what every test that does not care sees. Poked by
+   test_core.c (through the stub_late_geometry == 2 path) and set from
+   KOBOY_STUB_FPS_LATE by smoke_host.sh (through the tick-10 path below);
+   the two exist because one drives core.c directly and the other has to drive
+   the whole binary as a subprocess. */
+double stub_fps_late = 0.0;
+static int stub_fps_late_env = 0;
+
 /* Reproduces the measured Game & Watch core behaviour (see core_get_geometry's
    comment, src/core.h): retro_get_system_av_info answers a placeholder right
    after retro_load_game, and the real geometry (stub_base_w/h/max_w/h above)
@@ -227,7 +253,12 @@ void retro_get_system_av_info(struct retro_system_av_info *i)
         i->geometry.max_width   = (unsigned)stub_max_w;
         i->geometry.max_height  = (unsigned)stub_max_h;
     }
-    i->timing.fps = 59.7275; i->timing.sample_rate = 32768.0;
+    i->geometry.aspect_ratio = (float)stub_aspect;
+    {
+        const char *e = getenv("KOBOY_STUB_FPS");
+        if (e && *e) stub_fps = atof(e);
+    }
+    i->timing.fps = stub_fps; i->timing.sample_rate = 32768.0;
 }
 bool retro_load_game(const struct retro_game_info *g)
 {
@@ -327,8 +358,28 @@ void retro_run(void)
         stub_osc = (e && *e && *e != '0') ? 1 : 0;
         e = getenv("KOBOY_STUB_MAXGROW");
         stub_maxgrow = (e && *e && *e != '0') ? 1 : 0;
+        /* A MID-RUN TIMING CHANGE, which is the half of SET_SYSTEM_AV_INFO
+           koboy ignored until per-core pacing existed. Announced from inside
+           retro_run() because that is where a real core announces it, and
+           through the full av_info (not SET_GEOMETRY) because that is the
+           only command that carries timing at all. tests/smoke_host.sh times
+           a run across the switch: nothing else in this project can prove
+           main.c re-paces rather than merely re-fitting. */
+        e = getenv("KOBOY_STUB_FPS_LATE");
+        if (e && *e) { stub_fps_late = atof(e); stub_fps_late_env = 1; }
     }
     stub_tick++;
+    if (stub_fps_late_env && stub_tick == 10) {
+        struct retro_system_av_info av;
+        memset(&av, 0, sizeof av);
+        av.geometry.base_width  = (unsigned)stub_base_w;
+        av.geometry.base_height = (unsigned)stub_base_h;
+        av.geometry.max_width   = (unsigned)stub_max_w;
+        av.geometry.max_height  = (unsigned)stub_max_h;
+        av.geometry.aspect_ratio = (float)stub_aspect;
+        av.timing.fps = stub_fps_late; av.timing.sample_rate = 32768.0;
+        if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
+    }
     if (stub_osc && stub_tick % 10 == 0) {
         /* Half of max, floored at 1, alternating with max itself. max is
            deliberately NOT touched. */
@@ -370,7 +421,13 @@ void retro_run(void)
             av.geometry.base_height = (unsigned)stub_base_h;
             av.geometry.max_width   = (unsigned)stub_max_w;
             av.geometry.max_height  = (unsigned)stub_max_h;
-            av.timing.fps = 59.7275; av.timing.sample_rate = 32768.0;
+            av.geometry.aspect_ratio = (float)stub_aspect;
+            /* stub_fps_late, when set, is what makes this announcement differ
+               from the load-time query -- without a difference, a test cannot
+               tell whether core.c read `av->timing` here or is still echoing
+               what retro_get_system_av_info said. */
+            av.timing.fps = stub_fps_late > 0.0 ? stub_fps_late : stub_fps;
+            av.timing.sample_rate = 32768.0;
             if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO, &av);
         }
     }

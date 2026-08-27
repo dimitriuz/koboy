@@ -1118,7 +1118,17 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------- the loop */
     koboy_pacer pace;
-    pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor);
+    /* Paced at the rate THIS core reports, not at the Game Boy's 59.7275 Hz
+       that KOBOY_FRAME_US hardcodes -- see docs/FOLLOWUPS.md #38 and #57,
+       where two FinalBurn Neo boards report 30 fps and were therefore running
+       at double speed. Both numbers are logged, the raw one and the resolved
+       one, because a core whose fps is refused by the plausibility bound in
+       pacer_frame_us_from_fps is otherwise indistinguishable on a device from
+       one that genuinely runs at 59.7275. */
+    double core_hz = core_fps(core);
+    uint32_t frame_us = pacer_frame_us_from_fps(core_hz);
+    say("koboy: core reports %.4f fps; pacing at %u us/frame\n", core_hz, frame_us);
+    pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor, frame_us);
 
     koboy_stats stats;
     stats_reset(&stats);
@@ -1396,6 +1406,17 @@ int main(int argc, char **argv)
            this costs one cheap boolean check per frame and changes nothing
            else about existing Game Boy behaviour. */
         if (core_geometry_changed(core)) {
+            /* Timing first, and unconditionally, for the same reason the
+               rotation below is unconditional: SET_SYSTEM_AV_INFO can move
+               the frame rate without moving a single one of the four numbers
+               the base/max comparison below looks at, so a rate change would
+               otherwise be seen only when it happened to arrive alongside a
+               resize. pacer_set_frame_us is a no-op when the rate has not
+               changed, which is the overwhelmingly common case (only the
+               Game & Watch core sends these commands at all today, and it
+               sends the same 60 fps every time). */
+            pacer_set_frame_us(&pace, pf->now_us(pf->ctx),
+                               pacer_frame_us_from_fps(core_fps(core)));
             /* Rotation first, and unconditionally, because it is the one
                announcement that can arrive WITHOUT the numbers moving: a
                square frame turned a quarter turn is the same width and

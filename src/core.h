@@ -87,6 +87,37 @@ koboy_pixfmt core_pixfmt(const koboy_core *c);
 bool core_get_geometry(const koboy_core *c, int *base_w, int *base_h,
                        int *max_w, int *max_h);
 
+/* What the core says its frames should be SHOWN at, and how fast.
+
+   Both come from retro_system_av_info and both were parsed and thrown away
+   until this task: src/core.c's SET_SYSTEM_AV_INFO handler used to carry a
+   comment saying as much.
+
+   core_display_aspect() returns the DISPLAY aspect ratio -- the width:height
+   the whole picture wants, not the shape of one pixel -- as a 16.16 fixed
+   point number, because nothing downstream of this may touch a float (the
+   scaler is 16.16 throughout). KOBOY_ASPECT_ONE is 1:1.
+
+   Three things this handles, all measured rather than assumed:
+     - `aspect_ratio <= 0` is libretro's "assume base_width/base_height", and
+       one shipped core (gearcoleco) really does report 0. That fallback is
+       computed here, in exact integer arithmetic from the PRESENTED base
+       geometry, so video.c never sees an absent aspect.
+     - The value is already in PRESENTED orientation for a rotated board:
+       FBNeo reports 0.75 for Galaga while rendering into a 288x224 landscape
+       buffer, i.e. the number only makes sense after the quarter turn. So it
+       is NOT transposed here, unlike core_get_geometry's base/max.
+     - A nonsense float (0, negative, NaN, absurd) falls back rather than
+       propagating into a cast, exactly as the fps bound does below.
+
+   core_fps() returns the raw reported rate, 0.0 when no ROM is loaded. It is
+   deliberately UNVALIDATED: what counts as a plausible frame rate is pacing
+   policy, it lives in pacer_frame_us_from_fps (src/pacing.h), and main.c logs
+   the raw number alongside the microseconds it resolved to so a wrong-speed
+   report on a device is diagnosable from koboy.log. */
+uint32_t core_display_aspect(const koboy_core *c);
+double   core_fps(const koboy_core *c);
+
 /* Quarter turns counter-clockwise the core has asked for, 0..3. Per GAME,
    not per core: FBNeo answers 3 for Galaga and 0 for Donkey Kong Jr. out of
    the same .so, and core_unload_rom clears it so the next ROM through a

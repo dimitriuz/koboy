@@ -53,6 +53,15 @@ struct koboy_core {
     /* See core_geometry_changed. Left false by the initial core_load_rom
        query on purpose -- only env_cb's two geometry commands set it. */
     bool    geom_dirty;
+    /* retro_game_geometry.aspect_ratio and retro_system_timing.fps, exactly
+       as the core reported them -- kept live by the same three paths that
+       keep base/max live. Both were read and discarded before this task; see
+       core_display_aspect and core_fps in core.h for what they now mean and
+       who validates them. `aspect` of 0 is libretro's own "no answer", which
+       is why it is stored rather than normalised here: the fallback needs
+       base_w/base_h, and base can change after aspect was announced. */
+    float   aspect;
+    double  fps;
     /* Quarter turns COUNTER-CLOCKWISE the core has asked the frontend to
        apply to every frame, 0..3, from RETRO_ENVIRONMENT_SET_ROTATION.
        Announced per GAME rather than per core -- FinalBurn Neo asks for 3 on
@@ -81,6 +90,7 @@ static void apply_full_geometry(koboy_core *c, const struct retro_game_geometry 
     c->base_h = (int)g->base_height;
     c->max_w  = g->max_width  ? (int)g->max_width  : c->base_w;
     c->max_h  = g->max_height ? (int)g->max_height : c->base_h;
+    c->aspect = g->aspect_ratio;
 }
 
 static bool env_cb(unsigned cmd, void *data)
@@ -219,6 +229,12 @@ static bool env_cb(unsigned cmd, void *data)
         const struct retro_game_geometry *g = data;
         g_active->base_w = (int)g->base_width;
         g_active->base_h = (int)g->base_height;
+        /* aspect_ratio IS one of the fields this partial update is meant to
+           carry (the comment above used to end "which koboy does not use" --
+           it does now, see core_display_aspect). Trusted the same way base is,
+           and a 0 here means the same thing a 0 at load time means: no answer,
+           fall back to base_width/base_height. */
+        g_active->aspect = g->aspect_ratio;
         if (g->max_width)  g_active->max_w = (int)g->max_width;
         if (g->max_height) g_active->max_h = (int)g->max_height;
         /* Invariant regardless of source: base can never legitimately
@@ -230,18 +246,22 @@ static bool env_cb(unsigned cmd, void *data)
         return true;
     }
     case RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO: {
-        /* The FULL reset: geometry AND timing. Timing (fps/sample_rate) is
-           read from `av->timing` by nothing in this codebase -- src/pacing.c
-           still paces every core at the fixed KOBOY_FRAME_US the Game Boy
-           measured (koboy.h), which is a real, deliberately out-of-scope gap
-           for this task (video resolution, not frame timing): pacing a core
-           whose fps this call changes is future work, tracked the same way
-           the rest of this project tracks a known-but-deferred item rather
-           than silently dropped. Geometry, which IS this task's scope, is
-           applied in full via the same helper the initial load-time query
-           uses. */
+        /* The FULL reset: geometry AND timing, and BOTH are now applied --
+           this handler used to carry a comment explaining that `av->timing`
+           was read by nothing, because pacing was a fixed constant. It is
+           not any more (src/pacing.c), so the rate is taken here too.
+
+           geom_dirty is what main.c polls, and it is deliberately the ONE
+           flag for both: a core cannot announce new timing without coming
+           through here, and coming through here always sets it, so main.c
+           re-reads the frame time in the same branch it re-reads geometry.
+           A separate timing_dirty would buy a second poll per frame to
+           distinguish a case (timing changed, geometry did not) whose only
+           response -- pacer_set_frame_us, a no-op when the rate is unchanged
+           -- is already correct without the distinction. */
         const struct retro_system_av_info *av = data;
         apply_full_geometry(g_active, &av->geometry);
+        g_active->fps = av->timing.fps;
         g_active->geom_dirty = true;
         return true;
     }
@@ -475,6 +495,7 @@ bool core_load_rom(koboy_core *c, const char *rom_path, char *err, size_t errlen
     struct retro_system_av_info av;
     c->get_system_av_info(&av);
     apply_full_geometry(c, &av.geometry);
+    c->fps = av.timing.fps;
     c->geom_dirty = false;
 
     /* The save-RAM LENGTH, captured here and here only -- see core_sram. */
@@ -627,6 +648,40 @@ bool core_get_geometry(const koboy_core *c, int *base_w, int *base_h,
 unsigned core_rotation(const koboy_core *c)
 {
     return c ? c->rot : 0u;
+}
+
+/* Contract in core.h. */
+uint32_t core_display_aspect(const koboy_core *c)
+{
+    if (!c || !c->game_loaded) return KOBOY_ASPECT_ONE;
+
+    double a = (double)c->aspect;
+    /* NEGATED range test, for the reason pacer_frame_us_from_fps spells out:
+       it rejects NaN, which `a <= 0.0 || a > 64.0` would let through. The
+       ceiling of 64 is not a plausibility bound on real content (the widest
+       thing here is 4:3) -- it is what keeps the 16.16 conversion inside
+       uint32_t, and anything beyond it is not an aspect ratio anyway. */
+    if (a >= (1.0 / 64.0) && a <= 64.0)
+        return (uint32_t)(a * 65536.0 + 0.5);
+
+    /* libretro's documented fallback: "if aspect_ratio is <= 0.0, an aspect
+       ratio of base_width / base_height is assumed". Exact integer
+       arithmetic, and taken from the PRESENTED base (core_get_geometry
+       transposes for a quarter turn) so the answer is in the same
+       orientation the reported float would have been. For every core in
+       reach whose aspect is 0 this comes out at exactly KOBOY_ASPECT_ONE,
+       which is the point: the fallback must not be the thing that moves a
+       picture. */
+    int bw = 0, bh = 0;
+    core_get_geometry(c, &bw, &bh, NULL, NULL);
+    if (bw < 1 || bh < 1) return KOBOY_ASPECT_ONE;
+    return (uint32_t)(((uint64_t)bw << 16) / (uint64_t)bh);
+}
+
+/* Contract in core.h: RAW, deliberately. Validation is pacing's business. */
+double core_fps(const koboy_core *c)
+{
+    return (c && c->game_loaded) ? c->fps : 0.0;
 }
 
 bool core_geometry_changed(koboy_core *c)

@@ -32,6 +32,59 @@ presented=$(echo "$out" | sed -n 's/.*presented=\([0-9]*\).*/\1/p')
 [ "$presented" -ge 1 ] || { echo "FAIL: presented $presented frames"; exit 1; }
 echo "PASS smoke_host presented=$presented"
 
+# ---------------------------------------------------------------- pacing
+# koboy paced EVERY system at the Game Boy's 59.7275 Hz until this check
+# existed (docs/FOLLOWUPS.md #38, #57 -- two FinalBurn Neo boards report 30
+# fps and therefore ran at double speed). The unit tests in test_pacing.c
+# prove the pacer honours whatever rate it is handed and that the conversion
+# from the core's fps is right; NOTHING in them can prove main.c actually
+# hands the pacer the core's number rather than the constant, because main.c
+# has no unit test. That wiring is exactly the "code path every automated test
+# takes the other way round" shape this project has been bitten by, so it is
+# checked here, end to end, with a stopwatch.
+#
+# KOBOY_STUB_FPS makes the stub core report 20 fps (tests/stub_core.c reads
+# it). 30 frames at 20 fps is 1.5 s of deliberate sleeping; at the Game Boy's
+# 59.7275 it would be 0.50 s. The threshold sits between the two with room on
+# both sides, so this discriminates the wiring without being a flaky timing
+# test: the gap it has to resolve is a factor of three.
+pace_run() {
+    t0=$(date +%s%N)
+    KOBOY_STUB_FPS="$1" SDL_VIDEODRIVER=dummy ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --frames 30 --quiet >/dev/null 2>&1 \
+        || { echo "FAIL: pacing run at $1 fps exited nonzero"; exit 1; }
+    t1=$(date +%s%N)
+    echo $(( (t1 - t0) / 1000000 ))
+}
+slow_ms=$(pace_run 20)
+fast_ms=$(pace_run 59.7275)
+[ "$slow_ms" -ge 1200 ] || {
+    echo "FAIL: 30 frames at a core-reported 20 fps took ${slow_ms}ms, expected >=1200ms"
+    echo "      (main.c is pacing at KOBOY_FRAME_US instead of the core's rate)"
+    exit 1; }
+[ "$fast_ms" -le 900 ] || {
+    echo "FAIL: 30 frames at 59.7275 fps took ${fast_ms}ms, expected <=900ms"
+    exit 1; }
+echo "PASS smoke_host pacing 20fps=${slow_ms}ms 59.7275fps=${fast_ms}ms"
+
+# ...and the MID-RUN change, which is the other half of the same claim.
+# SET_SYSTEM_AV_INFO carries timing as well as geometry, and main.c re-paces
+# from the branch it already polls for geometry. KOBOY_STUB_FPS_LATE makes the
+# stub announce a new rate from inside retro_run() at frame 10.
+# 40 frames = 10 at 60 fps (0.17 s) + 30 at 15 fps (2.0 s) = ~2.2 s. If the
+# announcement is ignored the whole run is 40 frames at 60 fps = 0.67 s.
+t0=$(date +%s%N)
+KOBOY_STUB_FPS=60 KOBOY_STUB_FPS_LATE=15 SDL_VIDEODRIVER=dummy ./build/koboy \
+    --core build/stub_core.so --rom "$ROM" --frames 40 --quiet >/dev/null 2>&1 \
+    || { echo "FAIL: mid-run pacing change run exited nonzero"; exit 1; }
+t1=$(date +%s%N)
+late_ms=$(( (t1 - t0) / 1000000 ))
+[ "$late_ms" -ge 1600 ] || {
+    echo "FAIL: a mid-run drop to 15 fps took ${late_ms}ms, expected >=1600ms"
+    echo "      (SET_SYSTEM_AV_INFO's timing half is being ignored)"
+    exit 1; }
+echo "PASS smoke_host mid-run repace=${late_ms}ms"
+
 # The startup flow (MAIN MENU -> ALL GAMES -> the browser) is invisible to
 # every other test in this suite, because they all pass --rom and take the
 # MODE_PLAY fast path straight past it. That is precisely the shape of the

@@ -566,6 +566,149 @@ TEST_MAIN({
         *rot = -1; *rot_ack = -1;
     }
 
+    /* --------------------------------------- fps and the display aspect
+       Both are fields core.c parsed and dropped on the floor until the task
+       that gave koboy per-core pacing and non-square pixels.
+       docs/FOLLOWUPS.md #38, #51, #57. */
+    {
+        double *sfps    = (double *)dlsym(so, "stub_fps");
+        double *saspect = (double *)dlsym(so, "stub_aspect");
+        CHECK(sfps && saspect);
+        *slg = 0;
+
+        /* NOTHING TO REPORT WITHOUT A ROM. retro_get_system_av_info is only
+           meaningful once content is loaded, so an unloaded core answers with
+           the neutral pair rather than with whatever was left in the struct. */
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT((int)core_display_aspect(c), (int)KOBOY_ASPECT_ONE);
+        CHECK(core_fps(c) == 0.0);
+        CHECK_EQ_INT((int)core_display_aspect(NULL), (int)KOBOY_ASPECT_ONE);
+        CHECK(core_fps(NULL) == 0.0);
+
+        /* THE ZERO CASE, and it is the default rather than a corner: one
+           shipped core (gearcoleco) reports aspect_ratio 0, which libretro
+           documents as "assume base_width/base_height". Its real numbers,
+           256x192, so the answer is 4:3 -- computed in integers, so there is
+           no rounding to be off by. Note what this does NOT say: the DISPLAY
+           aspect being 4:3 is not the same as the pixels being non-square.
+           A 256x192 frame shown at 4:3 has exactly square pixels, which is
+           what video.c derives and tests/test_video_pipeline.c asserts. */
+        *sbw = 256; *sbh = 192; *smw = 256; *smh = 192;
+        *saspect = 0.0; *sfps = 60.0;
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK_EQ_INT((int)core_display_aspect(c),
+                     (int)(((uint64_t)256 << 16) / 192));
+        CHECK(core_fps(c) == 60.0);
+
+        /* A base that IS 1:1 gives exactly KOBOY_ASPECT_ONE out of the same
+           fallback -- the neutral value, hit exactly rather than approached. */
+        *sbw = 224; *sbh = 224; *smw = 224; *smh = 224;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK_EQ_INT((int)core_display_aspect(c), (int)KOBOY_ASPECT_ONE);
+
+        /* A NON-square base with aspect 0: the fallback is base_w/base_h, not
+           1:1. 352/224 = 1.571428... (freeintv's real numbers, whose reported
+           aspect happens to agree with them). */
+        *sbw = 352; *sbh = 224; *smw = 352; *smh = 224;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK_EQ_INT((int)core_display_aspect(c),
+                     (int)(((uint64_t)352 << 16) / 224));
+
+        /* A REPORTED aspect wins over the fallback. stella2014's 1.33333 on a
+           frame whose base says 320x210 is the whole reason this field is
+           read at all: base is a lie there and the aspect is not. */
+        *sbw = 320; *sbh = 210; *smw = 320; *smh = 256;
+        *saspect = 1.3333333; *sfps = 59.92;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        {
+            uint32_t a = core_display_aspect(c);
+            /* 4/3 in 16.16 is 87381.33; the float round-trip through
+               retro_game_geometry's `float` costs a bit or two, so this is a
+               window rather than an equality. It is a TIGHT window: the
+               fallback (320/210 = 99864) is 12000 away and could not pass. */
+            CHECK(a >= 87370 && a <= 87392);
+        }
+        CHECK(core_fps(c) == 59.92);
+
+        /* A ROTATED board's aspect is NOT transposed, and that is measured
+           rather than chosen: FBNeo reports 0.75 for Galaga while rendering
+           into a 288x224 LANDSCAPE buffer -- the number only makes sense
+           applied after the quarter turn. core_get_geometry transposes; this
+           must not. */
+        {
+            int *rot = (int *)dlsym(so, "stub_rotation");
+            CHECK(rot != NULL);
+            *sbw = 288; *sbh = 224; *smw = 288; *smh = 288;
+            *saspect = 0.75; *rot = 3;
+            CHECK_EQ_INT(core_unload_rom(c), 1);
+            CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+            CHECK_EQ_INT((int)core_rotation(c), 3);
+            CHECK(core_get_geometry(c, &bw, &bh, &mw, &mh));
+            CHECK_EQ_INT(bw, 224); CHECK_EQ_INT(bh, 288);   /* transposed */
+            {
+                uint32_t a = core_display_aspect(c);        /* not transposed */
+                CHECK(a >= 49140 && a <= 49160);            /* 0.75 -> 49152 */
+            }
+
+            /* The FALLBACK, though, is taken from the PRESENTED base, so it
+               comes out in the same orientation the reported number would
+               have been in. Same rotated load, aspect 0: 224/288, not
+               288/224. Without the transpose this reads 84245. */
+            *saspect = 0.0;
+            CHECK_EQ_INT(core_unload_rom(c), 1);
+            CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+            CHECK_EQ_INT((int)core_display_aspect(c),
+                         (int)(((uint64_t)224 << 16) / 288));
+            *rot = -1;
+        }
+
+        /* Nonsense floats fall back rather than propagating into a cast --
+           NaN included, which is why core.c writes the test negated. */
+        *sbw = 160; *sbh = 144; *smw = 160; *smh = 144;
+        {
+            const double bad[] = { -1.0, -0.0, 1e30, 0.0 / 0.0 };
+            for (size_t i = 0; i < sizeof bad / sizeof bad[0]; i++) {
+                *saspect = bad[i];
+                CHECK_EQ_INT(core_unload_rom(c), 1);
+                CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+                /* 160/144 = 1.1111 -> 72817, the base fallback. */
+                CHECK_EQ_INT((int)core_display_aspect(c),
+                             (int)(((uint64_t)160 << 16) / 144));
+            }
+        }
+
+        /* SET_SYSTEM_AV_INFO carries BOTH, and both must land: this is the
+           mid-run announcement main.c reacts to, and the reason
+           pacer_set_frame_us exists. The stub fires it from inside the first
+           retro_run() when stub_late_geometry is 2. */
+        double *sfpsl = (double *)dlsym(so, "stub_fps_late");
+        CHECK(sfpsl != NULL);
+        *sbw = 384; *sbh = 224; *smw = 384; *smh = 384;
+        *saspect = 0.75;
+        /* The load-time query says one thing and the mid-run announcement
+           says another, DELIBERATELY: with both at 30 this check passes
+           whether or not core.c reads `av->timing` at all -- confirmed, it
+           was written that way first and the mutant that deletes the
+           assignment did not fail it. */
+        *sfps = 59.7275; *sfpsl = 30.0;        /* Tapper's rate, 1941's shape */
+        *slg = 2;
+        CHECK_EQ_INT(core_unload_rom(c), 1);
+        CHECK_EQ_INT(core_load_rom(c, rom_path, err, sizeof err), 1);
+        CHECK(core_fps(c) == 59.7275);         /* the load-time answer... */
+        core_run_frame(c);
+        CHECK(core_geometry_changed(c));
+        CHECK(core_fps(c) == 30.0);            /* ...replaced by the announcement */
+        {
+            uint32_t a = core_display_aspect(c);
+            CHECK(a >= 49140 && a <= 49160);
+        }
+
+        *saspect = 0.0; *sfps = 59.7275; *sfpsl = 0.0; *slg = 0;
+    }
+
     /* Restored, not left pointed at Game & Watch numbers / late-geometry
        mode: the .so this dlsym reached is the SAME loaded object core_open's
        own dlopen returned (one shared object per path, refcounted -- not a

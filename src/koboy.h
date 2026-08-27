@@ -7,6 +7,13 @@
 #define KOBOY_GB_W 160
 #define KOBOY_GB_H 144
 #define KOBOY_FRAME_US 16742          /* 1e6 / 59.7275 */
+/* 16.16 fixed point 1.0. The unit for every aspect ratio this project
+   carries, and fixed point rather than float for the reason the scaler is:
+   the numbers end up in the pixel path, and nothing in the pixel path
+   touches a float. libretro hands aspect_ratio over as a `float`, so exactly
+   one conversion happens -- in core.c, once per geometry announcement, well
+   away from any per-pixel loop. */
+#define KOBOY_ASPECT_ONE 65536u
 #define KOBOY_MAX_TOUCH 10
 #define KOBOY_CHROME_MARGIN 8         /* minimum clear border for bezel to stay in bounds */
 
