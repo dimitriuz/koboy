@@ -702,6 +702,25 @@ TEST_MAIN({
                produces and therefore the hardest case for a disc to stay
                clear of. */
             { "/roms/galaga.zip",         2, 512, 512 },
+            /* Mega Drive, SNES and PC Engine, again at the MAX geometry
+               their cores really report (measured with scripts/corebench.c,
+               which prints it): Genesis Plus GX 348x240, snes9x2005 512x512
+               -- square, and the joint-largest rect in this table alongside
+               arcade -- and beetle-pce-fast 512x243.
+
+               Mega Drive and SNES are here for a reason the others are not:
+               they are the two systems in this batch whose extra discs stop
+               a REAL button being unreachable rather than merely adding one.
+               The Mega Drive's hardware "A" is on JOYPAD_Y, which the
+               faceplate's A disc is NOT (that one is the Mega Drive's C), so
+               without extra[0] a three-button pad is missing a third of
+               itself while looking complete. PC Engine is the opposite case
+               and is deliberately absent from this table: a standard PC
+               Engine pad is I, II, RUN and Select, which the faceplate
+               already carries in full, so it has NO extra discs and is
+               asserted as such separately below. */
+            { "/roms/Sonic.md",           2, 348, 240 },
+            { "/roms/Super Mario World.sfc", 2, 512, 512 },
         };
         static uint8_t fbc[1440 * 1920], fbn[1440 * 1920];
 

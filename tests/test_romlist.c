@@ -210,11 +210,101 @@ TEST_MAIN({
     CHECK_EQ_INT(romlist_is_rom("Alex Kidd.sm"), 0);
     CHECK_EQ_INT(romlist_is_rom("Crystal Warriors.ggx"), 0);
     CHECK_EQ_INT(romlist_is_rom("Crystal Warriors.g"), 0);
-    CHECK_EQ_INT(romlist_is_rom("Sonic.md"), 0);
-    CHECK_EQ_INT(romlist_is_rom("Sonic.gen"), 0);
     CHECK_EQ_INT(romlist_is_rom("Sonic.smd"), 0);
     CHECK_EQ_INT(romlist_is_rom("Choplifter.sg"), 0);
     CHECK_EQ_INT(romlist_is_rom("Adventure.mvc"), 0);
+
+    /* ---- Mega Drive, SNES and PC Engine.
+
+       .md LISTS NOW. Genesis Plus GX was always a Mega Drive core; the
+       extension it answers to is what changed. This block used to assert the
+       opposite, which is why it is worth saying plainly: `Sonic.md` moved
+       from 0 to 1 deliberately. */
+    CHECK_EQ_INT(romlist_is_rom("Sonic The Hedgehog (USA, Europe).md"), 1);
+    CHECK_EQ_INT(romlist_is_rom("SONIC THE HEDGEHOG.MD"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Streets of Rage 2 (USA).Md"), 1);
+
+    /* .bin AND .gen STILL DO NOT, and that is the owner's ruling rather than
+       an oversight: Mega Drive accepts .md only. 31 .bin and 5 .gen files in
+       their collection stay invisible.
+       The .bin half is the one with teeth. koboy has no signal but the
+       extension, and .bin was COUNTED across the author's whole collection
+       before this was settled -- 723 TI-99/4A files, 234 Odyssey 2, 119
+       Atari 5200, 72 Arcadia 2001, 71 Vectrex, 68 Astrocade, 56 VC 4000, 38
+       Jaguar, and only then 36 Mega Drive. The exec.bin and grom.bin
+       assertions above are not a separate concern from this one: they are
+       the same rule, and they are why it holds. */
+    CHECK_EQ_INT(romlist_is_rom("Ultimate Mortal Kombat Trilogy.bin"), 0);
+    CHECK_EQ_INT(romlist_is_rom("ULTIMATE MORTAL KOMBAT TRILOGY.BIN"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Lion King II, The (Unl) [!].gen"), 0);
+    CHECK_EQ_INT(romlist_is_rom("ZPF (World) (Aftermarket) (Unl).GEN"), 0);
+
+    /* .sfc/.smc, one system and two dumping conventions. The mixed case is
+       measured, not defensive: 47 files ending .smc and 11 ending .SMC in
+       one of the author's directories. */
+    CHECK_EQ_INT(romlist_is_rom("Super Mario World (USA).sfc"), 1);
+    CHECK_EQ_INT(romlist_is_rom("SUPER MARIO WORLD (USA).SFC"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Chrono Trigger (USA).SfC"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Super Metroid.smc"), 1);
+    CHECK_EQ_INT(romlist_is_rom("SUPER METROID.SMC"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Super Metroid.SmC"), 1);
+    /* .smc versus .sms is the tightest collision this list has ever carried:
+       one character apart, both real, and routed to DIFFERENT cores. A
+       matcher that compared two characters would send every Master System
+       cartridge to a SNES emulator and vice versa. */
+    CHECK_EQ_INT(romlist_is_rom("Alex Kidd.sms"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Super Metroid.smc"), 1);
+    CHECK_EQ_INT(romlist_is_rom("Something.sm"), 0);
+    /* The other historical copier extensions are not listed. */
+    CHECK_EQ_INT(romlist_is_rom("Super Mario World.fig"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Super Mario World.swc"), 0);
+    /* An MSU-1 / SPC collection ships these beside the .sfc files. */
+    CHECK_EQ_INT(romlist_is_rom("Chrono Trigger.pcm"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Chrono Trigger.bml"), 0);
+
+    /* .pce, CARTRIDGE PC ENGINE ONLY. */
+    CHECK_EQ_INT(romlist_is_rom("Bonk's Adventure (USA).pce"), 1);
+    CHECK_EQ_INT(romlist_is_rom("BONK'S ADVENTURE (USA).PCE"), 1);
+    CHECK_EQ_INT(romlist_is_rom("R-Type (USA).PcE"), 1);
+    /* .sgx is REFUSED even though the browser could happily list it, and the
+       reason is the one this project cares most about: beetle-pce-fast
+       implements neither the SuperGrafx's second VDC nor its priority mixer,
+       so it would load an .sgx and DRAW IT WRONG rather than refuse. Seven
+       files in the author's collection stay invisible instead of appearing
+       and misbehaving. .chd and the rest of the CD family (48 files) need a
+       system-card BIOS nobody ships. */
+    CHECK_EQ_INT(romlist_is_rom("Daimakaimura (Japan).sgx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("DAIMAKAIMURA (JAPAN).SGX"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Ys Book I & II (USA).chd"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Ys Book I & II (USA).cue"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Ys Book I & II (USA).toc"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Ys Book I & II (USA).m3u"), 0);
+    CHECK_EQ_INT(romlist_is_rom("syscard3.pce"), 1);  /* a .pce IS listable; the
+                                                         system card is content
+                                                         this core will refuse,
+                                                         not a BIOS we hide */
+
+    /* Superstring and prefix for the four new extensions. */
+    CHECK_EQ_INT(romlist_is_rom("Sonic.mdx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Sonic.m"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Mario.sfcx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Mario.sf"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Mario.smcx"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Bonk.pcex"), 0);
+    CHECK_EQ_INT(romlist_is_rom("Bonk.pc"), 0);
+
+    /* ONE HAZARD THIS FUNCTION CANNOT CATCH, asserted so the limitation is
+       recorded rather than assumed away: a macOS AppleDouble stub. The
+       author's collection carries a 212-byte `._desire_....smc` beside the
+       real file, and it LISTS -- correctly, because this function sees a
+       name and never a size, and `._foo.smc` is a perfectly well-formed
+       name. snes9x2005 does not refuse such a file; it divides by zero and
+       takes the process down. The floor that stops it is
+       config_min_rom_bytes, checked at the load site in main.c. Do not
+       "fix" this assertion by filtering `._` here: that would cost a stat()
+       per directory entry, still miss a truncated download, and put
+       system-specific knowledge in the layer that has least of it. */
+    CHECK_EQ_INT(romlist_is_rom("._desire_d-zero_snes_pal_2021.smc"), 1);
     /* The Intellivision collection's own index files, which sit in the same
        directory as the .int content. */
     CHECK_EQ_INT(romlist_is_rom("gamegear.txt"), 0);

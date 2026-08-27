@@ -835,3 +835,71 @@ out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
 echo "$out" | grep -q "quarter turn" \
     && { echo "FAIL: a core that asked for no rotation was reported as rotated"; echo "$out"; exit 1; }
 echo "ok: SET_ROTATION reaches the video pipeline and transposes the game rect"
+
+# ----------------------------------------------- too short to be a cartridge
+# THE ONLY GUARD IN THIS PROJECT THAT EXISTS TO STOP A CRASH RATHER THAN A
+# WRONG PICTURE, and therefore the one whose wiring is worth an end-to-end
+# check the same way pacing and pixel aspect are above.
+#
+# snes9x2005 raises SIGFPE inside retro_load_game for a .sfc/.smc under 8192
+# bytes: LoROMMap does `% Memory.CalculatedSize`, and CalculatedSize rounds the
+# file down to whole 8 KB blocks, so it is zero. Measured on the real core --
+# every size from 0 to 1024 exits 136, 8192 does not, and the backtrace is
+# retro_load_game -> LoadROM -> InitROM -> LoROMMap. That kills koboy outright:
+# no error, no way back to the browser. The file that found it is real and is
+# the kind every FAT32 collection grows -- a 212-byte macOS AppleDouble stub
+# named `._something.smc` sitting beside the game it describes.
+#
+# test_config.c proves config_min_rom_bytes returns 8192 for .sfc/.smc and 0
+# for everything else. NOTHING in it can prove main.c actually consults it
+# before handing the file to a core, because main.c has no unit test -- the
+# same gap the pacing block above was written for.
+#
+# THE STUB CORE IS USED ON PURPOSE, not the real SNES one. The guard is keyed
+# on the ROM's EXTENSION and fires before any core is opened, so the stub is
+# enough to exercise the wiring -- and it makes the mutant crisp rather than
+# fatal: the stub happily accepts a 212-byte file and runs, so with the guard
+# removed this run SUCCEEDS instead of dying, and the check below turns red on
+# an exit code of 0 rather than on a signal. A test that can only fail by
+# crashing the thing it tests is hard to trust.
+short_sfc=build/short_cartridge.sfc
+head -c 212 /dev/zero > "$short_sfc"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
+        --rom "$short_sfc" --frames 5 2>&1) || rc=$?
+[ "$rc" -ne 0 ] || {
+    echo "FAIL: a 212-byte .sfc was accepted (exit 0)"
+    echo "      main.c is not consulting config_min_rom_bytes before loading;"
+    echo "      the real SNES core would have died of SIGFPE here."
+    exit 1; }
+echo "$out" | grep -qi "too short to be a cartridge" || {
+    echo "FAIL: a 212-byte .sfc was refused, but not for being too short"
+    echo "$out"
+    exit 1; }
+
+# ...and the floor is a FLOOR, not a ban on the extension. 8192 bytes is the
+# first size the core survives, so it must load. Without this the check above
+# is equally satisfied by a koboy that refuses every .sfc ever offered to it.
+ok_sfc=build/ok_cartridge.sfc
+head -c 8192 /dev/zero > "$ok_sfc"
+rc=0
+SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
+    --rom "$ok_sfc" --frames 5 --quiet >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: an 8192-byte .sfc was refused (exit $rc); the floor is off by one"
+    exit 1; }
+
+# ...and it is SNES-ONLY. An Atari 2600 cartridge really is 2048 or 4096 bytes
+# and a Game Boy ROM can be small too, so a floor applied to every system would
+# refuse real content to guard a crash those systems do not have. Same 212
+# bytes, a .gb name, and it must load.
+short_gb=build/short_cartridge.gb
+head -c 212 /dev/zero > "$short_gb"
+rc=0
+SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
+    --rom "$short_gb" --frames 5 --quiet >/dev/null 2>&1 || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: a 212-byte .gb was refused (exit $rc); the floor is not SNES-only"
+    exit 1; }
+rm -f "$short_sfc" "$ok_sfc" "$short_gb"
+echo "PASS smoke_host cartridge floor: 212B .sfc refused, 8192B .sfc ok, 212B .gb ok"

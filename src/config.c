@@ -213,6 +213,60 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        claim. */
     { ".sms", "genesis_plus_gx_libretro.so" }, /* Master System, GPGX     */
     { ".gg",  "genesis_plus_gx_libretro.so" }, /* Game Gear, same core    */
+    /* MEGA DRIVE, and it is the SAME .so as the two rows above -- Genesis
+       Plus GX is natively a Mega Drive core and always was; the comment
+       above used to say the Mega Drive list was "deliberately absent"
+       because nobody had loaded one. Somebody has now, so one extension of
+       that list is claimed and the rest still are not.
+
+       .MD ONLY. NOT .bin, NOT .gen, and that is the owner's decision rather
+       than an oversight, so here is what it costs and why it is right.
+       Their Mega Drive tree is 1736 .md, 31 .bin and 5 .gen; the 36 files
+       this row does not claim are homebrew and demoscene releases, and they
+       will not appear in the browser at all.
+
+       .bin is refused because koboy picks the core FROM THE EXTENSION AND
+       NOTHING ELSE, and .bin is the most contested extension in retro
+       computing. Counted across the owner's own collection rather than
+       argued from memory: 723 TI-99/4A, 234 Odyssey 2, 119 Atari 5200, 72
+       Arcadia 2001, 71 Vectrex, 68 Astrocade, 56 VC 4000, 38 Jaguar, 36
+       Mega Drive, 34 Channel F, 33 CreatiVision, 28 Intellivision. The Mega
+       Drive is the NINTH largest claimant of .bin in this one tree, and two
+       of the files ahead of it (exec.bin and grom.bin) are literally the
+       BIOS koboy asks the owner to install by hand. A row here would route
+       every one of those to a 68000 emulator.
+       .gen is unambiguous but is five files, and it is left out to keep the
+       rule a reader can hold in their head: one system, one extension.
+       roms/README.txt says so on the device, which is where somebody
+       wondering why a file is missing will actually look. */
+    { ".md",  "genesis_plus_gx_libretro.so" }, /* Mega Drive, same core   */
+    /* SNES, and the interesting part is that the v1 design spec ruled this
+       system OUT on CPU grounds. That judgement was re-tested rather than
+       inherited -- see scripts/build-snes-core.sh for the three-core
+       shootout and TESTED.md for the device figures.
+
+       Two extensions, one core, and the pair is the WonderSwan pattern: an
+       .sfc and an .smc are the same cartridge behind different dumping
+       conventions (.smc historically carries a 512-byte copier header, which
+       the core detects and skips). .fig, .swc and .bs are the other
+       historical copier extensions and are NOT claimed, for the reason
+       .pc2 and .ngpc are not: nobody's collection here has them.
+
+       Case-insensitivity is load-bearing again and not hypothetically: the
+       author's SNES directory holds 47 files ending .smc and 11 ending
+       .SMC, side by side, on top of the device's FAT32. */
+    { ".sfc", "snes9x2005_libretro.so" },   /* SNES, libretro/snes9x2005  */
+    { ".smc", "snes9x2005_libretro.so" },   /* SNES, copier-header dump   */
+    /* PC ENGINE / TurboGrafx-16, CARTRIDGE ONLY. The core advertises
+       `pce|sgx|cue|ccd|chd|toc|m3u` and exactly one is claimed.
+       .sgx (SuperGrafx, 7 files in the author's collection) is refused
+       because beetle-pce-FAST implements neither the second VDC nor the
+       priority mixer that system needs -- it would load an .sgx and render
+       it WRONGLY rather than refuse, which is the failure mode this project
+       treats as worse than absence. .chd and the other CD extensions (48
+       titles) need a system-card BIOS that is not ours to ship. Both
+       exclusions are argued at length in scripts/build-pce-core.sh. */
+    { ".pce", "mednafen_pce_fast_libretro.so" }, /* PC Engine, beetle-pce-fast */
     /* THE FIRST EXTENSION IN THIS TABLE THAT IS NOT A SYSTEM'S OWN, and the
        decision behind it is the interesting part of adding arcade.
        An arcade "ROM" is a ZIP of the individual EPROM dumps off one PCB,
@@ -260,6 +314,36 @@ const char *config_core_for_rom(const char *rom_path)
         if (ends_with_ext(rom_path, g_core_by_ext[i].ext))
             return g_core_by_ext[i].core;
     return "gambatte_libretro.so";
+}
+
+size_t config_min_rom_bytes(const char *rom_path)
+{
+    if (!rom_path || !*rom_path) return 0;
+    /* 8192 == one SNES mapping block. snes9x2005's InitROM rounds the file
+       down to whole blocks into Memory.CalculatedSize and LoROMMap then does
+       `% Memory.CalculatedSize`, so anything under one block divides by zero
+       and raises SIGFPE inside retro_load_game -- the process dies, koboy and
+       all. MEASURED, not deduced from the source: every size from 0 to 1024
+       kills the loader (exit 136) and 8192 does not, and the backtrace is
+       retro_load_game -> LoadROM -> InitROM -> LoROMMap.
+
+       This is not a hypothetical file. The author's collection contains
+       exactly one, and it is the kind every FAT32-and-macOS collection grows:
+       `._desire_d-zero_....smc`, a 212-byte AppleDouble resource-fork stub
+       that macOS writes beside the real file and that the browser lists as a
+       game because it ends in .smc. A partial download does the same thing.
+
+       ONLY the two SNES extensions carry a floor, and the restraint is
+       deliberate: an Atari 2600 cartridge really is 2048 or 4096 bytes, a
+       Game & Watch .mgw and a Pokemon Mini .min are small too, and a floor
+       applied to those would refuse real content to guard against a crash
+       they do not have. Every other core in this project REFUSES a short
+       file cleanly ("core rejected rom"), which is the behaviour this one
+       should have had. Add a row here only for a core measured to do worse
+       than refuse. */
+    if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc"))
+        return 8192;
+    return 0;
 }
 
 int config_layout_for_rom(const char *rom_path)
@@ -449,6 +533,95 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
     if (ends_with_ext(rom_path, ".col")) {
         l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "K1" };
         l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "K2" };
+        return;
+    }
+
+    /* THE MEGA DRIVE IS THE FIFTH TIME THIS PROJECT HAS MET THE "a button
+       that exists in the hardware and is unreachable on koboy" BUG, and the
+       first time it was caught by reading the core BEFORE shipping rather
+       than by a title that would not start.
+
+       A three-button Mega Drive pad is A, B, C and START. That is one more
+       face button than the DMG faceplate has, and -- this is the part that
+       makes it a trap rather than a shortfall -- the one that falls off is
+       NOT the one the retropad naming suggests. Genesis Plus GX maps
+       (libretro/libretro.c, the port-0 descriptor block):
+
+         JOYPAD_B      -> B          JOYPAD_X      -> Y
+         JOYPAD_A      -> C          JOYPAD_L      -> X
+         JOYPAD_Y      -> A          JOYPAD_R      -> Z
+         JOYPAD_START  -> Start      JOYPAD_SELECT -> Mode
+
+       So the faceplate's B disc is the Mega Drive's B and its A disc is the
+       Mega Drive's **C**. The hardware's **A** is on JOYPAD_Y, which the DMG
+       faceplate does not have. Without a disc for it, koboy would present a
+       console whose A button does not exist -- and it would LOOK fine,
+       because the faceplate has a disc moulded "A" that does something. That
+       is the ColecoVision failure in reverse and it is worse, because
+       nothing refuses to start: Sonic plays (A, B and C are all jump), and
+       then Streets of Rage has no special attack and Golden Axe has no
+       magic.
+
+       extra[0] is therefore JOYPAD_Y, labelled "A" after the hardware's own
+       moulding, and with it ALL THREE BUTTONS OF A 3-BUTTON PAD ARE
+       REACHABLE, which covers the overwhelming majority of the library.
+
+       extra[1] is JOYPAD_X, the six-button pad's "Y" -- the middle of its
+       top row. The six-button pad is X, Y, Z above A, B, C; two of those
+       three have nowhere to go and Y is the one chosen because it is the
+       middle-strength attack in the fighters that are most of what needs six
+       buttons at all. Labelled "Y" for the same reason the arcade discs are
+       labelled 3 and 4 rather than C and D: on this system the label a
+       player is looking for is the one printed on the real pad.
+
+       WHAT IS STILL UNREACHABLE, stated rather than discovered: X
+       (JOYPAD_L) and Z (JOYPAD_R). There is no seventh and eighth place on
+       this faceplate. Every title that needs them is a six-button fighter.
+       MODE (JOYPAD_SELECT) IS reachable -- it is the faceplate's SELECT
+       pill, whatever that pill's moulded label says -- and that matters more
+       than it sounds: holding Mode at power-on is how a real six-button pad
+       pretends to be a three-button one for the titles that mis-detect it.
+
+       The pad type is not forced here and does not need to be: the core
+       defaults to `DEVICE_PAD2B | DEVICE_PAD3B | DEVICE_PAD6B` (libretro.c),
+       i.e. auto-detect, and koboy answers no core options, so all six
+       buttons are live and the game decides. */
+    if (ends_with_ext(rom_path, ".md")) {
+        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "A" };
+        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "Y" };
+        return;
+    }
+
+    /* A SNES pad is the retropad -- literally, the retropad was modelled on
+       it -- so snes9x2005's descriptors are the identity map: B is B, A is
+       A, X is X, Y is Y, L is L, R is R, plus Start and Select. That makes
+       this the first system koboy runs where the control set is not merely
+       bigger than the faceplate but bigger by FOUR: eight buttons against
+       the faceplate's A, B, START, SELECT and two spare discs.
+
+       THE FOUR FACE BUTTONS WIN THE TWO SLOTS. extra[0] is Y and extra[1] is
+       X, so B/A/Y/X are all present and the shoulders are not. The trade is
+       not close: on this console Y is the run-and-fire button (Mario runs on
+       Y, Samus shoots on Y, Link's sword is B and item is Y), so a SNES
+       without Y is not a SNES with a missing extra -- it is one where the
+       primary action of most of the library has no button. L and R are
+       secondary almost everywhere: map, weapon cycle, page turn, camera
+       nudge.
+
+       WHAT IT COSTS, counted honestly rather than waved past. The titles
+       that genuinely want a shoulder are playable but reduced, not broken:
+       Super Metroid's L/R aim the diagonals (the d-pad diagonals still aim,
+       so it plays), Yoshi's Island cycles items on the shoulders, Zelda has
+       none. The ones that lose something they cannot get back are the ones
+       where a shoulder is a distinct move -- the fighters' fierce attacks,
+       Mario Kart's hop -- and there is no eighth place on this faceplate for
+       them. Recorded so this reads as a decision, not a gap somebody forgot.
+
+       Labelled "Y" and "X" after the pad's own moulding, which is also what
+       every SNES title's own control screen calls them. */
+    if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc")) {
+        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "Y" };
+        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "X" };
         return;
     }
 

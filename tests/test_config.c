@@ -792,19 +792,100 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("A.sm"),   "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.ggx"),  "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.g"),    "gambatte_libretro.so") == 0);
-        /* Not the Sega core's other extensions. Genesis Plus GX advertises
-           the whole Mega Drive list plus .sg, and stella2014 advertises .bin
-           and .mvc -- none is listed, for the same reason .pc2 and .ngpc are
-           not: no collection here has them, and an extension the browser
-           lists but nobody has loaded is an untested claim. `.bin` in
-           particular must NOT be claimed, because a .bin next to a ROM is
-           far more often a BIOS than a game -- exec.bin and grom.bin are
-           literally two of them. */
-        CHECK(strcmp(config_core_for_rom("A.md"),  "gambatte_libretro.so") == 0);
-        CHECK(strcmp(config_core_for_rom("A.gen"), "gambatte_libretro.so") == 0);
-        CHECK(strcmp(config_core_for_rom("A.sg"),  "gambatte_libretro.so") == 0);
+        /* .md -> Genesis Plus GX, THE SAME .so as .sms and .gg. Genesis Plus
+           GX was always natively a Mega Drive core; what changed is that one
+           extension of the list it advertises is now claimed. The
+           same-file assertion is the one that matters: a third row that
+           named a separate Mega Drive core would satisfy every other check
+           here and ship a .so that does not exist. */
+        CHECK(strcmp(config_core_for_rom("SONIC.md"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("SONIC.MD"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/megadrive/Streets of Rage 2 (USA).md"),
+                     "genesis_plus_gx_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.md"), config_core_for_rom("A.sms")) == 0);
+        CHECK(strcmp(config_core_for_rom("A.md"), config_core_for_rom("A.gg")) == 0);
+
+        /* THE MEGA DRIVE'S OTHER TWO EXTENSIONS ARE REFUSED, and this is the
+           assertion that makes that a decision instead of a gap. The owner
+           ruled: .md only. 31 .bin and 5 .gen files in their collection do
+           not list and do not load.
+
+           `.bin` is the load-bearing half. koboy picks a core from the
+           extension and has NO other signal, and .bin was counted across the
+           author's whole collection before this was settled: 723 TI-99/4A,
+           234 Odyssey 2, 119 Atari 5200, 72 Arcadia 2001, 71 Vectrex, 68
+           Astrocade, 56 VC 4000, 38 Jaguar -- and only then 36 Mega Drive.
+           Two more of them are exec.bin and grom.bin, the Intellivision BIOS
+           this project asks the owner to install by hand. Claiming .bin
+           would route all of that to a 68000 emulator, so the exec.bin case
+           below is not a curiosity: it is the file the rule exists for. */
+        CHECK(strcmp(config_core_for_rom("A.bin"),    "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.BIN"),    "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("exec.bin"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("grom.bin"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.gen"),    "gambatte_libretro.so") == 0);
+        /* Still not .sg (SG-1000), nor stella2014's .mvc, for the reason
+           .pc2 and .ngpc are absent: no collection here has them. */
+        CHECK(strcmp(config_core_for_rom("A.sg"),  "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.mvc"), "gambatte_libretro.so") == 0);
+
+        /* .sfc/.smc -> snes9x2005. The system the v1 design spec ruled out on
+           CPU grounds; see TESTED.md for the measurement that overturned it.
+           Two extensions, one core -- the WonderSwan pattern -- so the
+           same-file check applies here too. The mixed case is real: 47 .smc
+           and 11 .SMC in one of the author's directories. */
+        CHECK(strcmp(config_core_for_rom("MARIO.sfc"),
+                     "snes9x2005_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("MARIO.SFC"),
+                     "snes9x2005_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/snes/Super Metroid (Japan, USA) (En,Ja).sfc"),
+                     "snes9x2005_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.smc"),
+                     "snes9x2005_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.SMC"),
+                     "snes9x2005_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.sfc"), config_core_for_rom("A.smc")) == 0);
+        /* The other historical copier extensions are NOT claimed. */
+        CHECK(strcmp(config_core_for_rom("A.fig"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.swc"), "gambatte_libretro.so") == 0);
+
+        /* .pce -> beetle-pce-fast, CARTRIDGE PC ENGINE ONLY. */
+        CHECK(strcmp(config_core_for_rom("BONK.pce"),
+                     "mednafen_pce_fast_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("BONK.PCE"),
+                     "mednafen_pce_fast_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("/roms/pcengine/R-Type (USA).pce"),
+                     "mednafen_pce_fast_libretro.so") == 0);
+        /* .sgx AND .chd ARE REFUSED, and both are decisions worth an
+           assertion rather than silence. beetle-pce-fast implements neither
+           the SuperGrafx's second VDC nor its priority mixer, so it would
+           render an .sgx WRONGLY rather than refuse it -- the failure this
+           project treats as worse than absence, and the reason 7 files stay
+           invisible instead of appearing and misbehaving. .chd and the rest
+           of the CD family need a system-card BIOS nobody ships. */
+        CHECK(strcmp(config_core_for_rom("A.sgx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.SGX"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.chd"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.toc"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.m3u"), "gambatte_libretro.so") == 0);
+
+        /* Superstring and prefix for the four new extensions, the same guard
+           every other row gets. `.md` is the dangerous one this time: two
+           characters, and a matcher one byte short would route every file
+           ending in a `d` -- .a26 does not, but a hypothetical ".d" would --
+           to a Mega Drive core. */
+        CHECK(strcmp(config_core_for_rom("A.mdx"), "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.m"),   "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.sfcx"),"gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.sf"),  "gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.smcx"),"gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.pcex"),"gambatte_libretro.so") == 0);
+        CHECK(strcmp(config_core_for_rom("A.pc"),  "gambatte_libretro.so") == 0);
+        /* .sm is a strict prefix of BOTH .sms and .smc now, which is exactly
+           the collision a two-row table invites. Neither may claim it. */
+        CHECK(strcmp(config_core_for_rom("A.sm"),  "gambatte_libretro.so") == 0);
 
         /* .zip -> FinalBurn Neo, the first extension in this table that names
            a CONTAINER rather than a system. Uppercase because the device
@@ -836,18 +917,115 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("A.cue"), "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.ccd"), "gambatte_libretro.so") == 0);
 
-        /* The eleven cores are eleven DISTINCT files. A table whose entries
-           had been copy-pasted with one name left unchanged would satisfy
-           every individual assertion above and still ship a .min to fceumm. */
+        /* The THIRTEEN cores are thirteen DISTINCT files. A table whose
+           entries had been copy-pasted with one name left unchanged would
+           satisfy every individual assertion above and still ship a .min to
+           fceumm.
+           .md is NOT in this list and its absence is deliberate rather than
+           an oversight: the Mega Drive shares Genesis Plus GX with .sms, so
+           it is the one extension here that MUST collide, and the two
+           same-file assertions above are what check it instead. Adding "A.md"
+           to this array would fail, correctly. */
         static const char *distinct[] = { "A.gb", "A.mgw", "A.nes", "A.min",
                                           "A.ws", "A.ngp", "A.a26", "A.col",
-                                          "A.int", "A.sms", "A.zip" };
+                                          "A.int", "A.sms", "A.zip",
+                                          "A.sfc", "A.pce" };
         for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
             for (size_t j = i + 1; j < sizeof distinct / sizeof distinct[0]; j++)
                 CHECK(strcmp(config_core_for_rom(distinct[i]),
                              config_core_for_rom(distinct[j])) != 0);
         for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
             CHECK(strchr(config_core_for_rom(distinct[i]), '/') == NULL);
+
+        /* ---- the fourteen-system batch's control sets, and the two things
+           they are actually guarding.
+
+           THE MEGA DRIVE'S "A" IS NOT THE FACEPLATE'S "A". Genesis Plus GX
+           maps JOYPAD_B -> B, JOYPAD_A -> **C**, JOYPAD_Y -> **A** (read off
+           its port-0 descriptor table). The faceplate's A disc is JOYPAD_A,
+           so it is the console's C; the console's A has no home unless
+           extra[0] gives it one. Asserting the BIT and not just "two discs
+           exist" is the whole point: a version of this that put
+           KOBOY_BTN_A there would draw the same two discs, pass every count
+           and geometry check in test_chrome.c, and ship a Mega Drive with
+           two buttons wired to C and none to A. */
+        {
+            koboy_layout l;
+            koboy_config lc; config_defaults(&lc); l = lc.layout;
+
+            config_extra_buttons_for_rom(&l, "/roms/Streets of Rage 2 (USA).md");
+            CHECK(l.extra[0].r > 0);
+            CHECK(l.extra[1].r > 0);
+            CHECK_EQ_INT((int)l.extra[0].bit, (int)KOBOY_BTN_Y);   /* hardware A */
+            CHECK_EQ_INT((int)l.extra[1].bit, (int)KOBOY_BTN_X);   /* hardware Y */
+            CHECK(strcmp(l.extra[0].label, "A") == 0);
+            CHECK(strcmp(l.extra[1].label, "Y") == 0);
+            /* And NOT the faceplate's own A bit, which is already spoken for
+               by the console's C. If these two ever compare equal, one of
+               the Mega Drive's buttons has become unreachable again. */
+            CHECK(l.extra[0].bit != KOBOY_BTN_A);
+            CHECK(l.extra[1].bit != KOBOY_BTN_A);
+            CHECK(l.extra[0].bit != l.extra[1].bit);
+
+            /* SNES: the retropad IS a SNES pad, so the four face buttons are
+               B, A, Y, X and the two spare discs go to Y and X rather than to
+               the shoulders. Y is the one that must not be lost -- it is run
+               on Mario and fire on Samus -- so the bit is asserted, not the
+               count. */
+            config_extra_buttons_for_rom(&l, "/roms/Super Metroid.sfc");
+            CHECK_EQ_INT((int)l.extra[0].bit, (int)KOBOY_BTN_Y);
+            CHECK_EQ_INT((int)l.extra[1].bit, (int)KOBOY_BTN_X);
+            CHECK(strcmp(l.extra[0].label, "Y") == 0);
+            CHECK(strcmp(l.extra[1].label, "X") == 0);
+            /* .smc must get exactly the same pad as .sfc. They are one
+               system behind two dumping conventions, and a table that
+               handled only one of them would leave half the collection
+               without a Y button. */
+            koboy_layout l2 = lc.layout;
+            config_extra_buttons_for_rom(&l2, "/roms/Super Metroid.smc");
+            CHECK_EQ_INT((int)l2.extra[0].bit, (int)l.extra[0].bit);
+            CHECK_EQ_INT((int)l2.extra[1].bit, (int)l.extra[1].bit);
+
+            /* PC ENGINE HAS NO EXTRA DISCS, and this is a deliberate empty
+               case rather than a forgotten one -- the same shape as the
+               Atari 2600's and the Master System's. A standard PC Engine pad
+               is I (JOYPAD_A), II (JOYPAD_B), RUN (START) and Select, and the
+               core defaults to "2 Buttons"; the faceplate carries all four
+               already. Asserted because "no discs" and "we forgot this
+               system" look identical at a glance, and because it also proves
+               the clear-on-every-call contract: this runs straight after a
+               SNES ROM that set both. */
+            config_extra_buttons_for_rom(&l, "/roms/Bonk's Adventure.pce");
+            CHECK_EQ_INT(l.extra[0].r, 0);
+            CHECK_EQ_INT(l.extra[1].r, 0);
+        }
+
+        /* ---- config_min_rom_bytes: the floor that stops a CRASH.
+           snes9x2005 raises SIGFPE inside retro_load_game for a .sfc/.smc
+           under 8192 bytes (`% Memory.CalculatedSize` in LoROMMap, where
+           CalculatedSize rounds the file down to whole 8 KB blocks and so is
+           zero). Measured, not deduced: every size from 0 to 1024 kills the
+           loader with exit 136 and 8192 does not.
+
+           The floor is asserted to be SNES-ONLY, and that half matters as
+           much: an Atari 2600 cartridge is legitimately 2048 or 4096 bytes,
+           so a global floor would refuse real content to guard a crash that
+           system does not have. */
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.sfc"), 8192);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.smc"), 8192);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.SFC"), 8192);
+        /* The file this actually exists for: a 212-byte macOS AppleDouble
+           stub that every FAT32 collection grows beside its real files, and
+           that the browser lists as a game because it ends in .smc. */
+        CHECK_EQ_INT((int)config_min_rom_bytes(
+            "/roms/snes/._desire_d-zero_snes_pal_revision_2021.smc"), 8192);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.a26"), 0);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.gb"),  0);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.md"),  0);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.pce"), 0);
+        CHECK_EQ_INT((int)config_min_rom_bytes("A.min"), 0);
+        CHECK_EQ_INT((int)config_min_rom_bytes(NULL),    0);
+        CHECK_EQ_INT((int)config_min_rom_bytes(""),      0);
 
         /* The result must stay SLASHLESS. config_join_sibling passes any name
            containing a slash through verbatim, so a "cores/gw_libretro.so"

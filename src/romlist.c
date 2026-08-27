@@ -79,6 +79,46 @@ bool romlist_is_rom(const char *name)
         || ends_with_ci(name, ".col")
         || ends_with_ci(name, ".int")
         || ends_with_ci(name, ".sms") || ends_with_ci(name, ".gg")
+        /* Mega Drive, SNES and PC Engine -- the fourteen-system batch. Each
+           claims the NARROWEST extension set that covers its library, and in
+           all three cases what is left out is the interesting half:
+
+           .md and NOTHING ELSE for the Mega Drive. Not .bin: counted across
+           the author's collection, .bin is the extension of 723 TI-99/4A
+           files, 234 Odyssey 2, 119 Atari 5200 and eight other systems
+           before it is the extension of 36 Mega Drive files -- and two of
+           the ones ahead of it are exec.bin and grom.bin, the Intellivision
+           BIOS this project asks the owner to supply. Not .gen either, which
+           is unambiguous but is five files; one system, one extension is a
+           rule a reader can hold. 36 of the owner's 1777 Mega Drive files do
+           not list, and roms/README.txt says so on the device.
+
+           .sfc and .smc for the SNES, which is the WonderSwan pattern -- one
+           cartridge, two dumping conventions, and .smc's 512-byte copier
+           header is the core's problem, not the browser's. The mixed case is
+           real again: 47 .smc and 11 .SMC in one directory.
+
+           .pce ALONE for PC Engine. Not .sgx (SuperGrafx, 7 files):
+           beetle-pce-fast implements neither the second VDC nor the priority
+           mixer, so it would render one WRONGLY rather than refuse, and a
+           second core for seven titles is not a trade. Not .chd or the other
+           CD extensions (48 files): they need a system-card BIOS nobody
+           ships. Both are argued in scripts/build-pce-core.sh.
+
+           ONE HAZARD THIS ALLOWLIST DOES NOT CATCH, recorded because it is
+           the kind that looks handled: a name ending .smc is not necessarily
+           a cartridge. The author's collection carries
+           `._desire_d-zero_....smc`, a 212-byte macOS AppleDouble stub, and
+           snes9x2005 does not refuse such a file -- it divides by zero and
+           takes the process with it. Nothing here can tell, because this
+           function sees a NAME and never a size. The floor that stops it
+           lives at the load site (config_min_rom_bytes, and load_rom_into in
+           main.c); this comment exists so nobody adds the check here, where
+           it would cost a stat() per directory entry and still be the wrong
+           layer. */
+        || ends_with_ci(name, ".md")
+        || ends_with_ci(name, ".sfc") || ends_with_ci(name, ".smc")
+        || ends_with_ci(name, ".pce")
         /* .zip is the one entry here that is a CONTAINER rather than a
            system, and it is listed for exactly one reason: nothing else koboy
            ships can open a zip, so there is no file this row could steal.

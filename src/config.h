@@ -175,6 +175,19 @@ int config_layout_for_rom(const char *rom_path);
    and it CLEARS as well as sets, because the config outlives one game. */
 void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path);
 
+/* The smallest file this ROM's extension could possibly BE, in bytes, or 0
+   for "no floor". A fourth function keyed on the extension, and it exists
+   because of a crash rather than a preference.
+   snes9x2005 divides by zero in LoROMMap on any .sfc/.smc under 8192 bytes
+   -- `% Memory.CalculatedSize`, where CalculatedSize rounds the file down to
+   whole 8 KB blocks and so is 0. That is SIGFPE inside retro_load_game, not
+   a refusal: it takes koboy down with it, which is a worse failure than any
+   this project has shipped. The floor is per-SYSTEM and cannot be global --
+   an Atari 2600 cartridge is legitimately 2048 or 4096 bytes -- so it lives
+   here beside the other extension knowledge rather than in core.c, which
+   must stay ignorant of what it is loading. */
+size_t config_min_rom_bytes(const char *rom_path);
+
 bool config_join_sibling(char *out, size_t n, const char *name, const char *dir);
 bool config_exe_dir(char *out, size_t n);
 void config_resolve_paths(koboy_config *c);

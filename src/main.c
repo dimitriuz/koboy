@@ -33,6 +33,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>      /* stat(), for the too-short-to-be-a-cartridge floor */
 #include <unistd.h>
 
 /* Provided by the backend translation unit. Exactly one is linked in: the
@@ -293,6 +294,44 @@ typedef struct {
 static bool load_rom_into(koboy_core *core, koboy_config *cfg,
                           koboy_sram_binding *sb, char *err, size_t errlen)
 {
+    /* LIVE GUARD, and the only one in this project that exists to stop a
+       CRASH rather than a wrong picture: snes9x2005 raises SIGFPE inside
+       retro_load_game for a .sfc/.smc under 8192 bytes, which kills koboy
+       outright -- no error screen, no way back to the browser, on a device
+       whose whole point is that it recovers. config_min_rom_bytes carries
+       the measurement and the reason the floor is per-system; here it is
+       enough to know that a file below it must never reach c->load_game.
+
+       Checked HERE rather than in core.c because core.c must not know what
+       it is loading, and here rather than in romlist.c because the browser
+       lists names without stat()ing them -- this is the one place that has
+       both the path and a reason to touch the filesystem. Reported as an
+       ordinary load failure, so the browser shows it the same way it shows
+       a core's own refusal. */
+    size_t floor_bytes = config_min_rom_bytes(cfg->rom_path);
+    if (floor_bytes) {
+        struct stat st;
+        if (stat(cfg->rom_path, &st) == 0 && st.st_size >= 0 &&
+            (size_t)st.st_size < floor_bytes) {
+            /* The REASON is formatted before the path, deliberately: err is a
+               fixed buffer and rom_path can fill it on its own, so putting
+               the path last means a long name truncates the name rather than
+               the explanation. A message that says only "rom
+               /very/long/pa..." helps nobody. The %.200s precision clips the
+               path explicitly rather than letting snprintf do it silently --
+               same result, but it is the thing that keeps this line free of
+               a -Wformat-truncation warning, and a warning nobody can fix is
+               a warning everybody learns to ignore. */
+            if (err && errlen)
+                snprintf(err, errlen,
+                         "too short to be a cartridge: %lld bytes, minimum "
+                         "%lu -- the core would crash on it. rom %.200s",
+                         (long long)st.st_size, (unsigned long)floor_bytes,
+                         cfg->rom_path);
+            return false;
+        }
+    }
+
     if (!core_load_rom(core, cfg->rom_path, err, errlen)) return false;
 
     sram_path_for_rom(sb->path, sizeof sb->path, cfg->save_dir, cfg->rom_path);

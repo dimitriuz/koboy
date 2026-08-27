@@ -158,6 +158,33 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
         unzip -Z1 "$Z" | grep 'fbneo'
         exit 1
     fi
+    # THE MAIN PACKAGE HAS A SIZE CAP, and it exists because "ship it
+    # separately" is a judgement nobody re-makes once a core is merely
+    # largeish. Arcade earned its own archive at 41 MB against the rest of
+    # koboy's 4 MB -- a tenfold blowup nobody could miss. The dangerous case
+    # is the one that is not obvious: a 12 MB core added to a 5 MB package
+    # triples the download for every user who does not have that system,
+    # and no assertion here would have said a word.
+    #
+    # 16 MB, and the number is chosen rather than round. The package is
+    # ~4.7 MB with thirteen cores in it, so this is roughly 3x headroom --
+    # loose enough that an ordinary core (the two added with the Mega
+    # Drive/SNES/PC Engine batch were 445 KB and 2.4 MB stripped) never trips
+    # it, and tight enough that anything of FBNeo's order does. Tripping this
+    # is NOT automatically a bug: it is a prompt to decide, the way arcade was
+    # decided, whether the new core belongs in the main archive or in one of
+    # its own. Raise it deliberately, with a reason, or split the package.
+    zbytes=$(wc -c < "$Z")
+    zcap=16777216
+    [ "$zbytes" -le "$zcap" ] || {
+        echo "FAIL: main package is $zbytes bytes, over the $zcap cap"
+        echo "      Something large was added to dist. Decide whether it"
+        echo "      belongs here or in its own archive (see fbneo-dist),"
+        echo "      then either split it out or raise the cap on purpose."
+        unzip -Z1 -v "$Z" | sort -k1 -n -r | head -5
+        exit 1; }
+    echo "ok: main package $zbytes bytes, under the $zcap cap"
+
     echo "ok: packaging"
 
     # ------------------------------------------------- the arcade package
