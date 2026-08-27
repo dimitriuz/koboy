@@ -328,6 +328,17 @@ spec's appendices are the record; the short version:
   time scales ~4.7 ms + 20.7 ns/px). v2-core's multi-rect work optimised
   `refresh`, already the cheapest stage; `video_submit` is where the next
   optimisation belongs. See `docs/FOLLOWUPS.md` #23.
+- **The reserved rect comes from the core's BASE geometry, not its max** (DMG
+  layout only; LCD still uses max). Max made "any frame in [1, max] fits"
+  true by construction, and it cost a SNES 54% of its picture area against a
+  512x512 mode snes9x2005 never enters. `video_fit_rect` now shrinks a frame
+  the rect cannot hold, which is what replaces that guarantee — do not delete
+  that branch. Measured on the device: free for PC Engine and for SNES titles
+  with headroom, and 96%→78% for Kirby Super Star. `docs/FOLLOWUPS.md` #73.
+- **Benchmarking this device back to back gives numbers that climb.** A first
+  pass with no gaps read up to 2.4x high and kept rising through the batch;
+  an isolated re-run of the same binary on the same ROM came back at the
+  first row's figure. Ten seconds of idle between runs, every time.
 - **A libretro core's geometry is discovered, not queried.** `gw-libretro`
   answers `retro_get_system_av_info` with a 128x128 placeholder on every one
   of 59 titles until its first `retro_run()`, then announces the real canvas
