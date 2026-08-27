@@ -20,6 +20,14 @@ third_party/gearcoleco/
 third_party/freeintv/
 third_party/gpgx/
 third_party/fbneo/
+third_party/snes9x2005/
+third_party/beetle-pce-fast-libretro/
+# The two SNES cores that LOST the shootout in scripts/build-snes-core.sh.
+# Ignored rather than deleted from the ignore list because re-running that
+# comparison is the only honest way to revisit the choice, and it needs both
+# trees present. Nothing in dist/ is built from either.
+third_party/snes9x2010/
+third_party/snes9x/
 *.srm
 *.ngf
 *.flash
@@ -41,3 +49,19 @@ koboy-probe
 *.int
 *.sms
 *.gg
+# Mega Drive, SNES and PC Engine content. `.md` is the one entry in this list
+# that is ALSO an extremely common non-ROM extension -- every Markdown file in
+# every repository -- so it is deliberately anchored to the roms directories
+# rather than applied globally: an unqualified `*.md` here would silently stop
+# this project's own README.md, TESTED.md and docs/ from ever being committed
+# again, which is a far worse failure than a stray ROM being offered.
+# Checked before writing it this way: the author's 100k-file collection holds
+# exactly one real Markdown file, and it is not in a Mega Drive directory.
+roms/**/*.md
+roms/*.md
+*.sfc
+*.smc
+*.pce
+# NOT *.sgx or *.chd: koboy does not list either (SuperGrafx needs a core this
+# project does not ship, PC Engine CD needs a BIOS it must not ship), so
+# neither can arrive here as content koboy put there.
