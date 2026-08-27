@@ -253,7 +253,25 @@ static bool ends_with_ext(const char *s, const char *ext)
 static const struct { const char *ext; const char *core; int ceiling; } g_core_by_ext[] = {
     { ".mgw", "gw_libretro.so", 0 },   /* Game & Watch, gw-libretro   */
     { ".nes", "fceumm_libretro.so", 0 },   /* NES, libretro-fceumm        */
-    { ".min", "pokemini_libretro.so", 0 },   /* Pokemon Mini, libretro/PokeMini */
+    /* Pokemon Mini caps at 8, and the number is the Game Boy's own size.
+       Its native frame is 96x64 -- the smallest koboy runs -- so auto-fitting
+       takes it to scale 13, a 1248x832 rect that fills the panel edge to edge.
+       The owner played it and said "it is full width now and looks huge and
+       slow", which the device agrees with. Measured, 300 frames each, their
+       own settings:
+
+           auto (13)  1248x832   submit 22.3 ms
+           12         1152x768          20.0
+           10          960x640          15.7
+           8           768x512          11.9   <- this row
+           6           576x384           9.0
+
+       The Game Boy at its verified scale 5 is 800x720 and costs 15.4 ms, so
+       scale 8 puts a Pokemon Mini at 768 px wide against the Game Boy's 800 --
+       the same presence on the panel, for three quarters of the cost. Chosen
+       for that rather than for the timing: a handheld whose real screen was
+       96x64 has no business being the largest picture on the device. */
+    { ".min", "pokemini_libretro.so", 8 },   /* Pokemon Mini, libretro/PokeMini */
     /* One core per SYSTEM FAMILY, not per extension: beetle-wswan reports
        `ws|wsc|pc2` and RACE reports `ngp|ngc|ngpc|npc`, so the mono and the
        Color halves of each family are the same .so. Two rows each rather

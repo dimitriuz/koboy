@@ -567,13 +567,17 @@ TEST_MAIN({
               config_scale_ceiling_for_rom("Sonic Chaos.sms"));
         CHECK(config_scale_ceiling_for_rom("Sonic Chaos.gg") !=
               config_scale_ceiling_for_rom("Sonic.md"));
-        /* ...and NINE systems still have none, which is a statement about
+        /* Pokemon Mini left this list on 2026-08-27: the owner played it at
+           its auto-fitted 1248x832 and reported it "huge and slow". See its
+           row in g_core_by_ext for the five-scale measurement behind the 8.
+
+           ...and EIGHT systems still have none, which is a statement about
            what has been measured rather than about what is safe -- see
            docs/FOLLOWUPS.md #73. Listed rather than counted, so adding a
            ceiling to one of them has to come here and say so. */
         {
             static const char *uncapped[] = {
-                "a.mgw", "a.nes", "a.min", "a.ws", "a.wsc", "a.ngp", "a.ngc",
+                "a.mgw", "a.nes", "a.ws", "a.wsc", "a.ngp", "a.ngc",
                 "a.a26", "a.col", "a.int", "a.pce", "a.zip", "a.gb",
             };
             for (size_t u = 0; u < sizeof uncapped / sizeof uncapped[0]; u++)
@@ -2053,5 +2057,38 @@ TEST_MAIN({
         }
 
         remove(path); remove(dir);
+    }
+
+    /* ---- Pokemon Mini's ceiling, and why it is not just "some number" ---- */
+    {
+        koboy_config c; config_defaults(&c);
+        /* Set the way main.c sets it -- from the ROM's extension -- rather
+           than poked directly, so this exercises the wiring and not just the
+           resolver's arithmetic. Writing it by hand is how the first draft of
+           this test passed while asserting nothing about `.min` at all. */
+        c.scale_ceiling = config_scale_ceiling_for_rom("a.min");
+        CHECK_EQ_INT(c.scale_ceiling, 8);
+        koboy_profile p;
+        /* 96x64 auto-fits to scale 13 on this panel -- 1248x832, edge to edge,
+           and the owner reported it as "huge and slow". The cap takes it to
+           768x512, which is the Game Boy's 800x720 presence at three quarters
+           of the pixel cost. */
+        CHECK(config_resolve_profile(&p, &c, 1264, 1680, 96, 64, 96, 64));
+        CHECK_EQ_INT(p.scale, 8);
+        CHECK_EQ_INT(p.game_w, 768);
+        CHECK_EQ_INT(p.game_h, 512);
+        /* Asserted against the Game Boy rather than as a bare constant: the
+           point of 8 is that it lands beside the one size verified on
+           hardware, so if the Game Boy's rect ever moves this should be
+           revisited rather than silently drifting away from it. */
+        koboy_profile gb;
+        CHECK(config_resolve_profile(&gb, &c, 1264, 1680, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W, KOBOY_GB_H));
+        CHECK(p.game_w <= gb.game_w);
+        CHECK(p.game_w * 100 / gb.game_w >= 90);   /* within 10% of its width */
+        /* And it is still far larger than the 480x320 it had before per-system
+           scale defaults existed, which was the postage stamp that started
+           this. */
+        CHECK(p.game_w > 480);
     }
 })
