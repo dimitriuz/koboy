@@ -85,6 +85,37 @@ late_ms=$(( (t1 - t0) / 1000000 ))
     exit 1; }
 echo "PASS smoke_host mid-run repace=${late_ms}ms"
 
+# ------------------------------------------------------- non-square pixels
+# The stub's geometry is the Game Boy's 160x144, base AND max. Told to report
+# a 4:3 DISPLAY aspect for it, the pixels become 1.2:1, the reserved rect goes
+# from 160 source columns wide to 192, and at the Game Boy's scale 5 the game
+# rect goes from 800x720 to 960x720.
+#
+# THIS RUN IS THE ONLY THING THAT COVERS main.c's WIRING. The unit tests prove
+# video_pixel_aspect, video_fit_par and config_resolve_profile_par; none of
+# them can prove main.c asks the core for an aspect and passes it on, because
+# main.c has no unit test. It also covers the one staleness case that is
+# invisible to the geometry test on either side of it: base and max here are
+# EXACTLY the placeholder profile's numbers, so the only thing that can make
+# the startup profile stale is the aspect itself.
+rc=0
+out=$(KOBOY_STUB_ASPECT=1.33333 SDL_VIDEODRIVER=dummy ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --panel 1264x1680 --frames 3 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: non-square run exited $rc"; echo "$out"; exit 1; }
+echo "$out" | grep -q "game 960x720" || {
+    echo "FAIL: a 4:3 display aspect on a 160x144 core did not widen the game rect"
+    echo "$out" | grep -E "game [0-9]+x[0-9]+"
+    exit 1; }
+# ...and the same core WITHOUT the aspect is the 800x720 the Game Boy has
+# always had, so the check above is measuring the aspect and not the weather.
+out=$(SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
+        --rom "$ROM" --panel 1264x1680 --frames 3 2>&1) || { echo "FAIL: square run"; exit 1; }
+echo "$out" | grep -q "game 800x720" || {
+    echo "FAIL: a square-pixel core no longer gets the Game Boy's 800x720 rect"
+    echo "$out" | grep -E "game [0-9]+x[0-9]+"
+    exit 1; }
+echo "PASS smoke_host pixel aspect 800x720 square / 960x720 at 4:3"
+
 # The startup flow (MAIN MENU -> ALL GAMES -> the browser) is invisible to
 # every other test in this suite, because they all pass --rom and take the
 # MODE_PLAY fast path straight past it. That is precisely the shape of the

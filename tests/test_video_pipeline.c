@@ -436,7 +436,7 @@ TEST_MAIN({
         p.layout_mode = KOBOY_LAYOUT_DMG;
         p.max_w = 160; p.max_h = 144; p.scale = 5;
         p.game_w = 800; p.game_h = 720;
-        video_fit_rect(&p, 160, 144, &dw, &dh, &ox, &oy);
+        video_fit_rect(&p, 160, 144, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
         CHECK_EQ_INT(dw, 800);
         CHECK_EQ_INT(dh, 720);
         CHECK_EQ_INT(ox, 0);
@@ -446,7 +446,7 @@ TEST_MAIN({
            fits DISAGREE there: integer takes min(800/90, 720/70) = 8, giving
            720x560, while a fractional fit would be width-bound at 800x622.
            A size where they agree (any exact divisor) would pass either way. */
-        video_fit_rect(&p, 90, 70, &dw, &dh, &ox, &oy);
+        video_fit_rect(&p, 90, 70, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
         CHECK_EQ_INT(dw, 720);            /* 90 * 8, not 800 */
         CHECK_EQ_INT(dh, 560);            /* 70 * 8, not 622 */
         CHECK_EQ_INT(ox, (800 - 720) / 2);
@@ -460,7 +460,7 @@ TEST_MAIN({
         p.layout_mode = KOBOY_LAYOUT_LCD;
         p.max_w = 654; p.max_h = 396; p.scale = 1;
         p.game_w = 1264; p.game_h = 765;
-        video_fit_rect(&p, 654, 396, &dw, &dh, &ox, &oy);
+        video_fit_rect(&p, 654, 396, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
         CHECK_EQ_INT(dw, 1264);
         CHECK_EQ_INT(dh, 765);
         CHECK_EQ_INT(ox, 0);
@@ -471,7 +471,7 @@ TEST_MAIN({
            branch -- NOT rounded down to an integer multiple: 305x191 at
            integer scale would be 4x = 1220x764, and the fractional fit is
            height-bound at 765 rows. */
-        video_fit_rect(&p, 305, 191, &dw, &dh, &ox, &oy);
+        video_fit_rect(&p, 305, 191, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
         CHECK_EQ_INT(dh, 765);
         CHECK_EQ_INT(dw, 305 * 765 / 191);
         CHECK(dw > 1220);                 /* strictly better than integer 4x */

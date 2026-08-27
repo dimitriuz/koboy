@@ -762,6 +762,16 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
                             int panel_w, int panel_h,
                             int base_w, int base_h, int max_w, int max_h)
 {
+    return config_resolve_profile_par(p, c, panel_w, panel_h,
+                                      base_w, base_h, max_w, max_h,
+                                      KOBOY_ASPECT_ONE);
+}
+
+bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
+                                int panel_w, int panel_h,
+                                int base_w, int base_h, int max_w, int max_h,
+                                uint32_t par)
+{
     memset(p, 0, sizeof *p);
     /* LIVE GUARD: a core (or a hand-built test profile) reporting a
        non-positive geometry has nothing this function can scale -- dividing
@@ -776,6 +786,27 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
        see chrome.h. Hoisted above the split because it is the one thing the
        two branches genuinely share. */
     int ctrl_top = chrome_controls_top(c->layout_mode, &c->layout, panel_w, panel_h);
+
+    /* The reserved rect's WIDTH IN SOURCE PIXELS. max_w for square pixels --
+       which is what this whole function used before non-square ones existed,
+       and what it still computes bit for bit, since par == KOBOY_ASPECT_ONE
+       makes the multiply exact and the round-up a no-op. See
+       config_resolve_profile_par in config.h for why the rect and not just
+       the per-frame fit has to know.
+
+       ROUNDED UP, not to nearest: the rect has to HOLD the widened picture,
+       and rounding down by one source pixel costs an entire integer step of
+       scale when it makes the fit's own ceiling one pixel short. Measured:
+       at nearest-rounding the NES rect came out 292 and the frame needed
+       877.7 of the 876 that gave, so the fit dropped from 3x to 2x -- the
+       exact failure this parameter exists to remove, reintroduced by a
+       rounding mode. */
+    if (par == 0) par = KOBOY_ASPECT_ONE;
+    int rect_w = max_w;
+    if (par != KOBOY_ASPECT_ONE && max_w > 0) {
+        rect_w = (int)((((uint64_t)max_w * par) + 65535u) >> 16);
+        if (rect_w < 1) rect_w = 1;
+    }
 
     if (c->layout_mode == KOBOY_LAYOUT_LCD) {
         /* The LCD layout, in three lines, because it has no scale search to
@@ -792,7 +823,7 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
            whatever centring leaves over. */
         if (panel_w < 1 || ctrl_top < 1) return false;
         int gw = 0, gh = 0;
-        video_fit_frac(max_w, max_h, panel_w, ctrl_top, &gw, &gh);
+        video_fit_frac(rect_w, max_h, panel_w, ctrl_top, &gw, &gh);
         if (gw < 1 || gh < 1) return false;
 
         p->panel_w = panel_w;
@@ -813,12 +844,12 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
            p->scale (checked: it has no other reader in src/). The integer
            part is reported rather than 0 or 1 so the log still says something
            true about how much bigger the picture got. */
-        p->scale = gw / max_w;
+        p->scale = gw / rect_w;
         if (p->scale < 1) p->scale = 1;
         return true;
     }
 
-    int fit_w = panel_w / max_w;
+    int fit_w = panel_w / rect_w;
     int fit_h = panel_h / max_h;
     int max_fit = fit_w < fit_h ? fit_w : fit_h;
     if (max_fit < 1) return false;
@@ -857,7 +888,7 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
        ctrl_top above for where it is now computed. */
 
     while (s > 1) {
-        int game_w = max_w * s;
+        int game_w = rect_w * s;
         int game_h = max_h * s;
         int game_x = (panel_w - game_w) / 2;
         int game_y = panel_h / 20;
@@ -900,7 +931,7 @@ bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
        exact bug class the ctrl_top reservation above was already added to
        stop, now for a resolution axis that did not exist when that fix
        landed. */
-    p->game_w  = max_w * s;
+    p->game_w  = rect_w * s;
     p->game_h  = max_h * s;
     p->game_x  = (panel_w - p->game_w) / 2;
     p->game_y  = panel_h / 20;           /* small top margin, chrome fills the rest */

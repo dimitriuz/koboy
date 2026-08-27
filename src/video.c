@@ -522,38 +522,108 @@ struct koboy_video {
        pipeline before FinalBurn Neo, and the rot == 0 path below is byte for
        byte the loop that existed before this field did. */
     int      rot;
+    /* The core's DISPLAY aspect in 16.16, or 0 for "never told" -- see
+       video_set_aspect. 0 for every core that ran through this pipeline
+       before the Atari 2600 arrived, and 0 is what makes the square path
+       below byte for byte the one that existed then. */
+    uint32_t dar;
 };
 
-/* Largest integer scale at which a src_w x src_h frame fits the reserved rect,
-   and the offsets that centre it there.
+/* Contract in video.h. Snaps to exactly square inside the deadband, and the
+   reason that matters -- a core that reports a ROUNDED aspect -- is there too. */
+uint32_t video_pixel_aspect(uint32_t display_aspect, int frame_w, int frame_h)
+{
+    /* LIVE GUARD. display_aspect 0 is "the core never said", which is the
+       state every koboy_video starts in; a non-positive extent has no ratio
+       and would divide by zero just below. Both answer square, which is what
+       this whole file did unconditionally before non-square pixels existed. */
+    if (display_aspect == 0 || frame_w < 1 || frame_h < 1) return KOBOY_ASPECT_ONE;
+
+    uint32_t par = (uint32_t)(((uint64_t)display_aspect * (uint64_t)frame_h)
+                              / (uint64_t)frame_w);
+    uint32_t d = par > KOBOY_ASPECT_ONE ? par - KOBOY_ASPECT_ONE
+                                        : KOBOY_ASPECT_ONE - par;
+    if (d <= KOBOY_PAR_DEADBAND) return KOBOY_ASPECT_ONE;
+    return par;
+}
+
+/* Contract in video.h -- including why only the horizontal axis carries the
+   pixel aspect.
 
    The reserved rect is sized from the core's MAX geometry (koboy.h), so a
-   frame at exactly max lands at p.scale with no offset -- which is every Game
-   Boy frame ever, 160x144 into 800x720 at scale 5, offsets zero, bit for bit
-   what this did before it could fit anything else. A frame SMALLER than max
-   is the case that was wrong: it used to be scaled by p.scale and parked in
-   the top-left corner, so a 305x191 Game & Watch in-game view drew at 1:1 in
-   the corner of a 654x396 rect with the rest left black. Fitting it instead
-   puts it at 2x, centred, filling the rect it was given.
+   square-pixel frame at exactly max lands at p.scale with no offset -- which
+   is every Game Boy frame ever, 160x144 into 800x720 at scale 5, offsets
+   zero, bit for bit what this did before it could fit anything else. A frame
+   SMALLER than max is the case that was wrong before: it used to be scaled by
+   p.scale and parked in the top-left corner, so a 305x191 Game & Watch
+   in-game view drew at 1:1 in the corner of a 654x396 rect with the rest left
+   black. Fitting it instead puts it at 2x, centred, filling the rect.
 
-   Never returns less than 1: src can't exceed the rect (game_w = max_w*scale
-   and video_pipeline_run rejects src > max before calling this), so the
-   divisions cannot floor to 0 -- the clamp is a live guard against a caller
-   that skips that check, not dead code. */
-void video_fit(const koboy_profile *p, int src_w, int src_h,
-               int *scale_out, int *ox_out, int *oy_out)
+   Never returns a scale below 1: src can't exceed the rect (game_w is the
+   par-corrected max times the scale -- config_resolve_profile_par -- and
+   video_pipeline_run rejects src > max before calling this), so the divisions
+   cannot floor to 0. The clamp is a live guard against a caller that skips
+   that check, not dead code. */
+void video_fit_par(const koboy_profile *p, int src_w, int src_h, uint32_t par,
+                   int *scale_out, int *dw_out, int *ox_out, int *oy_out)
 {
-    int fs = 1;
+    if (par == 0) par = KOBOY_ASPECT_ONE;
+
+    /* A degenerate source has no fit; 1x1 keeps every consumer's arithmetic
+       (the offsets below, the scaler's dst_w) inside the rect rather than
+       handing back a zero or negative width. */
+    int fs = 1, dw = 1;
     if (src_w > 0 && src_h > 0) {
-        int fx = p->game_w / src_w, fy = p->game_h / src_h;
+        int fy = p->game_h / src_h;
+        int fx;
+        if (par == KOBOY_ASPECT_ONE) {
+            /* THE SQUARE PATH, and it is written out separately rather than
+               folded into the fixed-point one on purpose: this is the only
+               path the Game Boy, and eight of the eleven systems, ever take,
+               and it must produce the same integers the pre-anisotropy
+               version produced -- not the same integers up to a rounding. */
+            fx = p->game_w / src_w;
+        } else {
+            /* The widest integer vertical scale whose PAR-corrected width
+               still fits. Floored, so src_w * fx * par <= game_w << 16 and the
+               rounding below cannot push dw past game_w. */
+            fx = (int)(((uint64_t)p->game_w << 16) / ((uint64_t)src_w * par));
+        }
         fs = fx < fy ? fx : fy;
         if (fs < 1) fs = 1;
+
+        if (par == KOBOY_ASPECT_ONE) {
+            dw = src_w * fs;
+        } else {
+            dw = (int)((((uint64_t)src_w * (uint64_t)fs * par) + 32768u) >> 16);
+            if (dw < 1) dw = 1;
+        }
+        /* LIVE, and unconditional rather than only on the fixed-point path:
+           the fs >= 1 clamp above can force a scale the width test already
+           rejected (a frame too big for the reserved rect at any scale), and
+           a dw wider than the rect is the case video_pipeline_run's bounds
+           guard exists to stop from corrupting memory. It cannot fire for any
+           frame that guard accepts -- floor(game_w / src_w) * src_w <= game_w
+           on the square path, and the fixed-point ceiling above is floored for
+           the same reason -- so this is the defence for a caller that skipped
+           the check, not a correction of the arithmetic. */
     }
-    int ox = (p->game_w - src_w * fs) / 2;
+    if (dw > p->game_w) dw = p->game_w;
+    if (dw < 1) dw = 1;
+    int ox = (p->game_w - dw) / 2;
     int oy = (p->game_h - src_h * fs) / 2;
     if (ox < 0) ox = 0;
     if (oy < 0) oy = 0;
-    *scale_out = fs; *ox_out = ox; *oy_out = oy;
+    *scale_out = fs; *dw_out = dw; *ox_out = ox; *oy_out = oy;
+}
+
+/* Contract in video.h: video_fit_par's square case, under the name the rest of
+   this project already used for it. */
+void video_fit(const koboy_profile *p, int src_w, int src_h,
+               int *scale_out, int *ox_out, int *oy_out)
+{
+    int dw;
+    video_fit_par(p, src_w, src_h, KOBOY_ASPECT_ONE, scale_out, &dw, ox_out, oy_out);
 }
 
 /* Contract in video.h. Deciding which axis binds by cross-multiplying, rather
@@ -585,31 +655,50 @@ void video_fit_frac(int src_w, int src_h, int avail_w, int avail_h,
     *dw_out = dw; *dh_out = dh;
 }
 
-void video_fit_rect(const koboy_profile *p, int src_w, int src_h,
+void video_fit_rect(const koboy_profile *p, int src_w, int src_h, uint32_t par,
                     int *dw_out, int *dh_out, int *ox_out, int *oy_out)
 {
     int dw, dh;
+    if (par == 0) par = KOBOY_ASPECT_ONE;
 
     if (p->layout_mode == KOBOY_LAYOUT_LCD) {
         /* The invariant this shortcut states, and the DMG branch below gets
-           for free: A FRAME AT EXACTLY MAX GEOMETRY FILLS THE RESERVED RECT.
-           game_w/game_h were themselves produced by video_fit_frac from
-           max_w/max_h (config_resolve_profile), so re-fitting max into that
-           result is asking the same question twice -- and the second answer
-           can be a pixel short, because the first one's non-binding axis was
-           floored and re-deriving the ratio from a floored number can only
-           lose. Saying so outright is both faster and exact, and it is the
-           same property video_fit already has at max for the DMG layout. */
-        if (src_w == p->max_w && src_h == p->max_h) {
+           for free: A SQUARE-PIXEL FRAME AT EXACTLY MAX GEOMETRY FILLS THE
+           RESERVED RECT. game_w/game_h were themselves produced by
+           video_fit_frac from max_w/max_h (config_resolve_profile), so
+           re-fitting max into that result is asking the same question twice --
+           and the second answer can be a pixel short, because the first one's
+           non-binding axis was floored and re-deriving the ratio from a
+           floored number can only lose. Saying so outright is both faster and
+           exact, and it is the same property video_fit_par already has at max
+           for the DMG layout.
+
+           SQUARE-PIXEL, and the qualifier is new and load-bearing: the
+           reserved rect was resolved from max_w x max_h with no pixel aspect
+           in it (config_resolve_profile), so once par != 1 the shortcut's
+           premise is simply false and the general fit below has to run. Today
+           only .mgw reaches this layout and the Game & Watch core reports a
+           square aspect, so the shortcut is still what actually executes --
+           but a layout branch that silently ignores the aspect is exactly the
+           kind of thing that gets found by rendering a frame and looking at
+           it, two systems later. */
+        if (par == KOBOY_ASPECT_ONE && src_w == p->max_w && src_h == p->max_h) {
             dw = p->game_w; dh = p->game_h;
         } else {
+            /* The frame's DISPLAYED shape, which is what an aspect-preserving
+               fit has to preserve. At par == 1 this is src_w and the call is
+               identical to the one that was here. */
+            int ew = par == KOBOY_ASPECT_ONE
+                   ? src_w
+                   : (int)((((uint64_t)src_w * par) + 32768u) >> 16);
+            if (ew < 1) ew = 1;
             dw = 1; dh = 1;
-            video_fit_frac(src_w, src_h, p->game_w, p->game_h, &dw, &dh);
+            video_fit_frac(ew, src_h, p->game_w, p->game_h, &dw, &dh);
         }
     } else {
         int fs, ox, oy;
-        video_fit(p, src_w, src_h, &fs, &ox, &oy);
-        dw = src_w * fs; dh = src_h * fs;
+        video_fit_par(p, src_w, src_h, par, &fs, &dw, &ox, &oy);
+        dh = src_h * fs;
     }
 
     int ox = (p->game_w - dw) / 2;
@@ -649,6 +738,20 @@ koboy_video *video_create(const koboy_profile *p, bool force_dither,
     /* prev starts as an impossible value so the first frame is fully dirty */
     memset(v->prev, 0x01, n);
     return v;
+}
+
+/* Contract in video.h. Stored raw -- there is nothing to validate here that
+   core_display_aspect has not already validated, and 0 is a meaningful value
+   (see video_pixel_aspect's live guard) rather than an error. */
+void video_set_aspect(koboy_video *v, uint32_t display_aspect)
+{
+    if (!v) return;
+    v->dar = display_aspect;
+}
+
+uint32_t video_get_aspect(const koboy_video *v)
+{
+    return v ? v->dar : 0u;
 }
 
 void video_set_rotation(koboy_video *v, int rot)
@@ -823,8 +926,16 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
        otherwise, because this rect is diffed against prev to find the dirty
        region and a memset of the full rect every frame would be pure cost on
        the stage that is already this pipeline's bottleneck. */
+    /* The pixel aspect of THIS frame, derived from the core's display aspect
+       and the size it actually delivered. Three integer ops, once per frame,
+       on the stage CLAUDE.md names as the bottleneck -- which is why it is
+       here and not per pixel. KOBOY_ASPECT_ONE for every square-pixel core,
+       and that value takes every branch below down the path it took before
+       this existed. */
+    const uint32_t par = video_pixel_aspect(v->dar, src_w, src_h);
+
     int dw, dh, ox, oy;
-    video_fit_rect(&v->p, src_w, src_h, &dw, &dh, &ox, &oy);
+    video_fit_rect(&v->p, src_w, src_h, par, &dw, &dh, &ox, &oy);
     if (src_w != v->fit_src_w || src_h != v->fit_src_h) {
         /* Cleared to the LIGHTEST of the four levels, not to 0. Until a core
            arrived whose frame is permanently smaller than its max in one
@@ -850,16 +961,43 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
         v->fit_rect = fr;                /* see video_frame_rect */
     }
     uint8_t *dst = v->cur + (size_t)oy * v->stride + ox;
-    if (v->p.layout_mode == KOBOY_LAYOUT_LCD) {
+    /* WHICH SCALER, decided from the answer rather than from the layout, and
+       that is the whole shape of the non-square-pixel fix.
+
+       The block-copy scaler can only express ONE integer factor on both axes.
+       When the fit produced exactly that -- dh a whole multiple of src_h and
+       dw the SAME multiple of src_w -- it is used, and the result is byte for
+       byte what this line produced before pixel aspects existed. That covers
+       the Game Boy (160x144 -> 800x720 at 5) and every other square-pixel
+       core, which is where the cost is: video_submit is this pipeline's
+       measured bottleneck and the square path must not pay for the other one.
+
+       Anything else -- the LCD layout, or a DMG frame whose pixels are not
+       square -- goes to the fractional scaler, which already exists for the
+       Game & Watch and already collapses repeated rows into memcpy. For an
+       Atari 2600 frame that means the vertical is still an exact integer
+       (video_fit_par keeps it so), so only one row in `scale` does per-pixel
+       work and the rest are copies.
+
+       THE LCD LAYOUT IS EXCLUDED EXPLICITLY, not left to fall out of the
+       arithmetic, and it is not redundant: an LCD fit CAN land on an exact
+       integer multiple by coincidence, and the two scalers do not agree to
+       the pixel when it does. video_scale_gray_frac's step is floored, so at
+       a scale that is not a power of two it samples up to one source pixel
+       low at each boundary -- source column 0 gets one extra destination
+       column and one other column loses one. That is a property the Game &
+       Watch layout has always had and this change has no business altering;
+       the Game Boy has never had it and must not acquire it, which is what
+       the block path being unconditional for an exact DMG fit guarantees. */
+    const int fs = dh / src_h;
+    const bool block_ok = v->p.layout_mode != KOBOY_LAYOUT_LCD &&
+                          fs >= 1 && dh == src_h * fs && dw == src_w * fs;
+    if (block_ok) {
+        video_scale_gray(dst, v->stride, v->gray,
+                         src_w, src_h, v->p.max_w, fs);
+    } else {
         video_scale_gray_frac(dst, v->stride, v->gray,
                               src_w, src_h, v->p.max_w, dw, dh);
-    } else {
-        /* dw is src_w * the integer scale by construction (video_fit_rect's
-           DMG branch), so this recovers that scale exactly -- the Game Boy
-           still takes video_scale_gray's block-copy path, byte for byte as
-           before this layout existed. */
-        video_scale_gray(dst, v->stride, v->gray,
-                         src_w, src_h, v->p.max_w, dw / src_w);
     }
 
     /* Quantise/dither run over the FITTED rect only -- the dw x dh the scaler

@@ -64,6 +64,16 @@ static uint16_t on_input(void *ud) { return input_state((koboy_input *)ud)->butt
    unanswerable on a device with no terminal: the layout is chosen from the
    ROM's extension, so a mis-named file is a plausible cause of a faceplate
    nobody expected. */
+/* The pixel aspect of the frames THIS core is currently rendering, from the
+   display aspect it reported and the base geometry it reported alongside it.
+   KOBOY_ASPECT_ONE for a square-pixel core, which is what makes every rect and
+   every fit below identical to what they were before non-square pixels
+   existed. Base and not max: see config_resolve_profile_par in config.h. */
+static uint32_t core_par(const koboy_core *c, int base_w, int base_h)
+{
+    return video_pixel_aspect(core_display_aspect(c), base_w, base_h);
+}
+
 static const char *layout_name(int mode)
 {
     return mode == KOBOY_LAYOUT_LCD ? "LCD" : "DMG";
@@ -679,6 +689,12 @@ int main(int argc, char **argv)
        changed anything; for the Game Boy it never does, which is what keeps
        this generalisation a no-op for the only core wired up today. */
     koboy_profile prof;
+    /* THE PIXEL ASPECT `prof` WAS RESOLVED WITH, carried alongside it because
+       koboy_profile does not hold it and the staleness test below needs it.
+       Square here, and not for want of asking: no ROM is loaded at this point,
+       so there is no core to ask for a display aspect. The real rect is
+       resolved below from the real geometry AND the real pixel aspect. */
+    uint32_t prof_par = KOBOY_ASPECT_ONE;
     if (!config_resolve_profile(&prof, &cfg, pw, ph,
                                 KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H)) {
         fatal("panel %dx%d is too small for a 1x game rect", pw, ph);
@@ -1014,12 +1030,17 @@ int main(int argc, char **argv)
            the whole faceplate replaced. It cannot happen with the one core
            wired up today (gw answers 128x128 here, never 160x144), which is
            exactly why it is written down rather than relied on. */
+        /* Assigned INSIDE the condition below, after core_get_geometry has
+           filled rbw/rbh -- computing it here would read them uninitialised. */
+        uint32_t rpar = prof_par;
         if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
-            (rbw != prof.base_w || rbh != prof.base_h ||
+            ((rpar = core_par(core, rbw, rbh)) != prof_par ||
+             rbw != prof.base_w || rbh != prof.base_h ||
              rmw != prof.max_w  || rmh != prof.max_h ||
              cfg.layout_mode != prof.layout_mode)) {
             koboy_profile real_prof;
-            if (!config_resolve_profile(&real_prof, &cfg, pw, ph, rbw, rbh, rmw, rmh)) {
+            if (!config_resolve_profile_par(&real_prof, &cfg, pw, ph,
+                                            rbw, rbh, rmw, rmh, rpar)) {
                 fatal("panel %dx%d is too small for this core's %dx%d game rect",
                      pw, ph, rmw, rmh);
                 core_close(core);
@@ -1027,6 +1048,7 @@ int main(int argc, char **argv)
                 pf->shutdown(pf->ctx); return 1;
             }
             prof = real_prof;
+            prof_par = rpar;
             say("koboy: core geometry %dx%d (max %dx%d), %s layout, "
                 "game %dx%d at (%d,%d)\n", rbw, rbh, rmw, rmh,
                 layout_name(prof.layout_mode),
@@ -1057,6 +1079,12 @@ int main(int argc, char **argv)
        construction; every later rebuild below repeats both halves together
        for the same reason. */
     if (vid) video_set_rotation(vid, (int)core_rotation(core));
+    /* Paired with the rotation for the same reason it is paired with it in
+       every rebuild below: both are facts the core announced about how its
+       frames are to be PRESENTED, both are lost when a koboy_video is
+       destroyed, and a presentation that has one without the other is wrong
+       in a way that looks like a broken core rather than a missing line. */
+    if (vid) video_set_aspect(vid, core_display_aspect(core));
     if (vid) say("koboy: gray_map %s\n", video_gray_map_name(video_get_gray_map(vid)));
     if (vid && core_rotation(core))
         say("koboy: core asked for %u quarter turn%s; presenting %dx%d\n",
@@ -1432,6 +1460,15 @@ int main(int argc, char **argv)
                 video_set_rotation(vid, (int)core_rotation(core));
                 video_invalidate(vid);
             }
+            /* Same shape, same reason: a core can re-announce its aspect
+               without moving base or max (SET_GEOMETRY carries aspect_ratio
+               too), and every pixel of the fit moves when it does -- hence the
+               invalidate, which prev would otherwise make a half-old frame
+               out of. Cheap when nothing changed: one uint32 compare. */
+            if (video_get_aspect(vid) != core_display_aspect(core)) {
+                video_set_aspect(vid, core_display_aspect(core));
+                video_invalidate(vid);
+            }
             int rbw, rbh, rmw, rmh;
             /* Only a change to MAX re-fits. The reserved rect, the chrome
                drawn around it and video's buffers are all sized from max
@@ -1449,23 +1486,35 @@ int main(int argc, char **argv)
                forced full-rect refresh a fresh video_create implies. The
                Game Boy never reaches either branch (base == max == 160x144,
                and gambatte never sends these commands at all). */
+            uint32_t rpar2 = prof_par;
             if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
-                (rbw != prof.base_w || rbh != prof.base_h ||
+                ((rpar2 = core_par(core, rbw, rbh)) != prof_par ||
+                 rbw != prof.base_w || rbh != prof.base_h ||
                  rmw != prof.max_w  || rmh != prof.max_h)) {
-                if (rmw == prof.max_w && rmh == prof.max_h) {
+                /* A pixel-aspect change re-fits the RECT, not just the frame
+                   inside it: the rect is sized as max_w times the aspect
+                   (config_resolve_profile_par), so leaving it alone would
+                   make the fit drop an integer step to squeeze the newly
+                   widened picture into a rect built for a narrower one --
+                   which is the 585x480 regression that parameter exists to
+                   prevent. Hence the aspect is tested here and not only in
+                   the video_set_aspect branch above. */
+                if (rpar2 == prof_par && rmw == prof.max_w && rmh == prof.max_h) {
                     /* Base-only: record what the core is rendering now, for
                        the log and for anything that asks, and keep going. */
                     prof.base_w = rbw; prof.base_h = rbh;
                     goto geometry_done;
                 }
                 koboy_profile real_prof;
-                if (!config_resolve_profile(&real_prof, &cfg, pw, ph, rbw, rbh, rmw, rmh)) {
+                if (!config_resolve_profile_par(&real_prof, &cfg, pw, ph,
+                                                rbw, rbh, rmw, rmh, rpar2)) {
                     fatal("panel %dx%d is too small for this core's %dx%d game rect",
                          pw, ph, rmw, rmh);
                     mode = MODE_QUIT;
                     goto sram_check;
                 }
                 prof = real_prof;
+                prof_par = rpar2;
                 say("koboy: core geometry settled at %dx%d (max %dx%d), "
                     "%s layout, game %dx%d at (%d,%d)\n",
                     rbw, rbh, rmw, rmh, layout_name(prof.layout_mode),
@@ -1493,6 +1542,7 @@ int main(int argc, char **argv)
                    WonderSwan toggling its display orientation mid-session is
                    the case that exercises it. */
                 if (vid) video_set_rotation(vid, (int)core_rotation(core));
+                if (vid) video_set_aspect(vid, core_display_aspect(core));
                 if (!vid) {
                     fatal("out of memory");
                     mode = MODE_QUIT;

@@ -253,11 +253,20 @@ void retro_get_system_av_info(struct retro_system_av_info *i)
         i->geometry.max_width   = (unsigned)stub_max_w;
         i->geometry.max_height  = (unsigned)stub_max_h;
     }
-    i->geometry.aspect_ratio = (float)stub_aspect;
+    /* BEFORE the fields are filled in, not after -- which is where this block
+       first went, and the run that was meant to prove main.c honours a
+       non-square aspect reported a square one instead. */
     {
         const char *e = getenv("KOBOY_STUB_FPS");
         if (e && *e) stub_fps = atof(e);
+        /* KOBOY_STUB_ASPECT, for the same reason KOBOY_STUB_FPS exists: only
+           a subprocess run of the real binary can show that main.c carries
+           the core's display aspect into the RECT, and a subprocess cannot be
+           dlsym-poked. */
+        e = getenv("KOBOY_STUB_ASPECT");
+        if (e && *e) stub_aspect = atof(e);
     }
+    i->geometry.aspect_ratio = (float)stub_aspect;
     i->timing.fps = stub_fps; i->timing.sample_rate = 32768.0;
 }
 bool retro_load_game(const struct retro_game_info *g)

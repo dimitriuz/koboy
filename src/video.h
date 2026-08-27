@@ -128,15 +128,68 @@ int video_split_dirty(const uint8_t *prev, const uint8_t *cur,
                       int w, int h, int stride, int fixed_tiles,
                       koboy_rect *out, int max_out);
 
-/* Largest integer scale at which src_w x src_h fits p's reserved game rect,
-   plus the offsets that centre it. At the core's max geometry this is
-   p->scale at (0,0); below max it scales up to fill rather than leaving the
-   frame at 1:1 in a corner. Exposed for tests.
+/* THE PIXEL ASPECT RATIO of the frame a core just delivered: how wide one of
+   its pixels is relative to how tall, in 16.16, given the DISPLAY aspect the
+   core asked for (core_display_aspect) and the frame's own delivered size.
+   KOBOY_ASPECT_ONE means square, and square is what every scaler path in this
+   file did unconditionally before this existed.
 
-   This is the DMG layout's fit and stays integer-only. The Game Boy must
-   still resolve to exactly scale 5 -- 800x720 at (232,84) on a 1264x1680
-   panel -- and an integer scale is also what makes video_scale_gray's
-   memset/memcpy block path applicable at all. */
+   Why this is a separate step rather than a field: the display aspect is a
+   property of the CORE, but the pixel aspect depends on the size of the frame
+   in hand, and one core varies that frame to frame (the Game & Watch core
+   alternates between the whole unit and the LCD alone several times a second).
+   So the core's number is stored and this is computed per submit -- three
+   integer operations, on the pipeline's own admission the wrong place to be
+   careless, but not a per-pixel cost.
+
+   THE DEADBAND IS LOAD-BEARING, not tidiness. A result within
+   KOBOY_PAR_DEADBAND of 1.0 is snapped to exactly 1.0, because a core is free
+   to report a ROUNDED aspect and one does: race (Neo Geo Pocket) reports 1.05
+   for a 160x152 frame whose exact ratio is 1.0526, which is 0.25% off square.
+   Without the snap that core -- and any other that writes 1.33 for 4/3 --
+   would leave the integer block-copy scaler for the fractional one and
+   resample a picture that did not need resampling, for a quarter of one
+   percent. 1/128 is a factor of eleven below the smallest REAL anisotropy in
+   the measured population (Mega Drive, 32:35, 8.6% off square), so the
+   deadband cannot swallow a genuine one.
+
+   Returns KOBOY_ASPECT_ONE for a degenerate frame or an absent aspect rather
+   than dividing by it -- the live guard for a caller that has already gone
+   wrong. */
+#define KOBOY_PAR_DEADBAND 512u        /* 1/128 in 16.16 */
+uint32_t video_pixel_aspect(uint32_t display_aspect, int frame_w, int frame_h);
+
+/* Largest scale at which src_w x src_h fits p's reserved game rect, plus the
+   destination width the pixel aspect asks for and the offsets that centre the
+   result. At the core's max geometry with square pixels this is p->scale at
+   (0,0); below max it scales up to fill rather than leaving the frame at 1:1
+   in a corner. Exposed for tests.
+
+   THE SCALE IS THE VERTICAL ONE AND IT STAYS AN INTEGER. Only the horizontal
+   axis carries the pixel aspect, and that asymmetry is a decision:
+
+     - It is what makes a square-pixel core bit-identical. par == 1 gives
+       dw == src_w * scale, which is the number this function returned before
+       it could return anything else, and the pipeline then takes
+       video_scale_gray's block path exactly as it always did. The Game Boy is
+       the only presentation verified on hardware and the goldens pin it.
+     - Uneven ROW replication is the artifact that would be worst here. A
+       160x210 Atari frame fitted freely into a 960x768 rect is 960x720, i.e.
+       every source row drawn 3 or 4 times in a repeating comb across a
+       four-level panel. Keeping the vertical integer and letting the width
+       carry the ratio gives 840x630 -- exactly three rows per row, and
+       exactly the shape docs/FOLLOWUPS.md #51 predicted by hand.
+
+   The cost is that a tall frame with a wide pixel can leave more of the
+   reserved rect unused than a free fit would (PAL Atari, 160x250 at 25:12,
+   lands on 666x500 of 960x768). That is the trade taken deliberately. */
+void video_fit_par(const koboy_profile *p, int src_w, int src_h, uint32_t par,
+                   int *scale_out, int *dw_out, int *ox_out, int *oy_out);
+
+/* video_fit_par with square pixels, which is what this function has always
+   been. Kept as its own name because it is what config.c's sibling and every
+   pre-existing test talk about, and because "the square case" is worth being
+   able to say. */
 void video_fit(const koboy_profile *p, int src_w, int src_h,
                int *scale_out, int *ox_out, int *oy_out);
 
@@ -160,10 +213,18 @@ void video_fit_frac(int src_w, int src_h, int avail_w, int avail_h,
                     int *dw_out, int *dh_out);
 
 /* Where a src_w x src_h frame lands inside p's reserved game rect, in
-   game-rect-relative pixels, for WHATEVER layout p carries: an integer
-   multiple in KOBOY_LAYOUT_DMG (video_fit above, times src), a fractional
-   aspect-preserving fit in KOBOY_LAYOUT_LCD. Always centred. */
-void video_fit_rect(const koboy_profile *p, int src_w, int src_h,
+   game-rect-relative pixels, for WHATEVER layout p carries: an
+   integer-vertical fit in KOBOY_LAYOUT_DMG (video_fit_par above), a
+   fractional aspect-preserving fit in KOBOY_LAYOUT_LCD. Always centred, on
+   both axes, and never wider or taller than the rect -- the bounds guard in
+   video_pipeline_run exists because a frame that overflows corrupts memory
+   rather than merely looking wrong, and this function is what keeps it from
+   having to fire.
+
+   `par` is the pixel aspect from video_pixel_aspect. KOBOY_ASPECT_ONE
+   reproduces this function's pre-anisotropy answer exactly, on both
+   branches. */
+void video_fit_rect(const koboy_profile *p, int src_w, int src_h, uint32_t par,
                     int *dw_out, int *dh_out, int *ox_out, int *oy_out);
 
 typedef struct koboy_video koboy_video;
@@ -196,6 +257,20 @@ koboy_video   *video_create(const koboy_profile *p, bool force_dither,
    pixels which all moved did not. */
 void           video_set_rotation(koboy_video *v, int rot);
 int            video_get_rotation(const koboy_video *v);
+
+/* The DISPLAY aspect ratio the core asked for, in 16.16 -- core_display_aspect
+   is where it comes from. Set it right after video_create and again whenever
+   the core re-announces, exactly like video_set_rotation -- and, like that
+   one, a change needs a video_invalidate, because every pixel moves.
+
+   THE DEFAULT IS 0, WHICH MEANS "NO ANSWER" AND YIELDS SQUARE PIXELS. Not
+   KOBOY_ASPECT_ONE: a display aspect of 1:1 is a real, non-neutral claim (a
+   160x144 frame shown in a square gives pixels 0.9 as wide as they are tall),
+   so it cannot double as the sentinel. A koboy_video nobody has told about an
+   aspect -- which is every one built by a test that predates this -- scales
+   exactly as it did before non-square pixels existed. */
+void           video_set_aspect(koboy_video *v, uint32_t display_aspect);
+uint32_t       video_get_aspect(const koboy_video *v);
 
 void           video_set_gray_map(koboy_video *v, koboy_gray_map map);
 koboy_gray_map video_get_gray_map(const koboy_video *v);

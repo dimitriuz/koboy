@@ -88,6 +88,33 @@ bool config_load(koboy_config *c, const char *path);
 bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
                             int panel_w, int panel_h,
                             int base_w, int base_h, int max_w, int max_h);
+
+/* As above, for a core whose PIXELS ARE NOT SQUARE. `par` is the pixel aspect
+   video_pixel_aspect derives from the core's display aspect and its BASE
+   geometry, 16.16; KOBOY_ASPECT_ONE makes this function identical to
+   config_resolve_profile, which is literally how that one is implemented.
+
+   Why the reserved rect has to know at all, when the fit that places each
+   frame inside it (video_fit_par) already does: the rect is sized as
+   max_w x max_h times an integer scale, and a wider-than-tall pixel makes the
+   picture wider than max_w * scale. The fit then has nowhere to put it and
+   drops a whole integer step. MEASURED, on a 1264x1680 panel, before this
+   parameter existed: Super Mario Bros. went from 768x720 filling its rect to
+   585x480 inside it, Defender from 876x720 to 640x480. Correctly shaped and a
+   third smaller is not a fix. Sizing the rect for the shape the content will
+   actually be shown at gives 878x720 and 960x720 instead -- both correctly
+   shaped AND bigger than what square scaling produced.
+
+   BASE geometry, not max, and the difference is not academic. The display
+   aspect a core reports describes the picture it is rendering NOW, so the
+   pixel shape has to be derived against that same frame; deriving it against
+   max instead reads the WonderSwan's 1.5556 (announced for a 224x144
+   landscape frame) against its square 224x224 max buffer and widens a rect
+   whose pixels are exactly square by 56%. */
+bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
+                                int panel_w, int panel_h,
+                                int base_w, int base_h, int max_w, int max_h,
+                                uint32_t par);
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b);
 
 /* Rewrites `path` with exactly one `gray_map = <name>` line, preserving every
