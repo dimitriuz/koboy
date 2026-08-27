@@ -1506,31 +1506,35 @@ table. The core benchmark and the dynarec check are MEASURED on the Libra 2.
 
 `corebench-arm`, 600 frames after a 2,400-frame warmup, `--mash` on (so the
 measured window is gameplay and not a title screen --- see
-`scripts/corebench.c`), Nickel up, `--budget-us 6142`. That budget is the
-per-core-frame allowance at the device's OWN `present_divisor = 2` with the
-GBA rect at its shipped ceiling of 4: `16742 - 21200/2`.
+`scripts/corebench.c`), Nickel up. The percentages are computed against the
+**4,316 us** budget measured in the rect sweep below --- the per-core-frame
+allowance at the device's own `present_divisor = 2` with the GBA rect at its
+shipped ceiling of 4. (The run itself was given `--budget-us 6142`, a figure
+modelled before the sweep existed; the microseconds are the measurement and
+the percentages here are recomputed from them.)
 
 | Title | class | mean us | p95 us | worst us | % of budget (mean) | % (p95) | % (worst frame) |
 |---|---|---|---|---|---|---|---|
-| Advance Wars 2 | turn-based | 2,868.2 | 3,524 | 7,069 | 47% | 57% | 115% |
-| Fire Emblem | turn-based | 2,477.1 | 3,289 | 13,040 | 40% | 54% | 212% |
-| Final Fantasy Tactics Advance | turn-based | 2,662.1 | 3,059 | 4,146 | 43% | 50% | 68% |
-| Golden Sun | turn-based | 2,611.1 | 3,547 | 7,180 | 43% | 58% | 117% |
-| Metroid Fusion | action | 1,804.6 | 2,707 | 4,795 | 29% | 44% | 78% |
-| Castlevania: Aria of Sorrow | action | 2,561.5 | 3,252 | 6,590 | 42% | 53% | 107% |
-| Super Mario Advance 2 | action | 2,476.6 | 2,995 | 4,010 | 40% | 49% | 65% |
-| Astro Boy: Omega Factor | action | 3,165.5 | 4,108 | 6,326 | 52% | 67% | 103% |
+| Advance Wars 2 | turn-based | 2,868.2 | 3,524 | 7,069 | 66% | 82% | 164% |
+| Fire Emblem | turn-based | 2,477.1 | 3,289 | 13,040 | 57% | 76% | 302% |
+| Final Fantasy Tactics Advance | turn-based | 2,662.1 | 3,059 | 4,146 | 62% | 71% | 96% |
+| Golden Sun | turn-based | 2,611.1 | 3,547 | 7,180 | 60% | 82% | 166% |
+| Metroid Fusion | action | 1,804.6 | 2,707 | 4,795 | 42% | 63% | 111% |
+| Castlevania: Aria of Sorrow | action | 2,561.5 | 3,252 | 6,590 | 59% | 75% | 153% |
+| Super Mario Advance 2 | action | 2,476.6 | 2,995 | 4,010 | 57% | 69% | 93% |
+| Astro Boy: Omega Factor | action | 3,165.5 | 4,108 | 6,326 | 73% | 95% | 147% |
 
-**Every title runs at full speed, with the tightest at 52% of budget.** For
+**Every title runs at full speed, the tightest mean at 73% of budget.** For
 scale, the two systems measured on this device before it: gambatte 2.1--2.5
 ms, fceumm 4.3--4.6 ms. **A Game Boy Advance costs less per frame here than a
 NES**, which is what an ARM recompiler buys against two interpreters.
 
-The `worst` column crosses budget on five titles and Fire Emblem's crosses it
-twice over --- one frame in 600 at 13.0 ms. That is what `p95` is printed
-for: every p95 is inside 67% of budget, so those are single frames (a scene
-transition, a battle animation spawning), not a sustained state. The same
-shape as the SNES rows earlier in this file, and less severe than Star Fox's.
+The `worst` column crosses budget on six titles and Fire Emblem's crosses it
+three times over --- one frame in 600 at 13.0 ms. That is what `p95` is
+printed for: every p95 is inside 95% of budget, so those are single frames (a
+scene transition, a battle animation spawning), not a sustained state. The
+same shape as the SNES rows earlier in this file, and less severe than Star
+Fox's.
 
 **Turn-based titles are not the cheap ones**, which is worth noting because
 the system was added for them: Advance Wars 2 and Golden Sun cost MORE than
@@ -1549,20 +1553,22 @@ title. Same device, same budget:
 
 | Title | `--mash` mean | `--walk` mean | `--walk` p95 | `--walk` worst | % of budget (walk mean) |
 |---|---|---|---|---|---|
-| Advance Wars 2 | 2,868.2 | 2,022.7 | 2,152 | 3,199 | 33% |
-| Fire Emblem | 2,477.1 | 2,339.1 | 2,835 | 5,260 | 38% |
-| Final Fantasy Tactics Advance | 2,662.1 | 2,706.4 | 3,035 | 4,270 | 44% |
-| Golden Sun | 2,611.1 | 3,524.6 | 4,209 | 17,126 | 57% |
-| **Metroid Fusion** | 1,804.6 | **4,467.3** | 5,236 | 6,884 | **73%** |
-| Castlevania: Aria of Sorrow | 2,561.5 | 1,318.1 | 1,943 | 3,308 | 21% |
-| Super Mario Advance 2 | 2,476.6 | 2,637.9 | 3,972 | 5,324 | 43% |
-| Astro Boy: Omega Factor | 3,165.5 | 3,153.3 | 4,098 | 6,138 | 51% |
+| Advance Wars 2 | 2,868.2 | 2,022.7 | 2,152 | 3,199 | 47% |
+| Fire Emblem | 2,477.1 | 2,339.1 | 2,835 | 5,260 | 54% |
+| Final Fantasy Tactics Advance | 2,662.1 | 2,706.4 | 3,035 | 4,270 | 63% |
+| Golden Sun | 2,611.1 | 3,524.6 | 4,209 | 17,126 | 82% |
+| **Metroid Fusion** | 1,804.6 | **4,467.3** | 5,236 | 6,884 | **104%** |
+| Castlevania: Aria of Sorrow | 2,561.5 | 1,318.1 | 1,943 | 3,308 | 31% |
+| Super Mario Advance 2 | 2,476.6 | 2,637.9 | 3,972 | 5,324 | 61% |
+| Astro Boy: Omega Factor | 3,165.5 | 3,153.3 | 4,098 | 6,138 | 73% |
 
 **Metroid Fusion is 2.5x more expensive once it is actually moving** ---
 1,804 us of cutscene against 4,467 us of Samus running through a corridor.
 That is the single most useful number in this section, and `--mash` alone
-would have reported the cheaper one. It is still inside budget, but the
-margin drops from 3.4x to 1.4x, and 1.4x is a margin worth knowing about.
+would have reported the cheaper one. It is the one title that ends up ON the
+budget rather than inside it: 4,467 against 4,316 is **99.1% of full speed**,
+94.8% at p95. See the ceiling section below for why the remedy is the divisor
+and not a smaller picture.
 
 The two runs are NOT the same trajectory --- RIGHT is held through the menus
 too, so a different option gets selected and a different scene is reached
