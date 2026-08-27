@@ -281,15 +281,27 @@ TEST_MAIN({
 
         video_destroy(gv);
 
-        /* THE SAME MARGIN, UNDER force_dither. The dither path is 1-bit and
-           thresholds against a Bayer matrix whose top cell is 255, so
-           `255 > 255` is false and a dither pass run over the CLEARED margin
-           speckles it black -- a permanent, static, half-black band around
-           every frame on a panel whose whole point is a clean page. The
-           margin therefore has to stay outside the dithered region, exactly
-           as it stays outside the quantised one. Asserted over the whole top
-           band rather than at one probe, because a Bayer pattern is only
-           visible if you look at more than one pixel. */
+        /* THE SAME MARGIN, UNDER force_dither: it is the lightest level and
+           stays there.
+
+           HISTORY, because this check's teeth moved. It was written when the
+           ditherer thresholded against the raw Bayer matrix, where
+           `255 > 255` is false and one cell per 16x16 tile of the CLEARED
+           margin came out black -- a static speckled band around every
+           frame. That is fixed at the source now (video.c's g_thresh: pure
+           white is pure white wherever it appears), so this no longer
+           distinguishes "the margin is outside the dithered region" from
+           "the margin is inside it and dithers to white anyway". Both are
+           correct output; keeping the margin out of the pass is now a cost
+           argument, not a correctness one.
+
+           It stays because what it asserts is still worth asserting and can
+           still fail: the margin must be the lightest level and must not
+           acquire content. A size-change clear that wrote the wrong value,
+           or a fit that placed the picture at the wrong offset, shows up
+           here. Asserted over the whole top band rather than at one probe,
+           because a pattern is only visible if you look at more than one
+           pixel. */
         koboy_video *dv2 = video_create(&gp, true, KOBOY_GRAY_DEFAULT);
         CHECK(dv2 != NULL);
         fill_solid565(gfb, 90, 70, 200, 0xFFFF);

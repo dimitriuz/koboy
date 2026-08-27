@@ -194,6 +194,9 @@ void video_scale_gray_frac(uint8_t *dst, int dst_stride, const uint8_t *src,
 const uint8_t KOBOY_DU4_LEVELS[4] = { 0x00, 0x55, 0xAA, 0xFF };
 
 static uint8_t g_bayer[16][16];
+/* The THRESHOLDS video_dither_1bit actually compares against, which are not
+   the Bayer matrix itself. See bayer_ensure. */
+static uint8_t g_thresh[16][16];
 static int     g_bayer_ready = 0;
 
 void video_bayer_build(uint8_t m[16][16])
@@ -215,13 +218,46 @@ void video_bayer_build(uint8_t m[16][16])
     for (int y = 0; y < 16; y++) for (int x = 0; x < 16; x++) m[y][x] = (uint8_t)cur[y][x];
 }
 
-/* Lazy init, and single-threaded by construction: nothing in src/ creates a
+/* WHY THE THRESHOLDS ARE NOT THE MATRIX, and why this is one line of
+   arithmetic rather than an oversight either way.
+
+   video_bayer_build produces a permutation of 0..255 -- that is what a 16x16
+   Bayer matrix IS, and tests/test_video_quant.c pins it. Thresholding `v > m`
+   against it makes the white count for a value v exactly v out of 256, which
+   is right for every value except the one the panel renders best: v = 255
+   lands on `255 > 255`, which is false, so ONE cell in every 16x16 tile of
+   pure white comes out black. On an 800x720 game rect that is 2250 isolated
+   black dots at 16px spacing over what should be a clean page -- and pure
+   white is not a corner case here, it is the Game Boy's own lightest shade
+   (gambatte emits exactly rgb(255,255,255)) and most HUD text on every other
+   system.
+
+   Scaling the matrix to 0..254 fixes it at the top without moving anything
+   else that matters: 255 > 254 is true in every cell, 0 is still black in
+   every cell (nothing is below zero), and the interior counts shift by at
+   most one cell in 256. The one visible consequence is that m = 0 and m = 1
+   both map to threshold 0, so v = 1 lights two cells instead of one -- a
+   near-black getting 0.8% lighter, against a pure white that stops being
+   speckled.
+
+   Kept as a SECOND table rather than folded into video_bayer_build because
+   the matrix is a mathematical object other code and tests ask for by name;
+   this is a rendering decision about how to use it, and doing the scaling
+   per pixel in the loop below would put a multiply and a divide in the
+   measured bottleneck (CLAUDE.md: video_submit is 17 ms) to save 256 bytes.
+
+   Lazy init, and single-threaded by construction: nothing in src/ creates a
    thread, and §6 of the design keeps the emulator single-threaded because
    non-blocking refresh submission removed the reason to add one. If a worker
    thread ever appears, this needs a once-guard. */
 static void bayer_ensure(void)
 {
-    if (!g_bayer_ready) { video_bayer_build(g_bayer); g_bayer_ready = 1; }
+    if (g_bayer_ready) return;
+    video_bayer_build(g_bayer);
+    for (int y = 0; y < 16; y++)
+        for (int x = 0; x < 16; x++)
+            g_thresh[y][x] = (uint8_t)(((unsigned)g_bayer[y][x] * 255u) / 256u);
+    g_bayer_ready = 1;
 }
 
 void video_quantise4(uint8_t *buf, int w, int h, int stride)
@@ -243,7 +279,7 @@ void video_dither_1bit(uint8_t *buf, int w, int h, int stride,
     bayer_ensure();
     for (int y = 0; y < h; y++) {
         uint8_t *row = buf + (size_t)y * stride;
-        const uint8_t *brow = g_bayer[(unsigned)(screen_y + y) & 15u];
+        const uint8_t *brow = g_thresh[(unsigned)(screen_y + y) & 15u];
         for (int x = 0; x < w; x++)
             row[x] = row[x] > brow[(unsigned)(screen_x + x) & 15u] ? 255 : 0;
     }

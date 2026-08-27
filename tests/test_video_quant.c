@@ -38,6 +38,45 @@ TEST_MAIN({
     CHECK_EQ_INT(nonbinary, 0);
     CHECK(black > 300 && black < 724);   /* mid grey dithers to roughly half */
 
+    /* PURE WHITE IS PURE WHITE, and pure black is pure black. Ordered
+       dithering compares against a threshold, and the naive choice of
+       threshold -- the Bayer matrix itself, a permutation of 0..255 -- makes
+       `255 > 255` false, so one cell in every 16x16 tile of white comes out
+       BLACK. Over an 800x720 game rect that is 2250 isolated black dots on
+       what should be a clean page, and white is not an edge case: it is the
+       Game Boy's own lightest shade and most HUD text on every other system.
+       Checked over 32x32 = four whole tiles, so a single stray cell cannot
+       hide between samples. */
+    uint8_t white[32 * 32];
+    for (int i = 0; i < 32 * 32; i++) white[i] = 255;
+    video_dither_1bit(white, 32, 32, 32, 0, 0);
+    int white_dark = 0;
+    for (int i = 0; i < 32 * 32; i++) if (white[i] != 255) white_dark++;
+    CHECK_EQ_INT(white_dark, 0);
+
+    /* The other end, which the scaling must NOT have broken: nothing is below
+       threshold 0, so a black field stays entirely black. Without this the
+       obvious "fix" of comparing >= instead would pass the check above and
+       speckle black fields WHITE -- the same defect upside down. */
+    uint8_t black_fld[32 * 32];
+    for (int i = 0; i < 32 * 32; i++) black_fld[i] = 0;
+    video_dither_1bit(black_fld, 32, 32, 32, 0, 0);
+    int black_light = 0;
+    for (int i = 0; i < 32 * 32; i++) if (black_fld[i] != 0) black_light++;
+    CHECK_EQ_INT(black_light, 0);
+
+    /* And the middle still dithers: a fix that returned white for everything
+       would satisfy both of the above. 254 is one below pure white and must
+       still produce SOME black, or the top end has been flattened rather
+       than corrected. */
+    uint8_t near[32 * 32];
+    for (int i = 0; i < 32 * 32; i++) near[i] = 254;
+    video_dither_1bit(near, 32, 32, 32, 0, 0);
+    int near_dark = 0;
+    for (int i = 0; i < 32 * 32; i++) if (near[i] == 0) near_dark++;
+    CHECK(near_dark > 0);
+    CHECK(near_dark < 32);      /* ...but only a trace of it */
+
     /* SCREEN-COORDINATE INDEXING: identical content at the same screen
        position must dither identically. This is what makes dirty-rect
        skipping possible, so it is a correctness property, not cosmetics. */
