@@ -954,6 +954,59 @@ the d-pad on the panel, and the smearing that makes scrolling platformers
 unpleasant (#25) is expected to apply to NES side-scrollers exactly as it
 does to the Game Boy's.
 
+### All fourteen systems run on the device, 2026-08-27
+
+Every shipped core `dlopen`s, resolves geometry, paces itself and renders on
+the Kobo Libra 2. Measured with `--frames` over ssh (Nickel up, never through
+`koboy.sh`). This covers **loading, geometry, pacing and speed --- not a
+playtest.** Nobody has played any of these.
+
+| System | rect | `core` mean | `submit` mean | paced at |
+|---|---|---|---|---|
+| SNES (Zelda) | 897x672 | 2.8 ms | 16.2 ms | 59.92 fps |
+| Mega Drive (Sonic) | 1172x896 | 4.0 ms | 22.0 ms | 59.92 fps |
+| PC Engine (R-Type) | 876x729 | 3.8 ms | 16.1 ms | 59.82 fps |
+| Neo Geo Pocket (Metal Slug) | 960x912 | 3.5 ms | 18.0 ms | 60.25 fps |
+| ColecoVision (DK Jr) | 1024x768 | 3.7 ms | 18.3 ms | 60.00 fps |
+| Intellivision (Astrosmash) | 1056x672 | 2.4 ms | 23.1 ms | 60.00 fps |
+| Atari 2600 (Breakout) | 1002x750 | 3.2 ms | 18.5 ms | **49.92 fps** |
+| Master System (Sonic Chaos) | 1172x768 | 2.0 ms | 21.1 ms | 59.92 fps |
+| Game Gear (Sonic Chaos) | 1152x864 | 2.0 ms | 20.7 ms | 59.92 fps |
+| WonderSwan (beatmania) | 1120x720 | 2.9 ms | 16.8 ms | **75.47 fps** |
+| Arcade (Galaga) | 648x864 | 4.4 ms | 14.5 ms | 60.00 fps |
+
+**Emulation is cheap on this hardware and `video_submit` is the whole
+bottleneck.** Every core costs 2.0-4.4 ms a frame --- a whole Mega Drive for
+4.0 ms --- against 14-23 ms of pixel pipeline. The v1 spec's premise that
+emulation would be the constraint is wrong for all fourteen systems, not just
+the Game Boy (`docs/FOLLOWUPS.md` #23).
+
+**Per-core pacing is visibly working:** the Atari's PAL board paces at 49.92
+fps and the WonderSwan at 75.47, where every system used to run at the Game
+Boy's 59.7275.
+
+**Mega Drive re-resolves geometry mid-run** (256x192 -> 320x224 on Sonic),
+which is the per-frame `core_geometry_changed()` path doing its job on real
+content.
+
+### ColecoVision's BIOS is verified, and this is why it needed a picture
+
+`colecovision.rom` (md5 `2c66f5911e5b42b8ebe113403548eee7`) renders the real
+boot screen. WITHOUT it, gearcoleco **loads, runs, reports no error and paces
+normally** --- and draws a black screen reading `NO BIOS`. Rendered both, side
+by side, because nothing in a log distinguishes them. A system that looks like
+it works and does not is the failure this project keeps returning to.
+
+Intellivision's `exec.bin` and `grom.bin` are byte-identical to the MiSTer
+`boot0.rom` and `boot1.rom` (md5 `62e76103...` and `0cd5946c...`).
+
+### Not established
+
+No system here has been PLAYED. The pixel-aspect correction changed eight
+systems' presentation and has still never been judged on the panel by a
+person; `pixel_aspect = false` is the way back. `refresh_fixed_tiles` is
+still 40, against rects two to four times larger than it was tuned for.
+
 ### Second title, an action game (Darkwing Duck, MBC1)
 
 Tetris is a generous first test: small dirty rectangles, no scrolling. An action
