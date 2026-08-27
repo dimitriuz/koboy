@@ -14,6 +14,28 @@ void recent_touch(koboy_recent *rc, const char *path, const char *display)
 {
     if (!rc || !path || !*path) return;
 
+    /* SNAPSHOT BOTH ARGUMENTS BEFORE TOUCHING rc, because a caller is allowed
+       to pass pointers INTO rc and one does: main.c re-touches a chosen
+       recent entry as
+           recent_touch(&rc, cfg.rom_path, recent_display(&rc, ri));
+       and recent_display returns a pointer to rc->entries[ri].display.
+
+       The shifts below overwrite that slot with its neighbour's contents, so
+       reading `display` afterwards copied THE WRONG NAME -- observed on the
+       device as a recent list showing one game's title twice, the second row
+       carrying a different game's path underneath. Selecting it started a
+       game other than the one named.
+
+       Copying up front costs one buffer on the stack and makes the aliasing
+       question stop existing, which is better than a comment telling every
+       future caller not to do the obvious thing. */
+    char path_copy[sizeof rc->entries[0].path];
+    char disp_copy[sizeof rc->entries[0].display];
+    snprintf(path_copy, sizeof path_copy, "%s", path);
+    snprintf(disp_copy, sizeof disp_copy, "%s", display ? display : path);
+    path = path_copy;
+    display = disp_copy;
+
     int found = -1;
     for (int i = 0; i < rc->count; i++)
         if (!strcmp(rc->entries[i].path, path)) { found = i; break; }

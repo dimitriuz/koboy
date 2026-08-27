@@ -187,4 +187,35 @@ TEST_MAIN({
     char cmd[1024];
     snprintf(cmd, sizeof cmd, "rm -rf '%s'", dir);
     if (system(cmd) != 0) fprintf(stderr, "NOTE: cleanup failed\n");
+
+    /* ---- a caller may pass pointers INTO the list, and one does ---- */
+    {
+        koboy_recent rc;
+        memset(&rc, 0, sizeof rc);
+        recent_touch(&rc, "roms/GBA/Advance Wars 2.gba", "Advance Wars 2.gba");
+        recent_touch(&rc, "roms/GBA/Pokemon Emerald.gba", "Pokemon Emerald.gba");
+        /* Now: [0] = Pokemon, [1] = Advance Wars. */
+        CHECK(strcmp(recent_display(&rc, 0), "Pokemon Emerald.gba") == 0);
+        CHECK(strcmp(recent_display(&rc, 1), "Advance Wars 2.gba") == 0);
+
+        /* THE BUG, reported from the device: re-touching entry 1 the way
+           main.c does -- passing recent_display(&rc, 1), which points INTO
+           the list -- used to read that slot AFTER the shift had overwritten
+           it, so the moved entry took its neighbour's name. The recent list
+           showed "Pokemon Emerald" twice, and the second row started Advance
+           Wars when tapped.
+
+           Asserted on the DISPLAY of the moved entry, not merely on the
+           count: the count was always right, which is why nothing caught
+           this. */
+        recent_touch(&rc, recent_path(&rc, 1), recent_display(&rc, 1));
+        CHECK_EQ_INT(rc.count, 2);
+        CHECK(strcmp(recent_path(&rc, 0), "roms/GBA/Advance Wars 2.gba") == 0);
+        CHECK(strcmp(recent_display(&rc, 0), "Advance Wars 2.gba") == 0);
+        /* And the displaced entry keeps its own name too. */
+        CHECK(strcmp(recent_display(&rc, 1), "Pokemon Emerald.gba") == 0);
+        /* No two rows may share a display while naming different paths --
+           the exact shape the device showed. */
+        CHECK(strcmp(recent_display(&rc, 0), recent_display(&rc, 1)) != 0);
+    }
 })
