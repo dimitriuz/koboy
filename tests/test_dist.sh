@@ -97,8 +97,10 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
              .adds/koboy/snes9x2005_libretro.so \
              .adds/koboy/mednafen_pce_fast_libretro.so \
              .adds/koboy/gpsp_libretro.so \
+             .adds/koboy/fbneo_libretro.so \
              .adds/koboy/nm-koboy .adds/koboy/kfmon-koboy.ini \
              .adds/koboy/README.md .adds/koboy/TESTED.md \
+             .adds/koboy/README-fbneo.txt \
              .adds/koboy/roms/README.txt; do
         unzip -Z1 "$Z" | grep -qx "$f" || { echo "FAIL: missing $f"; exit 1; }
     done
@@ -156,101 +158,105 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
         grep -qF -- "$f" "$rd/.adds/koboy/roms/README.txt" \
             || { echo "FAIL: roms/README.txt does not name $f"; rm -rf "$rd"; exit 1; }
     done
-    # .zip is the first extension the browser lists whose CORE IS NOT IN THIS
-    # PACKAGE, so listing the extension without saying where the core comes
-    # from would be worse than not listing it: the user would see the row
-    # appear and the load fail with nothing to act on. Asserted by the archive
-    # name, not by a vague word like "separate".
-    grep -qF -- "koboy-fbneo-" "$rd/.adds/koboy/roms/README.txt" \
-        || { echo "FAIL: roms/README.txt lists .zip but never names the arcade archive"; rm -rf "$rd"; exit 1; }
+    # THE ARCADE CORE IS 39 MB OF A ~40 MB INSTALL, and this asserts that the
+    # file a user reads first tells them so BY FILENAME. It used to assert the
+    # opposite thing -- that roms/README.txt named the second archive the core
+    # arrived in -- because arcade shipped separately; one archive replaced
+    # two, and the question the text has to answer changed with it, from
+    # "where do I get this" to "what is all this space and can I have it
+    # back". A vague "you can delete the arcade core" would not do: the user
+    # is looking at a directory of .so files and needs the name.
+    grep -qF -- "fbneo_libretro.so" "$rd/.adds/koboy/roms/README.txt" \
+        || { echo "FAIL: roms/README.txt lists .zip but never names fbneo_libretro.so, the file that can be deleted"; rm -rf "$rd"; exit 1; }
     rm -rf "$rd"
 
-    # THE ARCADE CORE IS NOT IN THE MAIN PACKAGE, and this is the assertion
-    # that keeps it that way. 41 MB against the whole rest of koboy's 4 MB is
-    # the entire reason `make fbneo-dist` exists; a stray `cp` in the dist rule
-    # would inflate the download tenfold for every user who has no arcade
-    # romset, and nothing else here would notice.
-    if unzip -Z1 "$Z" | grep -q 'fbneo'; then
-        echo "FAIL: the main package carries the arcade core -- it ships separately"
-        unzip -Z1 "$Z" | grep 'fbneo'
-        exit 1
-    fi
-    # THE MAIN PACKAGE HAS A SIZE CAP, and it exists because "ship it
-    # separately" is a judgement nobody re-makes once a core is merely
-    # largeish. Arcade earned its own archive at 41 MB against the rest of
-    # koboy's 4 MB -- a tenfold blowup nobody could miss. The dangerous case
-    # is the one that is not obvious: a 12 MB core added to a 5 MB package
-    # triples the download for every user who does not have that system,
-    # and no assertion here would have said a word.
+    # THE ARCADE CORE IS IN THE PACKAGE, and this assertion is the INVERSE of
+    # the one it replaces. Arcade shipped in its own archive for most of this
+    # project's life and this block asserted the main package did NOT carry
+    # fbneo; koboy now ships one archive, so the same line of defence has to
+    # point the other way. Inverted rather than deleted: an assertion nobody
+    # replaced is how the `cp` for gpSP went missing from the dist rule while
+    # every test passed.
     #
-    # 16 MB, and the number is chosen rather than round. The package is
-    # ~4.7 MB with thirteen cores in it, so this is roughly 3x headroom --
-    # loose enough that an ordinary core (the two added with the Mega
-    # Drive/SNES/PC Engine batch were 445 KB and 2.4 MB stripped) never trips
-    # it, and tight enough that anything of FBNeo's order does. Tripping this
-    # is NOT automatically a bug: it is a prompt to decide, the way arcade was
-    # decided, whether the new core belongs in the main archive or in one of
-    # its own. Raise it deliberately, with a reason, or split the package.
-    zbytes=$(wc -c < "$Z")
-    zcap=16777216
-    [ "$zbytes" -le "$zcap" ] || {
-        echo "FAIL: main package is $zbytes bytes, over the $zcap cap"
-        echo "      Something large was added to dist. Decide whether it"
-        echo "      belongs here or in its own archive (see fbneo-dist),"
-        echo "      then either split it out or raise the cap on purpose."
-        unzip -Z1 -v "$Z" | sort -k1 -n -r | head -5
+    # The named-cores loop above already requires the .so by path. This adds
+    # the thing that loop cannot see -- that the recipe copies a file with
+    # real bytes in it. A zero-length or truncated `cp` satisfies a listing
+    # and produces "cannot open core" on the device. 30 MB is a floor, not a
+    # size check: the core is 39.2 MB stripped and zip gets it to about 12,
+    # so any plausible build clears it and an empty file does not.
+    # `unzip -Z` (not -Z1, which is names only, and not -Z1 -v, which prints
+    # the zipfile's central-directory header and no per-file rows at all):
+    # field 4 of a -Z row is the UNCOMPRESSED size.
+    fbz=$(unzip -Z "$Z" | awk '$NF ~ /fbneo_libretro\.so$/ { print $4 }')
+    [ -n "$fbz" ] || { echo "FAIL: no fbneo_libretro.so in the package"; exit 1; }
+    [ "$fbz" -ge 31457280 ] || {
+        echo "FAIL: fbneo_libretro.so is $fbz bytes uncompressed -- a truncated core"
         exit 1; }
-    echo "ok: main package $zbytes bytes, under the $zcap cap"
+    # THE PACKAGE HAS A SIZE CAP, and its job survived the switch to one
+    # archive even though its number did not. The cap does not exist to keep
+    # the download small -- the owner has decided 18.6 MB is fine -- it exists
+    # so that a core landing in the tens of megabytes is a DECISION somebody
+    # makes rather than a download that quietly doubles. That was the original
+    # reasoning when arcade shipped separately and it is unchanged; only the
+    # baseline moved.
+    #
+    # 32 MB, measured rather than guessed. Fifteen cores are 57.4 MB stripped
+    # and zip to 17.3, and the whole package is about 18.6 -- FBNeo compresses
+    # from 39.2 MB to roughly 12 because it is mostly similar driver tables,
+    # which is the fact that made one archive reasonable and which nobody had
+    # measured while the split was in place. So this is ~1.7x headroom.
+    # Tighter than the 3x this cap used to carry, deliberately: with FBNeo
+    # already inside, the next thing big enough to matter is big enough that
+    # 1.7x is the right amount of rope.
+    #
+    # Tripping this is NOT automatically a bug. It is a prompt to decide
+    # whether the new core belongs in the archive at all, and to say so here
+    # when you raise the number.
+    zbytes=$(wc -c < "$Z")
+    zcap=33554432
+    [ "$zbytes" -le "$zcap" ] || {
+        echo "FAIL: package is $zbytes bytes, over the $zcap cap"
+        echo "      Something large was added to dist. Decide whether it"
+        echo "      belongs in the archive, then either drop it or raise the"
+        echo "      cap on purpose, with the reason written down."
+        unzip -Z "$Z" | sort -k4 -n -r | head -5
+        exit 1; }
+    echo "ok: package $zbytes bytes, under the $zcap cap"
 
     echo "ok: packaging"
 
-    # ------------------------------------------------- the arcade package
-    # Built and checked here rather than left to a human, for the reason the
-    # main package is: a deliverable nothing verifies is a deliverable that
-    # rots. The core itself is not rebuilt on every run (dist/fbneo_libretro.so
-    # is a non-phony target, like every other core), so this costs one zip
-    # after the first build.
-    make fbneo-dist
-    ZF=$(ls dist/koboy-fbneo-*.zip | head -1)
-    [ -n "$ZF" ] || { echo "FAIL: no arcade zip produced"; exit 1; }
-    if unzip -Z1 "$ZF" | grep -v '^\.adds/koboy/'; then
-        echo "FAIL: arcade zip writes outside .adds/koboy/"; exit 1
-    fi
-    unzip -Z1 "$ZF" | grep -qx '.adds/koboy/fbneo_libretro.so' \
-        || { echo "FAIL: arcade zip has no core in it"; exit 1; }
-    # It must NOT duplicate the main package. The two are installed on top of
-    # each other, so a second copy of koboy or koboy.ini here would overwrite
-    # whatever the user already has -- including a koboy.ini they edited.
-    for f in koboy koboy.sh koboy.ini koboy-probe; do
-        if unzip -Z1 "$ZF" | grep -qx ".adds/koboy/$f"; then
-            echo "FAIL: arcade zip duplicates $f from the main package"; exit 1
-        fi
-    done
-    # No romset, by the same rule and the same regex as the main package.
-    if unzip -Z1 "$ZF" | grep -qiE "$BAD"; then
-        echo "FAIL: the arcade package contains content:"
-        unzip -Z1 "$ZF" | grep -iE "$BAD"
-        exit 1
-    fi
-    # The one instruction that decides whether a failed load is diagnosable:
-    # an FBNeo romset is version-matched, and a set built for another release
-    # fails exactly like a broken core.
+    # ------------------------------------------- the arcade instructions
+    # These three assertions outlived the archive they were written for. They
+    # used to run against `make fbneo-dist`'s own README inside a second zip;
+    # arcade now ships in the one package and the same text ships as
+    # .adds/koboy/README-fbneo.txt, so the assertions moved rather than went.
+    # Each guards a failure that looks exactly like a broken emulator:
+    #
+    #   the FBNeo version   an arcade romset is version-matched, and a set
+    #                       built for another release fails with the same
+    #                       "couldn't find rom" a genuinely broken core gives
+    #   hiscore.dat         the only save mechanism an arcade board HAS.
+    #                       retro_get_memory_size(SAVE_RAM) is 0 on all 227
+    #                       boards measured, so there is no .srm; high scores
+    #                       go through FBNeo's own file, which koboy enables
+    #                       (src/core.c) and the owner supplies
+    #   the DIRECTORY       "put it in the system folder" is not actionable:
+    #                       the core looks in an `fbneo` SUBdirectory that
+    #                       does not exist until somebody makes it
     rdf=$(mktemp -d)
-    unzip -qo "$ZF" .adds/koboy/README-fbneo.txt -d "$rdf"
+    unzip -qo "$Z" .adds/koboy/README-fbneo.txt -d "$rdf"
     grep -qF -- "1.0.0.03" "$rdf/.adds/koboy/README-fbneo.txt" \
         || { echo "FAIL: arcade README does not state the FBNeo version the set must match"; rm -rf "$rdf"; exit 1; }
-    # And the one save mechanism an arcade board HAS. There is no .srm here --
-    # retro_get_memory_size(SAVE_RAM) is 0 on all 227 boards measured -- so
-    # high scores go through FBNeo's own hiscore.dat, which koboy enables
-    # (src/core.c) and the owner supplies. Named by FILE and by DIRECTORY,
-    # because "put it in the system folder" is not actionable: the core looks
-    # in a `fbneo` SUBdirectory that does not exist until someone makes it.
     grep -qF -- "hiscore.dat" "$rdf/.adds/koboy/README-fbneo.txt" \
         || { echo "FAIL: arcade README does not name hiscore.dat"; rm -rf "$rdf"; exit 1; }
     grep -qF -- ".adds/koboy/fbneo/" "$rdf/.adds/koboy/README-fbneo.txt" \
         || { echo "FAIL: arcade README does not say where hiscore.dat goes"; rm -rf "$rdf"; exit 1; }
+    # And the size lever, by filename, in the file a user reads when they are
+    # looking at the koboy directory rather than at roms/.
+    grep -qF -- "fbneo_libretro.so" "$rdf/.adds/koboy/README-fbneo.txt" \
+        || { echo "FAIL: arcade README never names the file that can be deleted"; rm -rf "$rdf"; exit 1; }
     rm -rf "$rdf"
-    echo "ok: arcade packaging"
+    echo "ok: arcade instructions"
 fi
 
 # ------------------------------------------------------- launcher assertions
