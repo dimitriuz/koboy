@@ -312,7 +312,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 79 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. #47 and #97 are CLOSED (`--ui-script` gained a `menu` verb; DU has a timing number at last), and #98-#100 are what the area-pacing work left open. |
+| `docs/FOLLOWUPS.md` | 83 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. #47 and #97 are CLOSED (`--ui-script` gained a `menu` verb; DU has a timing number at last), #98-#100 are what the area-pacing work left open, and #101-#104 are the in-game SCREENSHOT's -- **#101 first: none of that feature has run on a Kobo**. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -569,6 +569,16 @@ hiding.
   script and reads it back. The same two runs would work on the device with
   Nickel up, exactly as the FRAMES row was verified there. Nobody has done
   it. See `docs/FOLLOWUPS.md` #76.
+- **The in-game SCREENSHOT has never run on a Kobo.** `MENU -> SCREENSHOT`
+  arms a capture that the next presented frame writes as a PNG into
+  `shot_dir` (`src/shot.c`, `src/png.c`, and the arming branch and capture
+  site in `main.c`). All of it is host-verified end to end --
+  `tests/smoke_host.sh` arms one through `--ui-script` and decodes the result
+  with python3's zlib -- and none of it has been executed on the device. What
+  a trip there would answer: how long a 2 MB composite plus a FAT32 write
+  takes on the ARM (it happens on the main loop), and whether the
+  confirmation plaque's erase leaves residue where the text was. See
+  `docs/FOLLOWUPS.md` #101-#104.
 - **The 1-bit motion pair has never been seen on a panel.** `force_dither`
   now runs end to end (it never had — `docs/FOLLOWUPS.md` #4), `waveform_fast
   = du` is new, and **MENU → MOTION** cycles the pair `4 GREYS / AUTO` →

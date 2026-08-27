@@ -2150,3 +2150,40 @@ has a number for what DU costs on this panel, and if it is as slow as FBInk's
 header guesses (~260 ms) that changes the verdict independently of how it
 looks. `docs/FOLLOWUPS.md` #97.
 
+
+---
+
+## The in-game SCREENSHOT: NOT RUN ON THE DEVICE, 2026-08-27
+
+`MENU -> SCREENSHOT` is host-verified end to end and has never executed on a
+Kobo. What that means precisely, so nobody reads more into it than is there:
+
+| | Host (x86_64, SDL dummy) | Kobo Libra 2 |
+|---|---|---|
+| The row appears and arms a capture | yes, driven by `--ui-script`'s `menu` verb | not run |
+| A PNG is written | yes, 2,125,257 bytes at 1264x1680 | not run |
+| It decodes | yes, through **python3's zlib** -- an independent decoder, and the same library any viewer uses | not run |
+| It contains the GAME and not the MENU | asserted: the game rect is >= 95% the stub's black, and the faceplate's zero pure-white pixels make a menu capture impossible to miss | not run |
+| It is the composited PANEL | asserted: >100,000 mid-grey faceplate pixels outside the game rect | not run |
+| The counter survives a relaunch | asserted across two processes | not run |
+| Time taken by a capture | a few ms, and meaningless -- see below | **unknown** |
+| The confirmation plaque | drawn and erased without crashing; its pixels are never read back | **unknown** |
+
+The two numbers worth going to the device for:
+
+**How long a capture takes.** It composites a 2 MB panel, checksums 2.1 MB and
+writes the file from the main loop. On this host that is a few milliseconds.
+On a 1 GHz Cortex-A9 writing to FAT32 it is a different question, and the
+answer decides whether it needs to move off the loop. It happens once, when a
+human asked for it, so even a visible hitch is survivable -- but "survivable"
+should be measured rather than assumed.
+
+**Whether the plaque erases cleanly.** The confirmation is a white plaque with
+black text in the band under the game rect, refreshed with `KOBOY_REFRESH_FULL`
+and taken away 2.5 s later by re-rendering chrome and blitting back that
+rectangle, also with FULL. Nothing on the host can look at a panel. On e-ink
+the question is residue where the text was; a FULL refresh of the same rect
+should leave none, and this project's history with "should" is the reason this
+row exists.
+
+`docs/FOLLOWUPS.md` #101-#104.

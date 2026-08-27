@@ -1905,3 +1905,74 @@ looked at a half-screen scene change on the panel with it raised. If the owner
 reports flashing on scene transitions rather than on scrolls, that is this
 entry.
 
+
+## The in-game SCREENSHOT (added 2026-08-27)
+
+### 101. Nothing about this has run on a Kobo
+
+The whole feature is host-verified: `tests/smoke_host.sh` arms a capture
+through `--ui-script`, runs frames, and decodes the PNG with python3's zlib.
+On the device none of it has been executed once.
+
+Three things are device-specific enough to be worth the trip:
+
+- **Cost.** A capture composites a 2 MB panel and CRC/Adler-sums 2.1 MB, then
+  writes it to a FAT32 card. On the host that is a few milliseconds; on a
+  1 GHz ARM writing to eMMC through a FAT driver it could be a visible hitch
+  in the game. It happens once, when a human asked for it, so a hitch is
+  acceptable -- but nobody knows whether it is 50 ms or 2 seconds, and the
+  answer decides whether this needs to move off the main loop.
+- **The plaque.** `shot_note_rect` picks the band between the game rect and
+  the controls, paints a white plaque with `KOBOY_REFRESH_FULL`, and erases it
+  2.5 s later by re-rendering chrome and blitting back that rectangle. Every
+  part of that is right on the host, where nothing can be read back off the
+  panel. On e-ink, the question is whether the erase leaves residue where the
+  text was -- the erase is a FULL refresh of the same rect, so it should not,
+  but "should not" is what the DU4 folklore was made of.
+- **The card.** `.adds` is FAT32 and `safefile_write` does temp file, fsync,
+  rename. That path is already proven there by cartridge SRAM, so this is the
+  least likely of the three to surprise anyone.
+
+### 102. The confirmation plaque's pixels are never asserted
+
+`shot_note_rect` and the drawing beside it live in `main.c`, which is not
+linked into any test binary, and no host backend can read the panel back. The
+smoke test proves the plaque is NOT in the capture (zero pure-white pixels
+outside the game rect, and the faceplate has none of its own) and that the
+run does not crash with it enabled. It does not prove the plaque is legible,
+correctly placed, or ever erased.
+
+Moving the geometry into `shot.c` beside `shot_compose` would make the rect
+testable; the drawing and the erase would still not be. The cheap version is
+to assert the rect, which is where the clamps are.
+
+### 103. One capture per `--ui-script` run, and that is the script's fault
+
+The emulator loop's `menu` marker scan steps over idle states looking for the
+next marker, so two `menu` verbs separated only by `idle` are consumed on
+consecutive iterations with no frame presented between them -- both arms
+collapse into one capture. A script therefore cannot drive two shots in one
+process, which is why the numbering test uses two processes (the more
+valuable run anyway: it is the one that proves the counter comes off the
+directory).
+
+What that leaves untested is a second capture taken while the first one's
+plaque is still on the panel. It cannot happen -- every route to a second
+shot goes through the MENU, whose close path repaints chrome over the plaque
+and clears the timer -- but that is an argument, not a test. A `frames N`
+verb that let a script run the emulator loop for N core frames would close
+this and would be useful for more than screenshots.
+
+### 104. The PNGs are uncompressed, and one is 2.1 MB
+
+`src/png.c` uses stored DEFLATE blocks, so a 1264x1680 capture is 2,125,257
+bytes where a real encoder would produce perhaps 60 KB of it -- four greys
+over large flat areas is close to the best case compression has. That is a
+deliberate trade (no zlib, no invented compressor -- see the file's header)
+and it costs disk space on a device with 24 GB of it.
+
+It costs something else, though: uploading ten of these to a GitHub README is
+21 MB, and the owner is on a laptop over wifi rather than the device. If that
+becomes annoying, the answer is `optipng` on the desktop, not a compressor in
+koboy -- and this entry exists so that trade is a decision rather than a
+surprise.
