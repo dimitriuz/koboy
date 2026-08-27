@@ -4,6 +4,7 @@
 #include "input.h"
 #include "text.h"
 #include "ui.h"
+#include "shot.h"
 #include "video.h"
 #include <string.h>
 
@@ -837,5 +838,69 @@ TEST_MAIN({
         char guard3[2] = { 'Q', 'Q' };
         ui_motion_label(guard3, 0, true, KOBOY_WFM_DU);
         CHECK_EQ_INT(guard3[0], 'Q');
+    }
+
+    /* -------------------------------------------- the SCREENSHOT row label */
+    {
+        char lab[64];
+
+        /* THE NUMBER IS THE FILE THAT IS ABOUT TO BE WRITTEN, zero-padded to
+           match what shot_path builds, so the row and the directory listing
+           agree. A label that dropped it would look right on the panel and
+           leave the owner unable to tell six shots of the same game apart. */
+        ui_shot_label(lab, sizeof lab, 1);
+        CHECK(strcmp(lab, "SCREENSHOT 001 (AFTER THIS MENU)") == 0);
+        ui_shot_label(lab, sizeof lab, 4);
+        CHECK(strcmp(lab, "SCREENSHOT 004 (AFTER THIS MENU)") == 0);
+        ui_shot_label(lab, sizeof lab, 137);
+        CHECK(strcmp(lab, "SCREENSHOT 137 (AFTER THIS MENU)") == 0);
+
+        /* Distinct numbers give distinct rows. */
+        {
+            char a[64], b[64];
+            ui_shot_label(a, sizeof a, 2);
+            ui_shot_label(b, sizeof b, 3);
+            CHECK(strcmp(a, b) != 0);
+        }
+
+        /* "AFTER THIS MENU" IS THE DESIGN POINT SPELLED OUT ON THE PANEL.
+           The MENU is drawn over the game, so a capture taken while it is up
+           would photograph the menu; selecting this row arms one for the
+           frame after it closes. This check is here so that deferral cannot
+           be dropped from the wording without a test noticing -- the owner
+           should never have to guess what he is photographing. */
+        ui_shot_label(lab, sizeof lab, 5);
+        CHECK(strstr(lab, "AFTER THIS MENU") != NULL);
+
+        /* At the ceiling the row says the directory is FULL rather than
+           naming a file shot_path will refuse to build. A row promising a
+           capture that cannot happen is worse than one that says why. */
+        ui_shot_label(lab, sizeof lab, KOBOY_SHOT_SEQ_MAX);
+        CHECK(strstr(lab, "AFTER THIS MENU") != NULL);
+        ui_shot_label(lab, sizeof lab, KOBOY_SHOT_SEQ_MAX + 1);
+        CHECK(strstr(lab, "FULL") != NULL);
+        CHECK(strstr(lab, "AFTER THIS MENU") == NULL);
+        ui_shot_label(lab, sizeof lab, 0);
+        CHECK(strstr(lab, "FULL") != NULL);
+        ui_shot_label(lab, sizeof lab, -1);
+        CHECK(strstr(lab, "FULL") != NULL);
+
+        /* Fits a MENU row on the narrowest supported panel, in both forms. */
+        ui_shot_label(lab, sizeof lab, KOBOY_SHOT_SEQ_MAX);
+        CHECK((int)strlen(lab) <= UI_TITLE_CHARS);
+        ui_shot_label(lab, sizeof lab, KOBOY_SHOT_SEQ_MAX + 1);
+        CHECK((int)strlen(lab) <= UI_TITLE_CHARS);
+
+        /* Truncates rather than overruns, and always terminates. */
+        char tiny[6];
+        memset(tiny, 'Z', sizeof tiny);
+        ui_shot_label(tiny, sizeof tiny, 7);
+        CHECK_EQ_INT((int)strlen(tiny), 5);
+        CHECK(strcmp(tiny, "SCREE") == 0);
+
+        /* A zero-size buffer writes nothing at all. */
+        char guard4[2] = { 'Q', 'Q' };
+        ui_shot_label(guard4, 0, 7);
+        CHECK_EQ_INT(guard4[0], 'Q');
     }
 })

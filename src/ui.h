@@ -126,6 +126,32 @@ void      ui_divisor_label(char *out, size_t outsz, int divisor);
 void      ui_motion_label(char *out, size_t outsz, bool dither,
                           koboy_wfm_policy wfm);
 
+/* The in-game SCREENSHOT row, e.g. "SCREENSHOT 004 (AFTER THIS MENU)".
+
+   Here rather than in main.c for exactly the reason the three labels above
+   are: main.c is not linked into the test binaries (the Makefile's SRC
+   filter), so a label built inline there could be asserted against nothing.
+
+   BOTH HALVES OF THE ROW ARE LOAD-BEARING. The number is the file that is
+   about to be written, so the owner knows which of the several shots he is
+   about to take is which without leaving the game. And "AFTER THIS MENU" is
+   the row saying what it does: the MENU is drawn OVER the game, so a capture
+   taken while it is on screen would be a photograph of the menu. Selecting
+   this row ARMS a capture that happens once the game is back. Nobody should
+   have to guess that, and the alternative -- an owner who takes six shots of
+   the menu before working it out -- is exactly the sort of thing a label
+   costs nothing to prevent.
+
+   `next_seq` is what shot_last_seq + 1 gives. Out of range (past
+   KOBOY_SHOT_SEQ_MAX) the row says the directory is full instead of naming a
+   file that shot_path will refuse to build -- a row promising a capture that
+   cannot happen is worse than one that says why.
+
+   Uppercased for the same reason every other row is: the 5x7 font's lower
+   case is not worth reading. Always NUL-terminated; truncates rather than
+   overruns. */
+void      ui_shot_label(char *out, size_t outsz, int next_seq);
+
 #define UI_TITLE_CHARS 40
 
 /* Builds a breadcrumb title -- `head` alone when `sub` is empty, otherwise

@@ -472,7 +472,8 @@ echo "ok: present_divisor = 0 keeps the default rather than dividing by zero"
 # Row geometry is the same 1264x1680 derivation as every browser tap above
 # (row_h=64, row r's centre is 8 + 64 + r*64 + 32), against the MENU's own
 # order in src/main.c: 0 SAVE STATE, 1 LOAD STATE, 2 RESET GAME,
-# 3 GREYSCALE, 4 FRAMES, 5 MOTION, 6 CHOOSE ROM, 7 RESUME, 8 QUIT.
+# 3 GREYSCALE, 4 FRAMES, 5 MOTION, 6 SCREENSHOT, 7 CHOOSE ROM, 8 RESUME,
+# 9 QUIT.
 #   menu         -- open the in-game MENU from inside the emulator loop
 #   tap 200 360  -- row 4, FRAMES
 #
@@ -782,7 +783,8 @@ echo "ok: force_dither + waveform_fast reach the pipeline and the backend from t
 # runs before it from being self-fulfilling. The same script, aimed at a
 # row that is no settings row at all (row 2, RESET GAME): if the taps were
 # landing anywhere at all -- or if the handler fired regardless of which row
-# was chosen -- this run would move a setting too. No key may change.
+# was chosen -- this run would move a setting too. No key may change, and no
+# screenshot may be taken.
 printf 'menu\ntap 200 232\n' > "$script"
 printf 'present_divisor = 3\ngray_map = balanced\n' > "$ini"
 rc=0
@@ -803,11 +805,198 @@ echo "$out" | grep -q 'koboy: gray_map = ' && {
 echo "$out" | grep -q 'koboy: motion = ' && {
     echo "FAIL: tapping RESET GAME changed the motion pair"
     rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "$out" | grep -q 'koboy: screenshot ' && {
+    echo "FAIL: tapping RESET GAME armed a screenshot"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
 grep -q '^present_divisor = 3$' "$ini" || {
     echo "FAIL: the ini's present_divisor moved without being asked"
     rm -rf "$romdir" "$ini" "$script"; exit 1; }
 rm -rf "$romdir" "$ini" "$script"
 echo "ok: tapping a different MENU row moves neither setting"
+
+# ---------------------------------------------------------- MENU -> SCREENSHOT
+#
+# END TO END, AND DECODED BY A REAL ZLIB. src/png.c assembles its PNGs from
+# stored DEFLATE blocks by hand, and tests/test_png.c checks them with a
+# decoder written from the spec -- but "my decoder agrees with my encoder" is
+# exactly the shape of test this project keeps having to throw away. python3's
+# zlib is the independent party here, and it is the same library every viewer
+# the owner opens these files in uses.
+#
+# WHAT THIS HAS TO PROVE, beyond "a file appeared" (which passes on a
+# zero-byte file):
+#   1. it decodes, at the panel's exact dimensions;
+#   2. THE GAME IS IN IT, NOT THE MENU. The capture is armed from the MENU,
+#      which is drawn over the game, so the whole design of the feature is
+#      that it happens after the menu is gone. The stub core renders an
+#      all-black frame, so a real capture's game rect is black, where a
+#      capture taken while the menu was up would be the menu's WHITE list
+#      with black text rows. Nothing subtle separates those two;
+#   3. THE FACEPLATE IS IN IT, so the file is the composited panel and not
+#      video's buffer written on its own. The DMG faceplate contains exactly
+#      ZERO pure-white pixels (measured: 0 of 1,547,520 outside the game
+#      rect), which makes "no 0xFF outside the game rect" a check with two
+#      jobs -- it also fails if the on-panel "SAVED" confirmation, a white
+#      plaque, were painted BEFORE the capture instead of after it. That
+#      ordering is the other half of not photographing your own UI;
+#   4. the counter survives a relaunch, so a second session cannot overwrite
+#      the shot the owner kept.
+#
+# Row 6 is SCREENSHOT: 0 SAVE, 1 LOAD, 2 RESET, 3 GREYSCALE, 4 FRAMES,
+# 5 MOTION, 6 SCREENSHOT, 7 CHOOSE ROM, 8 RESUME, 9 QUIT (row_h=64, row r's
+# centre is 8 + 64 + r*64 + 32).
+#
+# ONE capture per run, and that is a property of --ui-script rather than of
+# the feature: the emulator loop's marker scan steps over idle states to find
+# the next `menu` verb, so two `menu` verbs in one script are consumed on
+# consecutive iterations with no frame presented between them, and both arms
+# collapse into one capture. The second shot therefore comes from a second
+# process -- which is the more valuable run anyway, since it is the one that
+# proves the counter is read off the directory.
+command -v python3 >/dev/null 2>&1 || {
+    echo "FAIL: python3 is needed to decode the screenshot this test writes"
+    exit 1; }
+
+shotroot=$(mktemp -d)
+romdir=$(mktemp -d)
+: > "$romdir/AAA TEST.gb"
+ini="$shotroot/koboy.ini"
+script="$shotroot/script"
+decoder="$shotroot/decode.py"
+
+cat > "$decoder" <<'PYEOF'
+# Decodes a koboy screenshot with nothing but the standard library and reports
+# four numbers: width, height, percent of the game rect that is pure black,
+# count of pure-white pixels OUTSIDE the game rect, and count of mid-grey
+# (neither 0 nor 255) pixels outside it.
+import struct, sys, zlib
+
+path = sys.argv[1]
+gx, gy, gw, gh = (int(v) for v in sys.argv[2:6])
+data = open(path, "rb").read()
+if data[:8] != b"\x89PNG\r\n\x1a\n":
+    sys.exit("bad signature")
+
+pos, idat, w, h = 8, b"", None, None
+while pos + 12 <= len(data):
+    ln, = struct.unpack(">I", data[pos:pos + 4])
+    typ = data[pos + 4:pos + 8]
+    body = data[pos + 8:pos + 8 + ln]
+    crc, = struct.unpack(">I", data[pos + 8 + ln:pos + 12 + ln])
+    if zlib.crc32(typ + body) & 0xFFFFFFFF != crc:
+        sys.exit("bad CRC on chunk %s" % typ.decode())
+    if typ == b"IHDR":
+        w, h, depth, colour, comp, filt, inter = struct.unpack(">IIBBBBB", body)
+        if (depth, colour, comp, filt, inter) != (8, 0, 0, 0, 0):
+            sys.exit("unexpected IHDR %r" % (body,))
+    elif typ == b"IDAT":
+        idat += body
+    pos += 12 + ln
+    if typ == b"IEND":
+        break
+if pos != len(data):
+    sys.exit("trailing bytes after IEND")
+
+raw = zlib.decompress(idat)          # the independent decoder
+if len(raw) != (w + 1) * h:
+    sys.exit("inflated %d bytes, expected %d" % (len(raw), (w + 1) * h))
+
+rows = []
+for y in range(h):
+    o = y * (w + 1)
+    if raw[o] != 0:
+        sys.exit("row %d has filter type %d, expected 0" % (y, raw[o]))
+    rows.append(raw[o + 1:o + 1 + w])
+
+black = white_out = grey_out = 0
+for y, row in enumerate(rows):
+    if gy <= y < gy + gh:
+        black += row[gx:gx + gw].count(0)
+        outside = (row[:gx], row[gx + gw:])
+    else:
+        outside = (row,)
+    for part in outside:
+        white_out += part.count(255)
+        grey_out += len(part) - part.count(255) - part.count(0)
+print("%d %d %d %d %d" % (w, h, black * 100 // (gw * gh), white_out, grey_out))
+PYEOF
+
+check_shot() {         # check_shot FILE GX GY GW GH
+    _f=$1
+    [ -s "$_f" ] || { echo "FAIL: $_f is missing or empty"; return 1; }
+    shift
+    _res=$(python3 "$decoder" "$_f" "$@") || {
+        echo "FAIL: $_f did not decode: $_res"; return 1; }
+    set -- $_res
+    [ "$1" = "1264" ] && [ "$2" = "1680" ] || {
+        echo "FAIL: $_f decoded to $1x$2, expected the whole 1264x1680 panel"
+        return 1; }
+    [ "$3" -ge 95 ] || {
+        echo "FAIL: $_f is only $3% black inside the game rect -- that is the MENU, not the game"
+        return 1; }
+    [ "$4" -eq 0 ] || {
+        echo "FAIL: $_f has $4 pure-white pixels outside the game rect -- the faceplate has none, so this is a menu or the SAVED plaque"
+        return 1; }
+    [ "$5" -gt 100000 ] || {
+        echo "FAIL: $_f has only $5 faceplate pixels outside the game rect -- not a composited panel"
+        return 1; }
+    return 0
+}
+
+printf 'rom_dir = %s\nshot_dir = %s/shots\n' "$romdir" "$shotroot" > "$ini"
+printf 'menu\ntap 200 488\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 60 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --ui-script "$script" \
+        --panel 1264x1680 --frames 200 2>&1) || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: scripted SCREENSHOT run exited $rc"
+    echo "$out"
+    rm -rf "$romdir" "$shotroot"; exit 1
+fi
+echo "$out" | grep -q 'koboy: screenshot .*AAA_TEST-001\.png$' || {
+    echo "FAIL: the capture was not reported"; echo "$out"
+    rm -rf "$romdir" "$shotroot"; exit 1; }
+
+# The game rect comes off the run's own log rather than being hardcoded, so
+# this keeps sampling the right rectangle if the faceplate geometry ever moves
+# -- and fails loudly instead of quietly measuring the wrong pixels.
+geom=$(echo "$out" | sed -n 's/^koboy: panel .*, game \([0-9]*\)x\([0-9]*\) at (\([0-9]*\),\([0-9]*\))$/\3 \4 \1 \2/p' | head -1)
+[ -n "$geom" ] || { echo "FAIL: could not read the game rect out of the log"
+    echo "$out"; rm -rf "$romdir" "$shotroot"; exit 1; }
+
+# shellcheck disable=SC2086
+check_shot "$shotroot/shots/AAA_TEST-001.png" $geom || {
+    rm -rf "$romdir" "$shotroot"; exit 1; }
+
+# A RELAUNCH CONTINUES THE NUMBERING. A counter that lived in memory would
+# start at 1 again here and overwrite the shot above -- which is precisely the
+# case the owner hits, since he takes several shots of one game across
+# sessions looking for a good one.
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 60 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --ui-script "$script" \
+        --panel 1264x1680 --frames 200 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: the second run exited $rc"; echo "$out"
+    rm -rf "$romdir" "$shotroot"; exit 1; }
+echo "$out" | grep -q 'koboy: screenshot .*AAA_TEST-002\.png$' || {
+    echo "FAIL: a relaunch restarted the screenshot counter"; echo "$out"
+    rm -rf "$romdir" "$shotroot"; exit 1; }
+# shellcheck disable=SC2086
+check_shot "$shotroot/shots/AAA_TEST-002.png" $geom || {
+    rm -rf "$romdir" "$shotroot"; exit 1; }
+
+# And the first file is still exactly what it was: same game, same faceplate,
+# a different process. Two captures of a static screen are byte-identical, so
+# anything session-dependent leaking into the picture shows up here.
+cmp -s "$shotroot/shots/AAA_TEST-001.png" "$shotroot/shots/AAA_TEST-002.png" || {
+    echo "FAIL: two captures of the same static screen differ"
+    rm -rf "$romdir" "$shotroot"; exit 1; }
+
+rm -rf "$romdir" "$shotroot"
+echo "ok: MENU -> SCREENSHOT writes a real PNG of the GAME, numbered across relaunches"
 
 # ------------------------------------------- SAVE STATE / LOAD STATE, scripted
 #
@@ -1786,12 +1975,13 @@ head -c 212 /dev/zero > "$rd/BAD.sfc"
 : > "$rd/GOOD.gb"
 s5="$(mktemp)"
 #   menu        -- open the in-game MENU
-#   tap 200 488 -- MENU row 6, CHOOSE ROM (SAVE LOAD RESET GRAY FRAMES MOTION ...)
+#   tap 200 552 -- MENU row 7, CHOOSE ROM
+#                  (SAVE LOAD RESET GRAY FRAMES MOTION SCREENSHOT ...)
 #   tap 200 168 -- mid-session MAIN MENU row 1, ALL GAMES
 #   tap 200 104 -- browser row 0, BAD.sfc   <- the load that fails
 #   tap 200 168 -- MAIN MENU row 1 again    <- proves we came BACK
 #   tap 200 168 -- browser row 1, GOOD.gb   <- and can still start a game
-printf 'menu\ntap 200 488\ntap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s5"
+printf 'menu\ntap 200 552\ntap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s5"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom "$rd/GOOD.gb" --rom-dir "$rd" --save-dir "$sd" --ui-script "$s5" \
@@ -1847,10 +2037,10 @@ printf '\0' > "$d_sw/roms/AAA.gb"
 head -c 32768 /dev/zero > "$d_sw/roms/ZZZ.md"
 sw_script="$(mktemp)"
 #   menu        -- open the in-game MENU on the Game Boy game
-#   tap 200 488 -- MENU row 6, CHOOSE ROM (row_h=64, centre 8+64+r*64+32)
+#   tap 200 552 -- MENU row 7, CHOOSE ROM (row_h=64, centre 8+64+r*64+32)
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
 #   tap 200 168 -- browser row 1, ZZZ.md (row 0 is AAA.gb; alphabetical)
-printf 'menu\ntap 200 488\ntap 200 168\ntap 200 168\n' > "$sw_script"
+printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n' > "$sw_script"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d_sw/koboy" --rom "$d_sw/roms/AAA.gb" \
         --rom-dir "$d_sw/roms" --save-dir "$d_sw/save" --ui-script "$sw_script" \
@@ -1957,11 +2147,11 @@ mkdir -p "$d_sw3/roms" "$d_sw3/save"
 printf '\0' > "$d_sw3/roms/AAA.gb"
 head -c 32768 /dev/zero > "$d_sw3/roms/ZZZ.md"
 sw3="$(mktemp)"
-# Three switches. Each is: menu, CHOOSE ROM (row 6), ALL GAMES (row 1), then
+# Three switches. Each is: menu, CHOOSE ROM (row 7), ALL GAMES (row 1), then
 # the browser row -- 104 for AAA.gb, 168 for ZZZ.md.
-{ printf 'menu\ntap 200 488\ntap 200 168\ntap 200 168\n'
-  printf 'menu\ntap 200 488\ntap 200 168\ntap 200 104\n'
-  printf 'menu\ntap 200 488\ntap 200 168\ntap 200 168\n'; } > "$sw3"
+{ printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n'
+  printf 'menu\ntap 200 552\ntap 200 168\ntap 200 104\n'
+  printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n'; } > "$sw3"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 60 "$d_sw3/koboy" --rom "$d_sw3/roms/AAA.gb" \
         --rom-dir "$d_sw3/roms" --save-dir "$d_sw3/save" --ui-script "$sw3" \

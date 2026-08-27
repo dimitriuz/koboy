@@ -4,6 +4,8 @@
                               own vocabulary, so the panel and the file agree */
 #include "video.h"          /* video_gray_map_name: ui_gray_label spells the
                               current mapping into the MENU row */
+#include "shot.h"           /* KOBOY_SHOT_SEQ_MAX: ui_shot_label says "full"
+                              at the same ceiling shot_path refuses at */
 #include "text.h"
 #include <limits.h>
 #include <stdio.h>
@@ -213,6 +215,16 @@ void ui_motion_label(char *out, size_t outsz, bool dither, koboy_wfm_policy wfm)
         up[i] = (w[i] >= 'a' && w[i] <= 'z') ? (char)(w[i] - 'a' + 'A') : w[i];
     up[i] = '\0';
     snprintf(out, outsz, "MOTION: %s / %s", dither ? "1-BIT" : "4 GREYS", up);
+}
+
+/* Contract, and why both halves of the row are there, in ui.h. */
+void ui_shot_label(char *out, size_t outsz, int next_seq)
+{
+    if (!out || outsz == 0) return;
+    if (next_seq < 1 || next_seq > KOBOY_SHOT_SEQ_MAX)
+        snprintf(out, outsz, "SCREENSHOT FULL (%d ALREADY SAVED)", KOBOY_SHOT_SEQ_MAX);
+    else
+        snprintf(out, outsz, "SCREENSHOT %03d (AFTER THIS MENU)", next_seq);
 }
 
 void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)

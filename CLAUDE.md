@@ -40,7 +40,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 26 binaries, 6002 checks. Runs on x86_64.
+make test        # host suite: 28 binaries, 6127 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -141,7 +141,19 @@ src/state.c           save-state paths and slot labels, KOBOY_STATE_SLOTS (3)
                       slots per ROM, 1-based
 src/safefile.c        temp-file/fsync/rename write + all-or-nothing read,
                       extracted from sram.c so save states share its
-                      discipline; used by both now
+                      discipline; used by save states, SRAM and screenshots
+src/png.c             an 8-bit greyscale PNG writer using STORED deflate
+                      blocks -- no zlib, because the dependency ceiling
+                      forbids one and a stored-block stream needs no
+                      compressor, only CRC32 and Adler32. Do not "improve" it
+                      into a Huffman coder
+src/shot.c            MENU -> SCREENSHOT: the filename stem, the counter
+                      (SCANNED off shot_dir, never held in memory), and the
+                      composite. THE COMPOSITE IS THE POINT: `panel` holds
+                      the faceplate and video.c's buffer holds the game, and
+                      nothing in koboy ever holds both -- they are blitted
+                      separately -- so a capture has to build the whole
+                      picture itself
 src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
 src/pacing.c          when the next frame reaches the panel. TWO gates, ANDed:

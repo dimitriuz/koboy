@@ -88,8 +88,8 @@ games, and where to put `hiscore.dat`.
 - **The touchscreen is the d-pad**, in the lower-left of the drawn faceplate,
   with the other buttons around it.
 - **`MENU`** is a drawn box on the panel. It opens save states (three slots
-  per game), reset, the three screen settings below, a different game, and
-  quit.
+  per game), reset, the three screen settings below, a screenshot, a
+  different game, and quit.
 - **The power button quits**, and puts you back on the home screen without a
   reboot.
 - **Battery saves are automatic** — the cartridge's own save memory is
@@ -162,6 +162,8 @@ real gameplay frames.
 
 Everything is remembered — the menu writes your choice back to `koboy.ini`.
 
+---
+
 ### What it is like to actually play
 
 Honestly: **excellent for games with small moving parts, and a compromise for
@@ -174,6 +176,33 @@ The frame rate is not the emulator's fault. Every one of the fifteen systems
 emulates a frame in 2 to 4.4 milliseconds on this hardware — a whole Mega
 Drive for 4 ms. Getting the picture onto the panel is what costs 14 to 23 ms.
 See [INTERNALS.md](INTERNALS.md) if that is interesting to you.
+
+---
+
+## Screenshots
+
+`MENU` → `SCREENSHOT` writes a PNG of the whole panel into
+`.adds/koboy/screenshots/`, named after the game and numbered:
+`Super_Mario_Land-001.png`, `-002.png`, and so on. Copy them off over USB
+like any other file.
+
+**It photographs the game, not the menu.** The menu is drawn over the
+picture, so choosing this row does not take the shot then and there — it
+arms one, the menu closes, and the capture is made from the next frame the
+panel is shown. That is why the row reads `SCREENSHOT 004 (AFTER THIS
+MENU)`: the number is the file you are about to get, and "after this menu"
+is what it is waiting for. A moment later a small `SCREENSHOT 004 SAVED`
+plaque appears below the game and then disappears again; it is drawn after
+the file is written, so it is never in the picture.
+
+The number is read off the directory each time, so shots you keep are never
+overwritten by a later session. `shot_dir` in `koboy.ini` moves the
+directory.
+
+Practical notes: an e-ink game does not pause, so the capture is of the
+frame that follows your last touch — for an action game, arm it somewhere
+you can stand still. And the shot is exactly what the panel shows, four
+greys and all, including the faceplate; it is not a clean emulator frame.
 
 ---
 

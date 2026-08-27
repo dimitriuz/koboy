@@ -80,6 +80,13 @@ typedef struct {
                                     and only an unasked-for core may be
                                     overridden by the ROM's extension. */
     char     save_dir[512];
+    /* Where MENU -> SCREENSHOT writes its PNGs. Install-relative like rom_dir
+       (a bare name means "next to koboy"), and a directory of its own rather
+       than save_dir because these are the one kind of file the owner takes
+       OFF the device: mixing them in with the .srm and .st1 files he must
+       never delete is asking for the wrong one to go. Created on demand, so
+       an install that never takes a screenshot never grows the directory. */
+    char     shot_dir[512];
     /* koboy_layout_mode. NOT an ini key and not a user preference: it is a
        fact about the loaded system, derived from the ROM's own extension by
        config_layout_for_rom the same way the core is by config_core_for_rom,

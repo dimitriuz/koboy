@@ -37,6 +37,7 @@
 #include "recent.h"
 #include "romlist.h"
 #include "safefile.h"
+#include "shot.h"
 #include "sram.h"
 #include "state.h"
 #include "stats.h"
@@ -256,6 +257,62 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
 }
 
+/* --------------------------------------------------------- SCREENSHOT note
+ *
+ * The owner is looking at the panel, not at koboy.log, so a capture has to
+ * confirm itself where he is looking. Two constraints shape how:
+ *
+ *  - IT MUST NOT PAINT OVER THE FRAME BEING SAVED. The file is written
+ *    first, from the composited frame, and only then is anything drawn --
+ *    so what lands on disk is the game exactly as it was, never a game with
+ *    a notification on it.
+ *  - IT MUST NOT COST A FULL-PANEL FLASH. notify() repaints everything and
+ *    is right for an error you have stopped playing to read; mid-game it
+ *    would be a worse interruption than the thing it is reporting. This
+ *    paints a small plaque in the background band BETWEEN the game rect and
+ *    the drawn controls, refreshes that rectangle alone, and takes it away
+ *    a couple of seconds later.
+ *
+ * A WHITE PLAQUE WITH BLACK TEXT rather than text drawn onto whatever chrome
+ * put there: the band is not uniform on every layout (the DMG faceplate has
+ * a case shade, a wordmark and a bezel edge through parts of it), and text
+ * over an unknown background is text that might not be readable. The plaque
+ * is legible on any of them. Erasing is exact for the same reason it is
+ * cheap: chrome is re-rendered into the panel buffer and only the plaque's
+ * rectangle is blitted back, so whatever was underneath returns byte for
+ * byte without anyone here having to know what it was. */
+#define SHOT_NOTE_PX  3          /* 5x7 font scale: 21px glyphs, as the menus */
+#define SHOT_NOTE_PAD 12
+#define SHOT_NOTE_MS  2500
+
+/* Where the plaque goes, or false when there is nowhere for it. The band
+   between the bottom of the game rect and the top of the controls is the one
+   part of the panel that is neither the picture nor a touch target -- but its
+   height is a consequence of the fitted game rect, not a reservation, so on
+   some layouts (the Game & Watch strip, or a small panel with a tall game) it
+   is too short. False there, and the capture is reported to the log only:
+   a plaque over the controls, or over the game, would be worse than none. */
+static bool shot_note_rect(const koboy_profile *prof, const koboy_layout *layout,
+                           int pw, int ph, const char *msg, koboy_rect *out)
+{
+    int w = text_measure(msg, SHOT_NOTE_PX) + 2 * SHOT_NOTE_PAD;
+    int h = TEXT_GLYPH_H * SHOT_NOTE_PX + 2 * SHOT_NOTE_PAD;
+    int top = prof->game_y + prof->game_h;
+    int bot = chrome_controls_top(prof->layout_mode, layout, pw, ph);
+    if (w > pw || h > bot - top) return false;
+
+    out->w = w;
+    out->h = h;
+    out->y = top + (bot - top - h) / 2;
+    /* Centred on the GAME rect, not on the panel: on a layout whose rect is
+       off-centre the plaque belongs under the picture it is about. Clamped,
+       because a rect near an edge could otherwise put it off the panel. */
+    out->x = prof->game_x + (prof->game_w - w) / 2;
+    if (out->x < 0) out->x = 0;
+    if (out->x + w > pw) out->x = pw - w;
+    return true;
+}
+
 /* Drives one list widget to a selection. Returns the chosen index, or -1 if
    the user quit, the run was stopped, or a script ran out.
 
@@ -420,14 +477,16 @@ static bool load_rom_into(koboy_core *core, koboy_config *cfg,
     return true;
 }
 
-/* MOTION sits BELOW FRAMES, and the order is not free: tests/smoke_host.sh
-   drives this menu by hardcoded pixel coordinates derived from the row index,
-   so a row inserted ABOVE an existing one silently strands every tap below it
-   outside the row it names. Adding at the end of the settings group costs one
-   comment update per tap below it and nothing else. */
+/* MOTION sits BELOW FRAMES, and SCREENSHOT below MOTION: the order is not
+   free, because tests/smoke_host.sh drives this menu by hardcoded pixel
+   coordinates derived from the row index, so a row inserted ABOVE an existing
+   one silently strands every tap below it outside the row it names. Adding at
+   the end of the settings group costs one comment update per tap below it and
+   nothing else -- and SCREENSHOT going in above CHOOSE ROM moved every one of
+   those, which is what that sentence is worth. */
 enum {
     MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_FRAMES, MENU_MOTION,
-    MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
+    MENU_SHOT, MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
     MENU_COUNT
 };
 
@@ -440,20 +499,22 @@ enum {
 static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                     int stride, int pw, int ph, bool has_states,
                     koboy_gray_map map, int divisor,
-                    bool dither, koboy_wfm_policy wfm,
+                    bool dither, koboy_wfm_policy wfm, int shot_next,
                     const koboy_input_state *script, int *script_i, int script_n)
 {
     const char *items[MENU_COUNT];
-    static char gray_label[48], divisor_label[48], motion_label[48];
+    static char gray_label[48], divisor_label[48], motion_label[48], shot_label[48];
     ui_gray_label(gray_label, sizeof gray_label, map);
     ui_divisor_label(divisor_label, sizeof divisor_label, divisor);
     ui_motion_label(motion_label, sizeof motion_label, dither, wfm);
+    ui_shot_label(shot_label, sizeof shot_label, shot_next);
     items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
     items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
     items[MENU_RESET]       = "RESET GAME";
     items[MENU_GRAY]        = gray_label;
     items[MENU_FRAMES]      = divisor_label;
     items[MENU_MOTION]      = motion_label;
+    items[MENU_SHOT]        = shot_label;
     items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
     items[MENU_RESUME]      = "RESUME";
     items[MENU_QUIT]        = "QUIT";
@@ -1033,6 +1094,22 @@ int main(int argc, char **argv)
        session_end would report only the last game a switching run played. */
     unsigned long settle_held = 0;
     uint64_t last_sram_us = 0, last_cleanup_us = 0;
+    /* SCREENSHOT state, and `armed` is the whole design of the feature.
+       Selecting MENU -> SCREENSHOT does NOT take a picture: the menu is drawn
+       OVER the game, so a capture taken there would be a photograph of the
+       menu. It sets this, the menu closes, and the capture happens from the
+       next COMPOSITED frame -- see the arming branch and the capture site for
+       why "next composited frame" is well defined even with present_divisor
+       and the settle pacer both deferring presentation.
+       Run-scoped rather than session-scoped only because everything else here
+       is; an arm that survives to a different game is impossible, since the
+       only ways out of this menu that reach another ROM leave through
+       MODE_MAIN, and this is cleared before the capture either way. */
+    bool       shot_armed = false;
+    /* The on-panel confirmation, and when it gets taken away again. Zero
+       means nothing is showing. */
+    uint64_t   shot_note_until_us = 0;
+    koboy_rect shot_note = { 0, 0, 0, 0 };
     /* --frames N is a budget for the RUN. Each session gets its own pacer
        (a new core reports its own frame rate), and pacer_init zeroes
        p->frames, so a switch would otherwise hand the second game a fresh
@@ -1589,10 +1666,20 @@ int main(int argc, char **argv)
         }
         if (want_menu) {
             size_t ssz = core_state_size(core);
+            /* Read off the DIRECTORY every time the menu opens, not carried
+               in a variable: the number in the row is the file that is about
+               to be written, and after a relaunch (or a shot deleted over
+               USB) an in-memory counter would name a file that is not the
+               next one. One opendir per menu open costs nothing a human
+               opening a menu can perceive. */
+            char shot_stem[96];
+            shot_stem_for_rom(shot_stem, sizeof shot_stem, cfg.rom_path);
+            int shot_next = shot_last_seq(cfg.shot_dir, shot_stem) + 1;
+
             int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
                                (koboy_gray_map)cfg.gray_map, cfg.present_divisor,
                                cfg.force_dither,
-                               (koboy_wfm_policy)cfg.wfm_fast_policy,
+                               (koboy_wfm_policy)cfg.wfm_fast_policy, shot_next,
                                ui_scr, ui_scr_i, ui_script_n);
 
             if (act == MENU_SAVE || act == MENU_LOAD) {
@@ -1759,6 +1846,35 @@ int main(int argc, char **argv)
                             video_get_dither(vid) ? "1-bit" : "4-level", wn,
                             ini_path);
                 }
+            } else if (act == MENU_SHOT) {
+                /* ARMS a capture; it does not take one. THE MENU IS DRAWN
+                   OVER THE GAME -- run_list paints the whole panel white and
+                   renders the list into it -- so a screenshot taken from
+                   here would be a photograph of this menu, which is not what
+                   anybody opening it wants.
+
+                   WHAT "THE NEXT FRAME" MEANS, given that present_divisor and
+                   the settle pacer can each defer presentation indefinitely:
+                   the capture site sits after the blit/refresh loop, so it
+                   fires on the next frame that actually REACHES THE PANEL,
+                   however many core frames that takes. That frame is
+                   guaranteed to arrive rather than being suppressed as
+                   unchanged, because the return-from-menu path below calls
+                   video_invalidate: the next submit is full-dirty by
+                   construction, so nrects is non-zero even if the game is
+                   sitting on a static screen.
+
+                   And it is a COMPLETE panel, not a dirty-rect fragment:
+                   shot_compose builds it from the whole chrome buffer plus
+                   the whole game rect (video.c's buffer always holds the
+                   entire rect, not just the changed tiles), so what is saved
+                   is what the panel shows even when only eight pixels of it
+                   were updated this frame.
+
+                   Nothing is written here and nothing is said here: a run
+                   that arms and then quits before a frame is presented leaves
+                   no file, which is correct -- there was no frame to take. */
+                shot_armed = true;
             } else if (act == MENU_QUIT) {
                 mode = MODE_QUIT;
             } else if (act == MENU_CHOOSE_ROM) {
@@ -1786,6 +1902,15 @@ int main(int argc, char **argv)
             /* Whatever happened, the panel is now showing a menu. */
             redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
             video_invalidate(vid);
+            /* That repaint already took any screenshot plaque with it, so the
+               pending erase has nothing left to erase. Left set, it would
+               spend a panel update rubbing out something that is not there.
+               It is also what keeps a plaque out of the NEXT capture: the
+               only route to a second screenshot goes through this menu, so
+               `panel` is guaranteed to be plaque-free by the time
+               shot_compose reads it. Two shots of a static screen are
+               therefore byte-identical, which tests/smoke_host.sh asserts. */
+            shot_note_until_us = 0;
             /* Drain, don't just ignore: every run_list/run_menu call above
                polled input while a menu screen -- not the faceplate -- was on
                the panel, and recompute() latches a MENU-zone tap regardless
@@ -2122,6 +2247,82 @@ int main(int argc, char **argv)
         presented++;
         rects_emitted += (unsigned long)nrects;
 
+        /* ------------------------------------------------ the SCREENSHOT
+           HERE, and not one line earlier, is what makes this the shot the
+           owner asked for. The frame has been composited, blitted and handed
+           to the panel; the game is on screen and the menu is gone. The file
+           is written BEFORE anything is drawn to confirm it, so the
+           confirmation cannot end up in the picture.
+
+           shot_capture builds the whole panel itself, because koboy never
+           has it in one place: `panel` is the faceplate and video's buffer is
+           the game, blitted separately at an offset. Both are complete
+           regardless of how little of this frame was dirty, so a capture
+           taken on a frame where two tiles moved is still the entire
+           picture -- which is the point.
+
+           After pacer_presented, not before: shot_capture allocates 2 MB,
+           composites and writes a file, and charging the panel's settle time
+           from a clock reading taken after all that would tell the pacer the
+           update finished later than it did. */
+        if (shot_armed) {
+            shot_armed = false;
+            koboy_rect gr = { prof.game_x, prof.game_y, prof.game_w, prof.game_h };
+            char sp[512];
+            int  sq = 0;
+            bool shot_ok = shot_capture(cfg.shot_dir, cfg.rom_path,
+                                        panel, panel_stride, pw, ph,
+                                        video_buffer(vid), video_stride(vid), &gr,
+                                        sp, sizeof sp, &sq);
+            char msg[64];
+            if (shot_ok) {
+                say("koboy: screenshot %s\n", sp);
+                snprintf(msg, sizeof msg, "SCREENSHOT %03d SAVED", sq);
+            } else {
+                /* Not fatal and not silent, exactly like a failed ini write:
+                   the game is unaffected, but a screenshot that silently went
+                   nowhere is indistinguishable from a feature that does not
+                   work. The directory is named because that is nearly always
+                   the reason -- a read-only .adds, or a full card. */
+                say("koboy: screenshot FAILED (could not write into %s)\n",
+                    cfg.shot_dir);
+                snprintf(msg, sizeof msg, "SCREENSHOT FAILED");
+            }
+            /* And now, with the file already on disk, say so on the panel.
+               shot_note_rect returns false when there is no band to put it
+               in, and then the log line above is the only report -- see its
+               comment for why a plaque over the controls would be worse. */
+            if (shot_note_rect(&prof, &cfg.layout, pw, ph, msg, &shot_note)) {
+                for (int y = 0; y < shot_note.h; y++)
+                    memset(panel + (size_t)(shot_note.y + y) * panel_stride + shot_note.x,
+                           0xFF, (size_t)shot_note.w);
+                text_draw(panel, panel_stride, pw, ph,
+                          shot_note.x + SHOT_NOTE_PAD, shot_note.y + SHOT_NOTE_PAD,
+                          msg, SHOT_NOTE_PX, 0x00);
+                pf->blit_gray8(pf->ctx,
+                               panel + (size_t)shot_note.y * panel_stride + shot_note.x,
+                               shot_note.w, shot_note.h, panel_stride,
+                               shot_note.x, shot_note.y);
+                /* FULL, not FAST: the fast waveform is two-level and leaves
+                   residue, and text that ghosts where it was is exactly what
+                   this must not leave behind on a panel the owner goes on
+                   playing on. It is a small rectangle, so the flash is
+                   local. */
+                pf->refresh(pf->ctx, shot_note.x, shot_note.y,
+                            shot_note.w, shot_note.h, KOBOY_REFRESH_FULL);
+                uint64_t now = pf->now_us(pf->ctx);
+                /* Charged, because the panel does not care which line of this
+                   file asked it for an update -- the same reasoning the
+                   cleanup refresh below carries. */
+                pacer_presented(&pace, now,
+                                pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
+                                                (uint32_t)cfg.settle_full_ms * 1000u,
+                                                (long)shot_note.w * shot_note.h,
+                                                (long)prof.game_w * (long)prof.game_h));
+                shot_note_until_us = now + (uint64_t)SHOT_NOTE_MS * 1000ull;
+            }
+        }
+
         /* A value <= 0 disables cleanup. The explicit guard is required:
            without it, 0 makes this always true (a full refresh every presented
            frame, the inverse of "never") and a negative value wraps the cast so
@@ -2168,6 +2369,39 @@ sram_check:
                 sram_save(sb.path, sb.mem, sb.len);
                 last_sram_us = now;
             }
+        }
+
+        /* Take the screenshot plaque away again. Here, past the sram_check
+           label, because this is the one point EVERY path through the loop
+           body reaches: the early exits above (`goto sram_check` on a
+           suppressed present, on an unchanged frame) must not be able to
+           leave a confirmation stuck on the panel for the rest of the
+           session. Wall clock, not a frame count, for the same reason the
+           cleanup has a wall-clock ceiling -- a static screen presents almost
+           nothing and would keep the plaque up for minutes.
+
+           The erase re-renders the whole faceplate into `panel` and then
+           blits back ONLY the plaque's rectangle. That is exact by
+           construction -- whatever chrome had drawn under it returns byte for
+           byte, without this code knowing what it was -- and the panel update
+           stays the size of the plaque rather than the size of the screen. */
+        if (shot_note_until_us && pf->now_us(pf->ctx) >= shot_note_until_us) {
+            shot_note_until_us = 0;
+            memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
+            chrome_render(panel, panel_stride, &prof, &cfg.layout);
+            chrome_render_battery(panel, panel_stride, &prof, &cfg.layout,
+                                  pf->battery_percent ? pf->battery_percent(pf->ctx) : -1);
+            pf->blit_gray8(pf->ctx,
+                           panel + (size_t)shot_note.y * panel_stride + shot_note.x,
+                           shot_note.w, shot_note.h, panel_stride,
+                           shot_note.x, shot_note.y);
+            pf->refresh(pf->ctx, shot_note.x, shot_note.y,
+                        shot_note.w, shot_note.h, KOBOY_REFRESH_FULL);
+            pacer_presented(&pace, pf->now_us(pf->ctx),
+                            pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
+                                            (uint32_t)cfg.settle_full_ms * 1000u,
+                                            (long)shot_note.w * shot_note.h,
+                                            (long)prof.game_w * (long)prof.game_h));
         }
     }
 

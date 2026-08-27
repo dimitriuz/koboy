@@ -127,6 +127,7 @@ void config_defaults(koboy_config *c)
     snprintf(c->core_path, sizeof c->core_path, "gambatte_libretro.so");
     snprintf(c->save_dir, sizeof c->save_dir, ".");
     snprintf(c->rom_dir, sizeof c->rom_dir, "roms");
+    snprintf(c->shot_dir, sizeof c->shot_dir, "screenshots");
     /* Control geometry, permille of panel. Game rect occupies the top; the
        d-pad sits lower-left under the left thumb, A/B lower-right. */
     koboy_layout l = { .dpad_cx = 220, .dpad_cy = 720, .dpad_r = 150,
@@ -1130,6 +1131,13 @@ void config_resolve_paths(koboy_config *c)
         snprintf(c->save_dir, sizeof c->save_dir, "%s", tmp);
     if (config_join_sibling(tmp, sizeof tmp, c->rom_dir, dir))
         snprintf(c->rom_dir, sizeof c->rom_dir, "%s", tmp);
+    /* Resolved for the same reason save_dir is, and the failure is the same
+       one: the shipped default is a bare name, and under a NickelMenu launch
+       (which sets no cwd) a bare name resolves against the read-only rootfs.
+       A screenshot that silently went nowhere would be indistinguishable
+       from a screenshot feature that does not work. */
+    if (config_join_sibling(tmp, sizeof tmp, c->shot_dir, dir))
+        snprintf(c->shot_dir, sizeof c->shot_dir, "%s", tmp);
 }
 
 static void trim(char *s)
@@ -1266,6 +1274,7 @@ bool config_load(koboy_config *c, const char *path)
             snprintf(c->core_path, sizeof c->core_path, "%s", v);
             c->core_explicit = strcmp(v, KOBOY_CORE_LEGACY_DEFAULT) != 0;
         }
+        else if (!strcmp(k, "shot_dir"))         snprintf(c->shot_dir,  sizeof c->shot_dir,  "%s", v);
         else if (!strcmp(k, "save_dir"))         snprintf(c->save_dir,  sizeof c->save_dir,  "%s", v);
         else if (!strcmp(k, "menu_cx"))          c->layout.menu_cx = atoi(v);
         else if (!strcmp(k, "menu_cy"))          c->layout.menu_cy = atoi(v);
