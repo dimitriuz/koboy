@@ -1395,3 +1395,139 @@ three-across grid is comfortable under a thumb at the right edge of the
 panel, whether MENU is still easy to hit with the grid pushed 33 px further
 left than the diamond, and whether MODE and START at half the panel's width
 each are too easy to hit by accident.
+
+## Game Boy Advance (added 2026-08-27)
+
+### 81. THE WHOLE SYSTEM IS UNMEASURED ON THE DEVICE, and this one is not like the others
+
+Every other "not run on hardware" item in this file is about a control, a
+save path or a rect. This one is about **whether the system is playable at
+all**, and it is the top of the list for that reason.
+
+The device was awake for four minutes at the start of the session --- long
+enough to accept `corebench-arm`, `gpsp_libretro_arm.so` and
+`vba_next_libretro_arm.so` into `/mnt/onboard/gbabench/`, not long enough to
+run any of them --- and then went off the LAN for the rest of it. Every GBA
+number in TESTED.md is an x86_64 host figure or an argument by analogy to a
+Mega Drive rect measured in an earlier session.
+
+**The host measurement understates gpSP and cannot be scaled up.** Its
+dynarec targets ARM, x86_32 and MIPS; this host is x86_64, so the host build
+is an interpreter and the device build is a different program. No multiplier
+derived from other cores (TESTED.md's earlier 13.45x + 979 us fit) applies to
+it in either direction.
+
+What the session needs, and everything is already staged for it:
+
+```
+cd /mnt/onboard/gbabench
+./corebench-arm --frames 600 --warmup 2400 --mash --budget-us 6100 --csv \
+    ./gpsp_libretro_arm.so *.gba
+```
+
+`--budget-us 6100` is the figure derived in TESTED.md for ceiling 4 at the
+device's own `present_divisor = 2`. The ROMs are the only thing missing; the
+transfer stalled at 85 KB/s when the device dropped.
+
+### 82. The gpSP dynarec has not been shown to work on this kernel
+
+Called out separately from #81 because its failure mode is silent and it
+would corrupt #81's answer rather than prevent it. The ARM build sets
+`MMAP_JIT_CACHE`, so it asks `mmap` for `PROT_READ|PROT_WRITE|PROT_EXEC`; a
+hardened kernel refuses, gpSP falls back, and the run completes --- slower
+than it should be, with nothing saying so.
+
+Check it directly rather than inferring it from the timings, because the
+timings are what is in question:
+
+```
+grep -c rwxp /proc/<pid>/maps        # while corebench-arm is running
+```
+
+A zero there means the fallback happened and every number in #81's run is a
+number about gpSP's *interpreter* on a Cortex-A9, which is a different and
+much worse system.
+
+If it is refused, the answer is not to give up on GBA: it is to re-measure
+mGBA, which is 1.21x slower than gpSP's INTERPRETER on the host and would
+then be the fastest thing available. That build already exists
+(`third_party/mgba`, CMake, `-DBUILD_LIBRETRO=ON`).
+
+### 83. No Pokemon save has ever been made, written and reloaded
+
+The one gap in this system's save story that a player could lose progress to,
+and it is the exact case the brief flagged as the classic casualty.
+
+What IS established (TESTED.md): gpSP reports a stable 131072 bytes, its
+per-cartridge override table matches Ruby/Sapphire/Emerald by game code, and
+a `.srm` koboy writes is demonstrably READ by Emerald --- booting it with 128
+KB of random bytes produces a different frame from booting it with none, on
+an instrument proven deterministic. A full round trip was proven on Fire
+Emblem, which does reach a save under an automated masher.
+
+What is not: an actual Pokemon save. `--mash` cannot get Emerald past Birch's
+intro, because START restarts it. Ninety thousand frames --- twenty-five
+emulated minutes --- ended on the same speech.
+
+This wants a human, not a script: play to the first save point, save in game,
+exit koboy, relaunch, confirm the file loads. Ten minutes on the device.
+
+### 84. One file in the collection crashes the process, and no floor can stop it
+
+`4 Homebrew/Battlenetwork Rockman Crystal (PD).gba`, 4,194,304 bytes, valid
+Nintendo logo, header naming "RockMan". gpSP takes SIGSEGV in `execute_arm()`
+called from `retro_run()` --- so unlike the 212-byte `.smc` that produced
+`config_min_rom_bytes`, this is **not** a short file and the fault is **not**
+in `retro_load_game`. The load-site floor cannot see it and a size check
+cannot describe it.
+
+1692 of the owner's 1693 files load and run, so this is one file. But it is
+the second core measured to do worse than refuse, and koboy has no general
+answer to a core that segfaults mid-`retro_run`: the process dies, on a
+device whose whole point is that it recovers to the browser.
+
+mGBA runs the same file. vba-next crashes on it too. That is the shape of the
+compatibility cost of choosing the fastest core, quantified rather than
+asserted.
+
+Two possible answers, neither cheap: run the core in a child process (a real
+architecture change, and it would cover #72's twelve unswept cores as well),
+or install a `SIGSEGV` handler that `longjmp`s back to the browser (fragile,
+and the core's heap is then in an unknown state). Doing nothing is defensible
+at one file in 1693; doing nothing SILENTLY is not, which is why this is
+written down.
+
+### 85. The ceiling of 4 is an argument, not a measurement
+
+`.gba` is capped at scale 4 (960x640, 614,400 px) because uncapped it takes
+scale 5 and reaches 960k--1063k pixels, which is the band where the three
+Sega systems measured 70--83% of full speed. The capped rect lands 4% above
+the Mega Drive's 879x672, which measured 97.7%.
+
+That is reasoning from a measured rect to an unmeasured one, and it assumes
+`video_submit`'s cost is a function of pixels alone --- which #23's
+`4.7 ms + 20.7 ns/px` fit says it is, but that fit was made on Game Boy and
+Zelda content, not on a GBA's four scrolling layers.
+
+The sweep to run is the one the Sega ceilings got: scales 3, 4 and 5 at 900
+frames on one heavy title and one light one, at rest, `presented` identical
+down each column.
+
+### 86. `--mash` is a blunt instrument and its blindness is asymmetric
+
+`corebench --mash` holds START then A on a 32-frame cycle. That got seven of
+the eight benchmark titles into real gameplay --- confirmed by rendering
+frame 3000 of each through koboy's own pipeline and looking at it, which is
+the only check that could confirm it --- and it failed on exactly the class
+this system was added for: Pokemon, where START restarts the intro.
+
+Two consequences worth separating. The measurement one is small: seven of
+eight is enough for a mean. The one that matters is that **a masher measures
+menus and text boxes, not combat**: it never presses a direction, so no
+scrolling happens, and scrolling is both the expensive case for the core and
+the bad case for the panel. The action-title figures in TESTED.md are
+therefore the optimistic end of their range, and should be read that way
+until a save state taken at a real gameplay position replaces them.
+
+A `--keys` option taking a small script (`120:right`, `300:a+right`) would
+fix both, and would be worth more than any other change to that tool.

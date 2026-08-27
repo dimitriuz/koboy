@@ -1490,3 +1490,164 @@ is no headroom at all; at 17.7 ms there is.
 - **Only one title per Sega system was measured.** Virtua Racing, the
   heaviest Mega Drive title this project has met (84% at 957x720 before any
   of this), is not on the device.
+
+## Game Boy Advance: measured on the host, NOT on the device
+
+The fifteenth system, and the second one the v1 design spec ruled out on CPU
+grounds. SNES was the first, and re-testing that judgement rather than
+inheriting it is why this one was re-tested too.
+
+**Read this section knowing what it is not.** The device was awake for four
+minutes at the start of the session --- long enough to accept `corebench-arm`
+and both candidate ARM cores, not long enough to run them --- and then went
+off the LAN and stayed off. Everything below is either an x86_64 host
+measurement, or a device figure taken from an EARLIER session's table in this
+file and reasoned against. Nothing in this section is a Cortex-A9 measurement
+of a GBA.
+
+### The core: gpSP, chosen from three
+
+Host, x86_64, 600 frames after a 2400-frame warmup, `--mash` (so these are
+gameplay frames, not a title screen --- see `scripts/corebench.c`), mean us
+per `retro_run`:
+
+| title | gpSP | mGBA | vba-next |
+|---|---|---|---|
+| Advance Wars 2 | 377.4 | 310.2 | 791.1 |
+| Fire Emblem | 319.3 | 339.1 | 580.2 |
+| Final Fantasy Tactics Advance | 493.9 | 632.7 | 934.2 |
+| Golden Sun | 250.0 | 336.4 | 480.3 |
+| Metroid Fusion | 220.1 | 310.6 | 463.0 |
+| Castlevania: Aria of Sorrow | 328.4 | 453.5 | 659.4 |
+| Super Mario Advance 2 | 335.9 | 410.9 | 951.5 |
+| Astro Boy: Omega Factor | 458.5 | 570.9 | 748.7 |
+| **sum** | **2783.5** | 3364.3 | 5608.4 |
+
+gpSP wins by 1.21x over mGBA and 2.01x over vba-next **as an interpreter** ---
+its dynarec is ARM-only, so this column is gpSP's worst case and the other
+two cores' only case. **vba-next being the slowest is not what the folklore
+says**, and it is not close: it loses to mGBA by 1.67x on every one of the
+eight. That reputation dates from when mGBA was new.
+
+### What the ARM build is, and what has NOT been verified about it
+
+`scripts/build-gba-core.sh kobo` produces a 681 KB stripped ARM core needing
+`libm.so.6` and `libc.so.6` and nothing else --- smaller than every other core
+koboy ships except the Game & Watch one. It is built with `CPU_ARCH=arm
+HAVE_DYNAREC=1`, so it assembles `arm/arm_stub.S` and compiles
+`cpu_threaded.c`, the ARM recompiler.
+
+**The dynarec has not been shown to work on this device's kernel.** It asks
+`mmap` for memory that is both writable and executable; a hardened kernel can
+refuse, and gpSP's refusal path is not a crash and not a build error --- the
+core would simply be slower than it should be, and would be reported as fast.
+Verifying that is one ssh session with `corebench-arm`, which is already
+sitting in `/mnt/onboard/gbabench` on the device along with both cores.
+
+### Presentation: why the ceiling is 4, argued from THIS FILE's device numbers
+
+A GBA frame is 240x160 with square pixels --- the smallest frame koboy
+scales, so it auto-fits furthest. Uncapped it takes scale 5 and presents
+1200x800 on the DMG faceplate or 1264x842 on the strip: 960k--1063k pixels,
+which is the band the three Sega systems were measured slow in (900k--1221k,
+70--83% of full speed). Capping at 4 gives 960x640.
+
+Set against the rows measured on the device in the section above, using the
+same `1000 / (submit + blit + refresh)` capacity model and the same
+`4.7 ms + 20.7 ns/px` submit model:
+
+| System | rect | px | submit | pipeline | capacity | demand at divisor 2 |
+|---|---|---|---|---|---|---|
+| Mega Drive, **measured** | 879x672 | 590,688 | 17.3 ms | 20.4 ms | 49.1 /s | 29.96 /s |
+| SNES, **measured** | 897x672 | 602,784 | ~17.2 | ~20.3 | ~49 /s | 29.96 /s |
+| GBA at ceiling 4, **modelled** | 960x640 | 614,400 | ~17.4 | ~21.2 | ~47 /s | 29.96 /s |
+| GBA uncapped, **modelled** | 1264x842 | 1,064,288 | ~26.7 | ~33 | ~30 /s | 29.96 /s |
+
+So the capped GBA rect lands 4% above the Mega Drive rect that was measured
+at 97.7% of full speed, and the uncapped one lands on the demand line
+exactly --- which is where the Game Gear was sitting (29.4 /s) when the owner
+reported it as slow. **That is the argument for the ceiling, and it is an
+argument by analogy to a measured rect rather than a measurement.** The core
+cost is the half that is still missing: at ceiling 4 and divisor 2 the budget
+left for emulation is roughly 16,742 - 21,200/2 = **6,100 us per core
+frame**, and whether gpSP's ARM dynarec fits inside that is exactly what has
+not been run.
+
+### Compatibility: 1692 of 1693 files load and run
+
+Whole-collection sweep, host, two frames each. **One file crashes**, and it
+crashes the process:
+
+```
+SIGSEGV in execute_arm(), called from retro_run()
+  4 Homebrew/Battlenetwork Rockman Crystal (PD).gba   4,194,304 bytes
+```
+
+It is not a truncated file --- 4 MB, a valid Nintendo logo, a header naming
+"RockMan" --- so `config_min_rom_bytes` cannot help, and the fault is in
+`retro_run` rather than `retro_load_game`, so a floor at the load site could
+not catch it either. **mGBA runs the same file happily; vba-next crashes on
+it too.** That is the compatibility cost of choosing the fastest core, and it
+is one homebrew file in 1693.
+
+### The four greys: this system reduces BETTER than expected
+
+Rendered through koboy's own pipeline (`video.c` at the shipped
+`gray_map = balanced`, scale 4) at frame 3000 of a mashed run, so what was
+looked at is gameplay and not a logo. Eight titles: Advance Wars 2's map,
+Fire Emblem's battle map, Metroid Fusion's opening text, Super Mario Advance
+2's overworld, FFTA's dialogue, Golden Sun's village, Pokemon Emerald's
+character screen, Aria of Sorrow's Soul Set menu.
+
+**Text is the surprise.** 240x160 at 4x is 960x640 on a 300 dpi panel, and a
+GBA's 8-pixel font lands at 32 px --- Aria of Sorrow's stat table, FFTA's
+name-entry keyboard and Pokemon Mystery Dungeon's are all crisply legible.
+The turn-based library this system was added for is the library that reads
+best.
+
+`gray_map` needs no per-system exception: `luma`, `balanced`, `bright` and
+`equal` are near-indistinguishable on GBA art, and only `value`
+(`max(R,G,B)`) is wrong for it --- Golden Sun's village blows out to white.
+The shipped default stands.
+
+### Saves: the mechanism is proven, one class is not
+
+gpSP reports `RETRO_MEMORY_SAVE_RAM` as a flat **131072 bytes at load and
+131072 running**, on every title tried, because it hands back its whole
+`gamepak_backup` array ("assume 128KiB, biggest possible save") regardless of
+which backup chip the cartridge has. So:
+
+- **`core_sram`'s pin-at-load is harmless here and not load-bearing**, unlike
+  Genesis Plus GX, whose size drops to 0 mid-run. Established rather than
+  assumed, the same way the SNES core's was.
+- Every `.gba` gets a 128 KB `.srm` whatever its real save size is.
+- **Detection is gpSP's job and it does it three ways**: a per-cartridge
+  override table (`gba_over.h`, which has explicit entries for Pokemon Ruby,
+  Sapphire and Emerald and printed `gamepak code match for : BPEE` / `AXVE`
+  on load here), a scan of the ROM for `EEPROM_V` / `SRAM_V` / `FLASH1M_V` /
+  `FLASH_V` signatures, and a Pokemon-family fallback that forces 128 KB
+  flash. The classic wrong-save-type failure is what that table exists for.
+
+**Round trip, proven end to end on Fire Emblem.** Emulation here is
+deterministic --- two runs with identical input produced byte-identical
+frames, md5 `1d85cea...` both times, which is the control that makes the rest
+mean anything. koboy wrote a `.srm` through its own `sram.c`; a third run
+that loaded that `.srm` back through `sram_load` produced a DIFFERENT frame.
+The game's behaviour changed because of the file koboy wrote, which is what a
+working save is.
+
+**Pokemon: the mechanism reaches the game, a real save was never made.** An
+automated masher cannot get Emerald past Birch's intro (START restarts it),
+so no in-game save was reached in 90,000 frames. What was established instead
+is that the file koboy writes is READ: booting Emerald with a 128 KB
+random-bytes `.srm` produced a different frame from booting it with none, on
+the same deterministic instrument. Combined with the override table matching
+`BPEE`, that says the flash koboy persists is the flash the game sees ---
+but **no Pokemon save has been created, written and reloaded**, and that is
+the one gap in this section a player could actually lose progress to.
+
+Six of ten titles wrote to backup memory within 4000 mashed frames (Fire
+Emblem 20,223 bytes; Aria of Sorrow 32,768; Advance Wars 2 1,548 at offset
+61,440; Pokemon Mystery Dungeon 470; Metroid Fusion 192; Super Mario Advance
+2 1,504). Golden Sun, FFTA and both Pokemon titles wrote nothing, because
+none of them had reached a save point.

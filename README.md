@@ -8,14 +8,15 @@ Pokemon Mini `.min`, beetle-wswan for WonderSwan and WonderSwan Color
 stella2014 for Atari 2600 `.a26`, Gearcoleco for ColecoVision `.col`,
 FreeIntv for Intellivision `.int`, Genesis Plus GX for Master System `.sms`,
 Game Gear `.gg` and Mega Drive `.md`, snes9x2005 for SNES `.sfc`/`.smc`,
-beetle-pce-fast for PC Engine / TurboGrafx-16 `.pce`, FinalBurn Neo for
-arcade `.zip` --- renders four greys
+beetle-pce-fast for PC Engine / TurboGrafx-16 `.pce`, gpSP for Game Boy
+Advance `.gba`, FinalBurn Neo for arcade `.zip` --- renders four greys
 straight onto the e-ink panel through FBInk, and reads the page-turn buttons
 and the touchscreen directly from evdev.
 
-Twelve of the fourteen systems need no BIOS file. **ColecoVision and Intellivision
-do**, and neither file ships with koboy because neither is ours to
-distribute --- see "BIOS files" below.
+Thirteen of the fifteen systems need no BIOS file --- the Game Boy Advance
+included, because gpSP carries an open-source one inside the core.
+**ColecoVision and Intellivision do**, and neither file ships with koboy
+because neither is ours to distribute --- see "BIOS files" below.
 
 **Three extensions are deliberately not read, and this is the place people
 will look for why.** Mega Drive takes `.md` and **not `.bin` or `.gen`**:
@@ -36,6 +37,16 @@ The two greyscale handhelds suit the panel best: a WonderSwan and a Neo Geo
 Pocket both drive eight shades of grey natively, so a mono title loses almost
 nothing on the way to four. Their Color halves lose what any colour system
 loses --- see [TESTED.md](TESTED.md).
+
+**The Game Boy Advance is the odd one in that judgement, and it is worth a
+sentence because its reputation says the opposite.** Its famous titles are
+fast-scrolling action, which is the worst thing this panel does. But the same
+library holds the best match for an e-reader in the whole collection ---
+Advance Wars, Fire Emblem, Final Fantasy Tactics Advance, Golden Sun, Pokemon
+--- turn-based, text-heavy, and static between inputs, which is what e-ink is
+for. Judge the system on those. `.gba` is the only extension read; the
+collection this was measured against is 1693 files and every one of them ends
+that way.
 
 It is built around what the hardware can actually do rather than around what a
 desktop emulator expects: each refresh lets the panel controller pick its own
@@ -109,7 +120,7 @@ time. Verified on Ms. Pac-Man: after a 220-point game the attract screen reads
 
 ## BIOS files
 
-Two of the fourteen systems cannot run without the console's own boot ROM, which
+Two of the fifteen systems cannot run without the console's own boot ROM, which
 is copyrighted and is not distributed here. Put the files in `.adds/koboy/`
 itself --- the directory the `koboy` binary lives in, not `roms/`:
 
