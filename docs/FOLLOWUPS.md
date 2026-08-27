@@ -901,7 +901,33 @@ Fourteen systems now. The device was off the LAN for the whole session --- it
 did not answer ICMP, let alone port 22, from the first probe to the last ---
 so everything below is host-side, and item 67 is the consequence.
 
-### 67. THE BIGGEST ONE: SNES and PC Engine are presented at less than half the Game Boy's area, because the rect is sized from a MAX geometry neither core ever draws
+### 67. ~~THE BIGGEST ONE: SNES and PC Engine are presented at less than half the Game Boy's area~~ --- CLOSED 2026-08-27 (`ae03e76`)
+
+The reserved rect is now sized from the core's BASE geometry in
+`KOBOY_LAYOUT_DMG`. SNES 597x448 -> 1195x896 (4.00x area), PC Engine
+583x486 -> 875x729 (2.25x), Mega Drive 878x672 -> 1170x896 (1.78x), and six
+other systems moved with them. Game Boy, Game & Watch, NES, Pokemon Mini,
+Neo Geo Pocket and every arcade board are unchanged.
+
+The two traps this entry named were both real and both are answered.
+**"Size from base is not safe on its own"** --- correct, and the defence moved
+rather than being dropped: `video_fit_rect` falls back to the fractional fit
+for any frame the integer one cannot shrink (its scale floor is 1), so a
+larger-than-base frame is presented smaller instead of writing past the end
+of `v->cur`. Swept over every system's real geometry in
+`tests/test_video_pipeline.c`; the row that fires it is FinalBurn Neo's
+Tapper, and removing the fallback produces 216 spills starting at SNES
+hi-res. **"PC Engine grows its frame mid-run constantly"** --- it does, and
+its rect does NOT follow, because both its modes have the same display width
+once the pixel aspect is applied: 292 source columns either way. It re-fits
+zero times now where it used to re-fit five times in 42 seconds. See #69.
+
+**The cost was measured, not modelled** --- see TESTED.md's "The rect-sizing
+trade, MEASURED on the device". It is nothing for PC Engine and for SNES
+titles with headroom, and it is real for the two that had none: Kirby Super
+Star 96% -> 78%, Star Fox 93% -> 67%. The lever is #73.
+
+### 67 (original). SNES and PC Engine are presented at less than half the Game Boy's area, because the rect is sized from a MAX geometry neither core ever draws
 
 Measured through koboy's own pipeline on the verified 1264x1680 panel:
 
@@ -938,7 +964,21 @@ presented small. Fixing the picture and fixing the speed pull in opposite
 directions here, and the trade should be made deliberately rather than
 discovered.
 
-### 68. Every device figure for these three systems rests on a TWO-POINT FIT whose two points disagree
+### 68. ~~Every device figure for these three systems rests on a TWO-POINT FIT whose two points disagree~~ --- CLOSED 2026-08-27
+
+The one ssh session happened. `build/corebench-arm` ran on the device against
+all 21 titles; the numbers are in TESTED.md under "Per-frame core cost,
+MEASURED on the device". **The fit was roughly right and not reliable per
+title**: Star Fox predicted 12,341 against a measured 12,819 (4% out), Kirby
+predicted 7,815 against 9,321 (16% out). Use the measured table.
+
+The one thing worth carrying forward from the fit: the additive ~1 ms term
+was real. koboy's own `core` stage on the same title reads consistently above
+`corebench`'s (Super Mario World 4,012-4,432 us in koboy against 3,982 in
+corebench, Kirby 9,488-9,602 against 9,321), which is the per-frame front-end
+work the fit was trying to name.
+
+### 68 (original). Every device figure for these three systems rests on a TWO-POINT FIT whose two points disagree
 
 `scripts/corebench.c` re-measured the only two cores with real on-device
 numbers. A single host-to-device ratio does not fit both:
@@ -962,7 +1002,21 @@ compilers apart from the device ones. Until then, do not compare these numbers
 with the arcade section's flat 7x --- that one scaled koboy's own instrument
 and this one scales a different one.
 
-### 69. A PC Engine resolution switch throws away the dirty-rect history, so every scene change is a full-rect redraw
+### 69. ~~A PC Engine resolution switch throws away the dirty-rect history~~ --- CLOSED 2026-08-27 (`ae03e76`)
+
+Closed by the fix this entry's own last paragraph proposed. main.c no longer
+decides whether to re-fit from which geometry field moved; it resolves the
+candidate profile and compares the resulting PRESENTATION
+(`config_profile_presentation_same`). A PC Engine width switch resolves to
+byte-identically the same rect --- 876x729 at (194,84) in both the 256- and
+352-wide modes, because both have the same display width once the pixel
+aspect is applied --- so there is no teardown, no chrome repaint and no lost
+diff history. Verified by rendering Bonk's Adventure (256-wide) and Ninja
+Spirit (352-wide) through the real resolver: same rect, same picture, same
+place. Measured on the device: Ninja Spirit, which switches width, runs at
+98% of full speed, 15,368 ms against the old build's 15,398.
+
+### 69 (original). A PC Engine resolution switch throws away the dirty-rect history, so every scene change is a full-rect redraw
 
 Titles alternate between 256 and 352 pixel widths; Military Madness does it
 five times in 2500 frames. Each switch drives `main.c`'s re-fit, which
@@ -1035,3 +1089,80 @@ download or a `._*` stub is possible for every system koboy lists, and the
 cheap version of this check is `corebench --frames 1` over a directory of
 deliberately short files, one per extension. Anything that exits 136 or 139
 rather than reporting a rejection needs a row in `config_min_rom_bytes`.
+
+## The base-sized game rect (added 2026-08-27)
+
+### 73. The scale search has no per-system cap, and two SNES titles now need one
+
+MEASURED on the device (TESTED.md, "The rect-sizing trade"). Sizing the DMG
+rect from base gives SNES four times its old picture area, and the two SNES
+titles that had no CPU headroom pay for it: Kirby Super Star 96% -> 78% of
+full speed, Star Fox 93% -> 67%. Everything else in the batch is unaffected
+or free.
+
+**The lever exists and is measured; what is missing is a way to aim it.**
+Pinning `scale = 3` gives 2.25x the old picture area and puts Kirby back at
+95% and Sonic at 98% --- better than the old build managed at the same picture
+size, because the old rect wasted margin the diff and the blit still paid for.
+But `scale` is a single global ini key, so pinning it for the SNES also
+shrinks the Game Gear, the Atari and the Master System, none of which need it.
+
+The shape of the fix is a per-system ceiling on the auto-fit, keyed the way
+everything else per-system in `config.c` is keyed --- off the geometry or the
+extension, resolved once. The number for the SNES is 3. NOBODY HAS MEASURED
+THE OTHER TWELVE, and the honest version of this work measures each system's
+heaviest title at each scale it can reach rather than guessing a table; the
+device session that produced these numbers took under an hour with
+`scripts/corebench.c` and `--frames 900` runs, so it is a bounded job.
+
+Do not reach for `present_divisor` first. Measured on Super Mario World at the
+full new rect: divisor 3 gives 15,535 ms and divisor 6 gives 15,354 ms --- a
+1% difference, because the presentation count is already content-bound (183
+presented frames out of 900 at divisor 3, not the 300 the divisor alone would
+give). Rect area is the term that moves, and it moves linearly.
+
+### 74. Arcade is in the DMG layout, and the LCD layout would give a vertical board 2.1x the picture
+
+The arcade brief specified `KOBOY_LAYOUT_DMG` and the coordinator has since
+called that their error. Evaluated, not shipped, and here is the whole trade.
+
+**The gating question --- does the LCD strip cover an arcade board's controls
+--- is the wrong question, because the DMG faceplate ALREADY does.** A board
+needs a stick, up to four fire buttons, COIN and START. `config_extra_buttons_
+for_rom`'s `.zip` case draws discs "3" (`JOYPAD_Y`) and "4" (`JOYPAD_X`)
+beside A and B, and FBNeo binds Coin 1 to `JOYPAD_SELECT` and Start 1 to
+`JOYPAD_START`, which are the faceplate's own pills. Nothing is unreachable
+today. The LCD strip would add L1/R1, which only six-button boards want (#62).
+
+**What LCD would buy, on the verified 1264x1680 panel:**
+
+| Board | DMG (today) | LCD | area |
+|---|---|---|---|
+| Galaga (vertical) | 648x864 | 945x1260 | 2.13x |
+| Defender | 960x720 | 1264x948 | 1.73x |
+| Tapper | 640x480 | 1264x948 | 3.90x |
+
+**What it would cost, and this is why it is filed rather than done:**
+
+1. **Fractional scaling on pixel art.** The LCD fit is fractional by design
+   (it exists so a Game & Watch unit fills the panel). Galaga at 945x1260 is
+   4.22 columns and 4.375 rows per source pixel, so the checkerboard of an
+   arcade sprite comes out with 4- and 5-wide cells beating against each
+   other. Rendered both and looked: the DMG integer 3x is clean and the LCD
+   fit visibly alias. This is the exact artifact `video_fit_par`'s
+   integer-vertical rule was chosen to avoid.
+2. **The LCD rect is still sized from MAX, and FBNeo's max is SQUARE**
+   (side = max(w,h), so both orientations fit one buffer). A vertical board
+   therefore gets a 1216x1260 rect holding a 945x1260 picture --- 135 px of
+   permanent white band down each side, inside the recess. That is the
+   artifact this task just removed from the PC Engine, reintroduced. Fixing
+   it means base-sizing the LCD rect too, which is exactly what a Game &
+   Watch title must not have (it changes base several times a second).
+3. **Cost.** 1.2 Mpx is SNES-at-scale-4 territory, and that is the size that
+   cost Kirby 18 points of speed. **FBNeo has never been benchmarked on the
+   device at all** (#56 is still open), so there is no number to weigh this
+   against.
+
+Recommendation: not without (a) an on-device FBNeo measurement and (b) an
+answer to the square-max white bands. If the picture size alone is what
+matters, #73's per-system scale is a cheaper lever on the same axis.

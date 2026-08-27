@@ -457,35 +457,137 @@ What it costs: each re-fit destroys and rebuilds the video pipeline, which
 throws away the dirty-rect history, so every switch is a full-rect redraw.
 Five in ~42 seconds of Military Madness. Not measured on a panel.
 
-#### The presentation surprise: SNES and PC Engine are presented SMALLER than the Game Boy
+#### ~~The presentation surprise: SNES and PC Engine are presented SMALLER than the Game Boy~~ --- FIXED 2026-08-27
 
-Rendered through koboy's own pipeline on the verified 1264x1680 panel:
+Left here because the numbers are the before half of the comparison. The rect
+is now sized from the core's BASE geometry in `KOBOY_LAYOUT_DMG`, and the
+sizes below are what it used to be.
 
-| System | core frame | presented | pixels | vs Game Boy |
+| System | core frame | was presented | now | area change |
 |---|---|---|---|---|
-| Game Boy | 160x144 | 800x720 | 576,000 | --- |
-| Mega Drive | 320x224 | **878x672** | 590,016 | 1.02x |
-| PC Engine | 352x243 | **583x486** | 283,338 | **0.49x** |
-| SNES | 256x224 | **597x448** | 267,456 | **0.46x** |
+| Game Boy | 160x144 | 800x720 | 800x720 | unchanged |
+| Mega Drive | 320x224 | 878x672 | **1170x896** | 1.78x |
+| PC Engine | 352x243 | 583x486 | **875x729** | 2.25x |
+| SNES | 256x224 | 597x448 | **1195x896** | **4.00x** |
 
-The cause is that the reserved rect is sized from the core's MAX geometry,
+The cause was that the reserved rect was sized from the core's MAX geometry,
 and both of these cores report a max far larger than any frame they deliver:
 snes9x2005 says 512x512 (for an interlaced hi-res mode almost nothing uses)
 against a 256x224 frame, and beetle-pce-fast says 512x243. A 512-tall
-reservation cannot exceed scale 1 under `chrome_controls_top`, so a SNES
-game is presented at 597x448 where sizing from its ACTUAL 256x224 frame would
-allow roughly 896x672 --- about 2.2x the area. Mega Drive is unaffected
-because its max (348x240) is close to its real frame.
+reservation cannot exceed scale 1 under `chrome_controls_top`.
 
-This is the same family as `docs/FOLLOWUPS.md` #51 and it is NOT fixed here,
-for the same reason: it is a change to the fitting path in `video.c`, which
-is the one presentation this project has verified on hardware. It is,
-however, the largest single presentation win available on the two new
-systems, and it is worth more than any core-speed optimisation would be.
+**What it costs is MEASURED, not modelled --- see "The rect-sizing trade,
+measured on the device" below.** Short version: nothing at all for PC Engine
+and for SNES titles with CPU headroom, and real speed for the two SNES titles
+that had none.
 
 There is a perverse second-order effect worth naming: because SNES is
 presented small, `video_submit` costs it LESS, so its per-frame CPU budget is
 LARGER than the Mega Drive's. Fixing the rect size would shrink that budget.
+
+#### The rect-sizing trade, MEASURED on the device --- 2026-08-27
+
+The device was awake for this one. Every figure in this subsection is a
+measurement on the verified Libra 2, not a model.
+
+**Method.** `koboy-arm` built at `0b71348` (max-sized rect) and at `ae03e76`
+(base-sized rect), run alternately over ssh with Nickel up, `./koboy --frames
+900`, wall-clock timed. 900 frames is 15,024 ms of real time at 59.9227 Hz and
+15,045 ms at the PC Engine's 59.82, so the ratio of ideal to measured IS the
+speed. **Ten seconds of idle between runs, and that is not a formality:** a
+first pass with the runs back to back produced figures up to 2.4x higher that
+kept climbing through the batch (Super Mario World 15,595 ms then 25,378 ms,
+Kirby 24,067 then 37,142), and an isolated re-run of the same binary and the
+same ROM came back at 15,471 ms. Whatever accumulates --- Nickel reacting to
+the `.srm` each run writes is the likeliest --- a saturated Cortex-A9 does not
+give repeatable numbers, and a benchmark loop without gaps measures the
+benchmark loop.
+
+`presented` is identical between the two binaries for every title (183, 181,
+246, 241, 160, 113, 98), which is what makes the pairs comparable: the same
+content produced the same number of panel updates, only their cost changed.
+
+| Title | rect BEFORE | rect AFTER | before | after | speed before | speed after |
+|---|---|---|---|---|---|---|
+| **SNES** | 598x512 | 1196x896 | | | | |
+| Super Mario World | | | 15,400 ms | 15,471 ms | 98% | **98%** |
+| Zelda --- A Link to the Past | | | 15,433 ms | 15,361 ms | 97% | **98%** |
+| Kirby Super Star (SA-1) | | | 15,580 ms | 19,230 ms | 96% | **78%** |
+| Star Fox (SuperFX) | | | 16,212 ms | 22,477 ms | 93% | **67%** |
+| **MEGA DRIVE** | 957x720 | 1172x896 | | | | |
+| Sonic The Hedgehog | | | 15,836 ms | 16,925 ms | 95% | **89%** |
+| Virtua Racing (SVP) | | | 17,978 ms | 19,187 ms | 84% | **78%** |
+| **PC ENGINE** | 1168x486 / 850x486 | 876x729 | | | | |
+| Bonk's Adventure | | | 15,507 ms | 15,359 ms | 97% | **98%** |
+| Ninja Spirit | | | 15,398 ms | 15,368 ms | 98% | **98%** |
+
+**PC Engine got a 2.25x picture for free, and slightly better than free.** Its
+old rect reserved 568k pixels to show 283k of picture; the new one is 638k
+pixels of which every one is picture. The diff, the blit and the refresh all
+run over the RECT, so paying for margin was pure loss.
+
+**SNES is where the bill lands, and only on the two titles that had no
+headroom.** Super Mario World and Zelda do not move. Kirby Super Star and Star
+Fox do, and the lever is measured too --- the same binary with `scale` pinned:
+
+| Title | scale 4 (1196x896, auto) | scale 3 (897x672) | scale 2 (598x448) |
+|---|---|---|---|
+| Kirby Super Star | 19,230 ms (78%) | **15,770 ms (95%)** | 15,400 ms (98%) |
+| Star Fox | 22,477 ms (67%) | 18,959 ms (79%) | 16,177 ms (93%) |
+| Sonic The Hedgehog | 16,925 ms (89%) | **15,387 ms (98%)** | 15,361 ms (98%) |
+
+`scale = 2` is the old picture size to the pixel (598x448 against the old
+597x448), and it reproduces the old speed to within noise --- which is the
+control that says these numbers are measuring rect area and nothing else.
+**`scale = 3` is the interesting row**: 2.25x the old picture area, and Kirby
+and Sonic are both back at full speed. Mega Drive at scale 3 is FASTER than
+the old build was at the same picture size (15,387 vs 15,836), for the PC
+Engine reason --- the old rect was 957x720 around an 878x672 picture.
+
+`scale` is a global ini key, so pinning it costs every other system. The
+per-system version of it is `docs/FOLLOWUPS.md` #73.
+
+#### Per-frame core cost, MEASURED on the device --- 2026-08-27
+
+`build/corebench-arm`, 900 frames after a 120-frame warmup, on the device.
+This is what `docs/FOLLOWUPS.md` #68 asked for and it closes it: the
+two-point fit below is superseded by measurement, and **the fit was
+roughly right but not reliable per title** --- it predicted Star Fox 12,341
+against a measured 12,819 (4% out) and Kirby 7,815 against 9,321 (16% out).
+
+| Title | mean us | p50 | p95 | max | widths seen | geom calls |
+|---|---|---|---|---|---|---|
+| **SNES (snes9x2005)** | | | | | | |
+| Super Metroid | 3,036 | 2,796 | 5,291 | 12,664 | 256 | 0 |
+| Zelda --- A Link to the Past | 3,638 | 3,623 | 5,158 | 22,984 | 256 | 0 |
+| Yoshi's Island (SuperFX2) | 3,856 | 4,190 | 5,084 | 97,315 | 256 | 0 |
+| Donkey Kong Country | 3,909 | 4,248 | 5,679 | 11,529 | **256 and 512** | **0** |
+| Super Mario World | 3,982 | 4,369 | 5,445 | 10,382 | 256 | 0 |
+| Chrono Trigger | 5,254 | 5,084 | 6,376 | 10,409 | 256 | 0 |
+| F-Zero | 5,669 | 5,603 | 6,744 | 13,652 | 256 | 0 |
+| Kirby Super Star (SA-1) | 9,321 | 9,450 | 10,761 | 22,490 | 256 | 0 |
+| Star Fox (SuperFX) | 12,819 | 11,063 | 22,538 | 28,452 | 256 | 0 |
+| **MEGA DRIVE (Genesis Plus GX)** | | | | | | |
+| Streets of Rage 2 | 5,672 | 5,928 | 6,816 | 8,451 | 256 and 320 | 1 |
+| Gunstar Heroes | 5,770 | 5,410 | 7,883 | 9,955 | 256 and 320 | 1 |
+| Sonic The Hedgehog 2 | 6,132 | 5,973 | 7,806 | 11,025 | 256 and 320 | 1 |
+| Phantasy Star IV | 6,255 | 6,231 | 7,418 | 14,487 | 256 and 320 | 1 |
+| Golden Axe | 6,261 | 6,388 | 7,325 | 14,007 | 256 and 320 | 2 |
+| Sonic The Hedgehog | 6,658 | 6,392 | 8,192 | 28,626 | 256 and 320 | 1 |
+| Virtua Racing (SVP) | 12,940 | 11,318 | 22,478 | 29,162 | 256 and 320 | 2 |
+| **PC ENGINE (beetle-pce-fast)** | | | | | | |
+| Ninja Spirit | 2,762 | 2,170 | 3,839 | 5,284 | **256 and 352** | 1 |
+| Dragon's Curse | 3,176 | 3,117 | 3,583 | 5,711 | 256 | 1 |
+| Bonk's Adventure | 3,310 | 3,279 | 3,686 | 8,242 | 256 | 1 |
+| Bomberman '94 | 3,311 | 3,259 | 3,834 | 5,813 | 256 | 1 |
+| Blazing Lazers | 3,854 | 3,776 | 4,629 | 30,821 | 256 | 1 |
+
+**Donkey Kong Country sends 512-wide frames and announces NOTHING.** `widths`
+says 256 and 512, `geom_calls` says 0. That is the case the fitting path's
+containment fallback exists for --- a frame between base and max, arriving
+with no warning, into a rect sized from base. It fits here (512x224 at 4:3
+lands at 1195x896, exactly filling the rect), and the sweep in
+`tests/test_video_pipeline.c` is what says it fits everywhere else.
 
 #### The benchmark, and it is EXTRAPOLATED
 
