@@ -458,11 +458,12 @@ hiding.
   size instead of destroying it further. See `docs/FOLLOWUPS.md` #3
   (closed) for the numbers. **Save *states*** (`state.c`, `safefile.c` — a
   different mechanism from cartridge SRAM, reached through `MODE_MENU`) are
-  a separate code path and remain untested on hardware. `--ui-script` can
-  now open `MODE_MENU` (the `menu` verb, 2026-08-27) and has cycled two of
-  its settings rows on the real panel, so writing a state on the device
-  unattended is two more taps of script — nobody has done it yet. See
-  `docs/FOLLOWUPS.md` #76.
+  a separate code path and remain untested **on hardware**. They are no
+  longer untested: `--ui-script` can open `MODE_MENU` (the `menu` verb,
+  2026-08-27), and `tests/smoke_host.sh` now writes a state to slot 1 from a
+  script and reads it back. The same two runs would work on the device with
+  Nickel up, exactly as the FRAMES row was verified there. Nobody has done
+  it. See `docs/FOLLOWUPS.md` #76.
 - **One verified device, and v2-core's UI layer has run on it only partially.**
   The 2026-08-26 session ran the `koboy` binary directly with `--frames` over
   ssh — never through `scripts/koboy.sh`, so Nickel was never stopped and the

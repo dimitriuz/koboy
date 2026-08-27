@@ -134,9 +134,10 @@ deliberately deferred, not a known live bug.
     have.
 
     **PARTLY CLOSED 2026-08-27** by the `menu` verb -- see #47. The emulator
-    loop does accept scripted input now, and GREYSCALE and FRAMES are driven
-    by `tests/smoke_host.sh` end to end. SAVE, LOAD, CHOOSE ROM and QUIT are
-    reachable through the same hook and are still driven by nothing.
+    loop does accept scripted input now, and GREYSCALE, FRAMES, SAVE STATE and
+    LOAD STATE are all driven by `tests/smoke_host.sh` end to end. CHOOSE ROM
+    and QUIT are reachable through the same hook and are still driven by
+    nothing.
 
 19. **The d-pad horizontal-arm term in `chrome_controls_top` is provably
     dead.** `src/chrome.c:41-42`. `top = min2(top, dcy - arm/2 - 1)` can never
@@ -633,11 +634,16 @@ Confirmed on the device as well as the host: a scripted run of `koboy-arm` on
 the Libra 2 opened the menu on the real panel and cycled `present_divisor`
 3 -> 4, rewriting `koboy.ini` and preserving its other keys.
 
-**Still uncovered, and it is the older half of #18:** `MENU_SAVE`, `MENU_LOAD`
-(and `run_slot_picker` behind them), `MENU_CHOOSE_ROM` and `MENU_QUIT`. All
-four are now REACHABLE from a script -- the hook is general -- but nothing
-scripts them yet. Save states in particular have still never run on hardware
-(see `TESTED.md`), and the hook is now the cheapest way to change that.
+`MENU_SAVE` and `MENU_LOAD` followed, through `run_slot_picker` on the same
+shared cursor: smoke writes a state to slot 1 and reads it back in a second
+run. Wiring that picker was a fix rather than tidiness -- it sits one tap past
+a row a script can now reach, and an unscripted `run_list` with no live input
+does not exit, it polls until the run is killed, so a script tapping SAVE
+STATE would have HUNG for the timeout instead of failing.
+
+**Still driven by nothing:** `MENU_CHOOSE_ROM` and `MENU_QUIT`. Both are
+reachable through the same hook. And save states have still never run on a
+device -- see #76, which is now two runs of work.
 
 Original text follows.
 
@@ -1252,18 +1258,31 @@ The cheap fix is a per-system section in the ini (which does not exist yet);
 the cheaper one is a word in the row itself. Neither is worth doing before
 anyone has decided what value they actually want -- see #26's open half.
 
-### 76. Save states are now scriptable on the device, and still have not run there
+### 76. Save states run unattended on the HOST now, and still have not run on a device
 
-The `menu` verb (#47) makes every `MODE_MENU` row reachable from
-`--ui-script`, but only GREYSCALE, FRAMES and a RESET-GAME negative control
-are driven by anything. SAVE STATE and LOAD STATE go on to `run_slot_picker`,
-which is an ordinary `run_list` screen and would take the same flat script --
-two more taps.
+The `menu` verb (#47) reaches `run_slot_picker` too -- it is an ordinary
+`run_list` screen hanging off the menu -- and `tests/smoke_host.sh` now writes
+a state to slot 1 from a script and reads it back in a second run. That is the
+first automated save state this project has produced.
 
-That matters more than the coverage does. `TESTED.md` has recorded since
-v2-core that save STATES (`state.c`, `safefile.c` -- a different mechanism
-from cartridge SRAM) have never run on a Kobo, because reaching them needed a
-hand on the device. They no longer do: `koboy-arm --rom X --ui-script` with
-`menu`, a tap on SAVE STATE and a tap on slot 1 would write one on the panel,
-unattended, with Nickel still up. This is now the cheapest open item on that
-list.
+The device half is unchanged and is the older, bigger gap: `TESTED.md` has
+recorded since v2-core that save STATES (`state.c`, `safefile.c` -- a
+different mechanism from cartridge SRAM) have never run on a Kobo, because
+reaching them needed a hand on the device. They no longer do. The exact
+invocation that works on the host works there:
+
+```
+./koboy-arm --rom roms/X.gb --save-dir . --frames 60 \
+    --ui-script <(printf 'menu\ntap 200 104\ntap 200 104\n')
+```
+
+with Nickel still up and no takeover -- which is how the FRAMES row was
+verified on 2026-08-27. Two runs (write, then read back) and the oldest entry
+in `TESTED.md`'s unfinished list is closed.
+
+What that would NOT establish: nothing about the takeover, and nothing about
+real touch -- a script feeds panel coordinates straight past the touch
+transform. It establishes that the state mechanism itself works on the
+device's filesystem, at the device's geometry, through the real core.
+
+Still driven by nothing at all: `MENU_CHOOSE_ROM` and `MENU_QUIT`.

@@ -576,6 +576,59 @@ grep -q '^present_divisor = 3$' "$ini" || {
 rm -rf "$romdir" "$ini" "$script"
 echo "ok: tapping a different MENU row moves neither setting"
 
+# ------------------------------------------- SAVE STATE / LOAD STATE, scripted
+#
+# Two taps past a row a script can now reach, which is why run_slot_picker was
+# wired to the same cursor: an unscripted run_list with no live input does not
+# EXIT, it polls until something kills the run, so a script that tapped SAVE
+# STATE would have hung for the timeout instead of failing. This run is what
+# stops that from being a claim.
+#
+#   menu         -- open the MENU
+#   tap 200 104  -- row 0, SAVE STATE   (row 1, y=168, is LOAD STATE)
+#   tap 200 104  -- the slot picker's row 0, slot 1
+#
+# It also makes the FIRST automated save state this project has ever written.
+# docs/FOLLOWUPS.md #76: the device half is still not done.
+romdir="$(mktemp -d)"; : > "$romdir/AAA TEST.gb"
+savedir="$(mktemp -d)"; script="$(mktemp)"
+printf 'menu\ntap 200 104\ntap 200 104\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom "$romdir/AAA TEST.gb" --save-dir "$savedir" --ui-script "$script" \
+        --panel 1264x1680 --frames 60 2>&1) || rc=$?
+echo "$out" | grep -E 'state'
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: scripted SAVE STATE exited $rc (124 means the slot picker hung)"
+    rm -rf "$romdir" "$savedir" "$script"; exit 1
+fi
+echo "$out" | grep -q '^koboy: saved state 1$' || {
+    echo "FAIL: the script did not save to slot 1"
+    rm -rf "$romdir" "$savedir" "$script"; exit 1; }
+# The FILE, not just the message -- and slot 1's name specifically, so a
+# picker that handed back the wrong index would fail here rather than pass.
+[ -s "$savedir/AAA TEST.st1" ] || {
+    echo "FAIL: no state file in $savedir"; ls -la "$savedir"
+    rm -rf "$romdir" "$savedir" "$script"; exit 1; }
+
+# ...and reading it back is a separate run, because "wrote something" and "the
+# core accepted it" fail independently. Row 1 this time: LOAD STATE.
+printf 'menu\ntap 200 168\ntap 200 104\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom "$romdir/AAA TEST.gb" --save-dir "$savedir" --ui-script "$script" \
+        --panel 1264x1680 --frames 60 2>&1) || rc=$?
+echo "$out" | grep -E 'state'
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: scripted LOAD STATE exited $rc"
+    rm -rf "$romdir" "$savedir" "$script"; exit 1
+fi
+echo "$out" | grep -q '^koboy: loaded state 1$' || {
+    echo "FAIL: the script did not load slot 1"
+    rm -rf "$romdir" "$savedir" "$script"; exit 1; }
+rm -rf "$romdir" "$savedir" "$script"
+echo "ok: MENU -> SAVE STATE writes slot 1 and LOAD STATE reads it back"
+
 # ------------------------------------------------- core chosen by extension
 #
 # The DECISION lives in src/main.c (tests/test_config.c covers the predicate

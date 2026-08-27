@@ -391,7 +391,8 @@ static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
 static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                            int stride, int pw, int ph, const char *title,
                            const char *save_dir, const char *rom_path,
-                           const koboy_input_state *script, int script_n)
+                           const koboy_input_state *script, int *script_i,
+                           int script_n)
 {
     static char labels[KOBOY_STATE_SLOTS + 1][64];
     const char *items[KOBOY_STATE_SLOTS + 1];
@@ -407,7 +408,12 @@ static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, NULL, script_n, -1);
+    /* The same shared cursor run_menu uses. Wired even though nothing scripts
+       SAVE/LOAD yet, because the alternative is a TRAP: this screen is one
+       tap past a row a script can now reach, and an unscripted run_list with
+       no live input does not exit -- it polls until the run is killed. A
+       script that tapped SAVE STATE would hang rather than fail. */
+    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
     if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
     return pick + 1;
 }
@@ -1284,7 +1290,8 @@ int main(int argc, char **argv)
             if (act == MENU_SAVE || act == MENU_LOAD) {
                 int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
                                            act == MENU_SAVE ? "SAVE TO" : "LOAD FROM",
-                                           cfg.save_dir, cfg.rom_path, NULL, 0);
+                                           cfg.save_dir, cfg.rom_path,
+                                           ui_scr, ui_scr_i, ui_script_n);
                 if (slot) {
                     char sp[512];
                     state_path(sp, sizeof sp, cfg.save_dir, cfg.rom_path, slot);

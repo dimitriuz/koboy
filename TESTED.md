@@ -1330,9 +1330,11 @@ value cycled and it persisted.
 **Still not established on hardware:** the takeover (`scripts/koboy.sh` was
 not run and Nickel was never stopped), real TOUCH input into the menu (the
 script bypasses the touch transform and feeds panel coordinates directly),
-and save states -- `MENU_SAVE`/`MENU_LOAD` are now reachable from a script but
-nothing has driven them. See `docs/FOLLOWUPS.md` #76, which is now the
-cheapest way to close the oldest gap in this file.
+and save states. `MENU_SAVE`/`MENU_LOAD` are now driven end to end on the HOST
+-- `tests/smoke_host.sh` writes a state to slot 1 from a script and reads it
+back in a second run, the first automated save state this project has produced
+-- and the same two runs would work on the device, with Nickel up, exactly as
+the FRAMES run above did. Nobody has done it. See `docs/FOLLOWUPS.md` #76.
 
 The temporary binary and ini files were removed afterwards; the device still
 runs the pre-change `koboy` and its `koboy.ini` is untouched.
