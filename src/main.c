@@ -17,7 +17,7 @@
  * so adding thirty of them would bury a year of real history in `git blame`
  * for no legal gain that LICENSE and README.md do not already supply. The
  * entry point is the customary place for the one that does exist.
- * LICENSES.md covers the fifteen emulator cores, which are NOT under this
+ * LICENSES.md covers the fourteen emulator cores, which are NOT under this
  * licence and are not linked into this binary -- they are separate shared
  * objects, dlopen'd at runtime, each with its own terms, and three of them
  * restrict commercial use.

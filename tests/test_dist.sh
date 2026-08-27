@@ -200,11 +200,11 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # reasoning when arcade shipped separately and it is unchanged; only the
     # baseline moved.
     #
-    # 32 MB, measured rather than guessed. Fifteen cores are 57.4 MB stripped
-    # and zip to 17.3, and the whole package is about 18.6 -- FBNeo compresses
-    # from 39.2 MB to roughly 12 because it is mostly similar driver tables,
-    # which is the fact that made one archive reasonable and which nobody had
-    # measured while the split was in place. So this is ~1.7x headroom.
+    # 32 MB, measured rather than guessed. The package unpacks to 61 MB and
+    # zips to 18.6, and FBNeo is 41.1 MB of that 61 deflating to 13.6 -- a 67%
+    # squeeze, because one driver table is much like the next. That is the
+    # fact that made one archive reasonable and nobody had measured it while
+    # the split was in place. So this cap is ~1.7x headroom.
     # Tighter than the 3x this cap used to carry, deliberately: with FBNeo
     # already inside, the next thing big enough to matter is big enough that
     # 1.7x is the right amount of rope.

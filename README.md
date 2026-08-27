@@ -1,253 +1,312 @@
 # koboy
 
-A retro emulator for Kobo e-readers, built Game-Boy-first. It runs a libretro
-core picked from the ROM's own extension --- gambatte for `.gb`/`.gbc`,
-gw-libretro for Game & Watch `.mgw`, fceumm for NES `.nes`, PokeMini for
-Pokemon Mini `.min`, beetle-wswan for WonderSwan and WonderSwan Color
-`.ws`/`.wsc`, RACE for Neo Geo Pocket and Pocket Color `.ngp`/`.ngc`,
-stella2014 for Atari 2600 `.a26`, Gearcoleco for ColecoVision `.col`,
-FreeIntv for Intellivision `.int`, Genesis Plus GX for Master System `.sms`,
-Game Gear `.gg` and Mega Drive `.md`, snes9x2005 for SNES `.sfc`/`.smc`,
-beetle-pce-fast for PC Engine / TurboGrafx-16 `.pce`, gpSP for Game Boy
-Advance `.gba`, FinalBurn Neo for arcade `.zip` --- renders four greys
-straight onto the e-ink panel through FBInk, and reads the page-turn buttons
-and the touchscreen directly from evdev.
+**Retro games on a Kobo e-reader.** Copy one folder to your Kobo over USB,
+put some ROMs beside it, and launch it from the reader's own menu. It plays
+fifteen systems, from the Game Boy to the Super Nintendo to 1980s arcade
+boards, on the e-ink screen you already own.
 
-Thirteen of the fifteen systems need no BIOS file --- the Game Boy Advance
-included, because gpSP carries an open-source one inside the core.
-**ColecoVision and Intellivision do**, and neither file ships with koboy
-because neither is ours to distribute --- see "BIOS files" below.
+No jailbreak. Nothing is written outside `.adds/koboy/` — no firmware
+changes, no `KoboRoot.tgz`, nothing the update process will ever notice.
+**Uninstalling is deleting one folder.**
 
-**Three extensions are deliberately not read, and this is the place people
-will look for why.** Mega Drive takes `.md` and **not `.bin` or `.gen`**:
-koboy picks the core from the extension and has no other signal, and `.bin`
-belongs to a dozen systems before it belongs to the Mega Drive --- in the
-author's own collection 723 TI-99/4A files, 234 Odyssey 2 and 119 Atari 5200
-end in `.bin`, as do the two Intellivision BIOS files above. Rename a Mega
-Drive `.bin` to `.md` and it works. PC Engine takes `.pce` and **not `.sgx`**
-(the core cannot emulate a SuperGrafx and would draw one wrongly rather than
-refuse) or `.chd` (CD-ROM, needs a system card).
+One device is verified: a **Kobo Libra 2**. Everything else is untested
+rather than known-broken — see [What is verified](#what-is-verified).
 
-**Arcade is a separate download.** The FinalBurn Neo core is 41 MB, ten times
-the rest of koboy put together, and most people running a Game Boy on an
-e-reader have no arcade romset --- so it ships as `koboy-fbneo-<version>.zip`,
-unzipped on top of the main archive. See "Arcade" below.
+---
 
-The two greyscale handhelds suit the panel best: a WonderSwan and a Neo Geo
-Pocket both drive eight shades of grey natively, so a mono title loses almost
-nothing on the way to four. Their Color halves lose what any colour system
-loses --- see [TESTED.md](TESTED.md).
+## Systems
 
-**The Game Boy Advance is the odd one in that judgement, and it is worth a
-sentence because its reputation says the opposite.** Its famous titles are
-fast-scrolling action, which is the worst thing this panel does. But the same
-library holds the best match for an e-reader in the whole collection ---
-Advance Wars, Fire Emblem, Final Fantasy Tactics Advance, Golden Sun, Pokemon
---- turn-based, text-heavy, and static between inputs, which is what e-ink is
-for. Judge the system on those. `.gba` is the only extension read; the
-collection this was measured against is 1693 files and every one of them ends
-that way.
+| System | File extension | Emulator core | BIOS needed? |
+|---|---|---|---|
+| Game Boy / Game Boy Color | `.gb` `.gbc` | gambatte | no |
+| Game Boy Advance | `.gba` | gpSP | no — built into the core |
+| Game & Watch | `.mgw` | gw-libretro | no |
+| NES | `.nes` | fceumm | no |
+| SNES | `.sfc` `.smc` | snes9x2005 | no |
+| Master System / Game Gear | `.sms` `.gg` | Genesis Plus GX | no |
+| Mega Drive / Genesis | `.md` | Genesis Plus GX | no |
+| PC Engine / TurboGrafx-16 | `.pce` | beetle-pce-fast | no |
+| Atari 2600 | `.a26` | stella2014 | no |
+| WonderSwan / WS Color | `.ws` `.wsc` | beetle-wswan | no |
+| Neo Geo Pocket / Color | `.ngp` `.ngc` | RACE | no |
+| Pokémon Mini | `.min` | PokeMini | no |
+| **ColecoVision** | `.col` | Gearcoleco | **yes — you supply it** |
+| **Intellivision** | `.int` | FreeIntv | **yes — you supply it** |
+| Arcade | `.zip` | FinalBurn Neo | no, for the 1980s boards |
 
-It is built around what the hardware can actually do rather than around what a
-desktop emulator expects: each refresh lets the panel controller pick its own
-waveform from the pixels actually changing, only changed rectangles are pushed,
-and frames are presented at a third of the emulated rate because e-ink cannot go
-faster. Forcing the fast four-level DU4 waveform instead is quicker per refresh
-but cannot erase, which ghosted badly in play, so `waveform_fast = du4` is an
-option in `koboy.ini` and not the default. On a Kobo Libra 2 that is a playable
-Game Boy.
-
-## What you need
-
-- A Kobo. **Verified on the Libra 2 only** --- see [TESTED.md](TESTED.md), and
-  please add a row if you run it on anything else.
-- NickelMenu or KFMon, to launch it. koboy will not run without one; see
-  "Launching" below for why that is a hard requirement.
-- **Your own ROMs.** None are included, and none ever will be. Either point
-  `rom=` in `koboy.ini` at a specific `.gb`/`.gbc`/`.mgw`/`.nes`/`.min`/
-  `.ws`/`.wsc`/`.ngp`/`.ngc`/`.a26`/`.col`/`.int`/`.sms`/`.gg`/`.zip` file,
-  or drop several into `.adds/koboy/roms/` (the `rom_dir` default) and pick
-  one from koboy's own on-panel menu at launch -- see "Playing" below.
-  Subfolders work: the browser walks them one level at a time, which is what
-  makes a 1386-file NES collection usable. Files that are not ROMs are not
-  listed, so the `.pal` palettes, `boot.rom`, `boot1.rom` and `boot0`-`boot3`
-  a real collection carries stay out of the way --- including the two files
-  that ARE a BIOS.
-
-## Arcade
-
-Install `koboy-fbneo-<version>.zip` over the main archive --- it adds one file,
-`fbneo_libretro.so`, to `.adds/koboy/`. After that a `.zip` in `roms/` appears
-in the browser and runs.
-
-**The romset has to match the core.** An arcade "ROM" is a zip of one board's
-individual EPROM dumps, checked by name and CRC against the emulator's own
-database, and FinalBurn Neo changes that database between releases. This build
-is **FinalBurn Neo v1.0.0.03, the revision of 2025-07-24**. A set built for a
-different FBNeo release will not load, and a MAME set of any vintage will not
-load at all --- both failures look exactly like a broken emulator.
-
-**Some zips in a complete set are not games.** `neogeo.zip`, `midssio.zip`,
-`namcoc69.zip` and friends are device and BIOS dumps that games load beside
-themselves. They list in the browser and cannot be started. Leave them
-alone --- `tapper.zip` does not run without `midssio.zip`.
-
-**No BIOS file is needed for the 1980s boards**: an arcade PCB carries its
-whole program. Later hardware (Neo Geo, CPS) wants a BIOS zip in `roms/`
-beside the games, not in the koboy directory.
-
-**This is the panel's best fit so far, with one exception.** The golden-age
-cabinets turned their monitor on its side, so Galaga, Dig Dug, Donkey Kong,
-Ms. Pac-Man and Frogger are portrait games on a portrait e-reader --- and
-they are single-screen, so the smearing that spoils a scrolling platformer
-cannot happen. The vertical *shooters* (Xevious, 1942) scroll continuously
-and do smear, exactly as a Game Boy platformer does.
-
-**Coin, then Start.** A board will not begin until it has been paid: `SELECT`
-is Coin and `START` is Start. The faceplate's `B` and `A` are the board's
-buttons 1 and 2, and the two extra discs are buttons 3 and 4.
-
-**Saving.** An arcade board has no battery, so there is no `.srm` --- the
-in-game MENU's save states are the way to keep a game mid-play.
-
-**High scores** are the other half, and they need one file you supply. Put
-`hiscore.dat` (FinalBurn Neo's own, matching this build) in
-`.adds/koboy/fbneo/` --- create the directory. koboy turns the feature on for
-you; without the file it is simply inert. With it, each board writes
-`.adds/koboy/fbneo/<board>.hi` when you leave the game and reads it back next
-time. Verified on Ms. Pac-Man: after a 220-point game the attract screen reads
-`HIGH SCORE 220` on the next launch, where a fresh install shows a blank.
-
-## BIOS files
-
-Two of the fifteen systems cannot run without the console's own boot ROM, which
-is copyrighted and is not distributed here. Put the files in `.adds/koboy/`
-itself --- the directory the `koboy` binary lives in, not `roms/`:
+**Thirteen of the fifteen need no BIOS at all.** Two do, and neither file is
+distributed here because neither is ours to distribute. Put them in
+`.adds/koboy/` itself — the folder the `koboy` program is in, not `roms/`:
 
 | System | File | Size | Without it |
 |---|---|---|---|
-| ColecoVision | `colecovision.rom` (or `coleco.rom`) | 8192 | every game shows a `NO BIOS` screen |
-| Intellivision | `exec.bin` | 8192 | nothing runs |
-| Intellivision | `grom.bin` | 2048 | nothing runs |
+| ColecoVision | `colecovision.rom` (or `coleco.rom`) | 8192 bytes | every game shows a `NO BIOS` screen |
+| Intellivision | `exec.bin` | 8192 bytes | nothing runs |
+| Intellivision | `grom.bin` | 2048 bytes | nothing runs |
 
 If you have a MiSTer Intellivision setup, `boot0.rom` **is** `exec.bin` and
-`boot1.rom` **is** `grom.bin`, byte for byte. `boot2.rom` (Intellivoice) and
-`boot3.rom` (ECS) are not needed. Rename copies rather than the originals.
+`boot1.rom` **is** `grom.bin`, byte for byte (checked by comparison, not
+assumed — `boot1.rom` and `boot2.rom` are both 2048 bytes and the wrong one
+gives you a machine that runs and draws garbage). Copy and rename; leave the
+originals alone.
 
-Every other system here needs nothing: the Game Boy, Game & Watch, NES,
-WonderSwan, Neo Geo Pocket, Atari 2600, Master System, Game Gear and arcade
-cores either need no boot ROM or link a free replacement. (Arcade's own
-device zips are romset members, not BIOS files in this sense --- they live in
-`roms/` beside the games. See "Arcade".)
+**ROMs are your own problem.** None are included, none ever will be, and
+there are no links here.
+
+### Files that will not appear in the browser, on purpose
+
+koboy picks the emulator from the file extension and has no other signal, so
+a few common extensions are deliberately not claimed. If a game is missing,
+it is almost certainly one of these:
+
+- **`.bin` and `.gen` for Mega Drive.** `.bin` belongs to a dozen systems
+  before it belongs to the Mega Drive — and to both Intellivision BIOS files
+  above. Rename a Mega Drive `.bin` to `.md` and it works.
+- **`.sgx`** (SuperGrafx) and **`.chd` / `.cue`** (CD-based games). The PC
+  Engine core cannot run either, and would draw a SuperGrafx game wrongly
+  rather than refuse it.
+- **A `.sfc` or `.smc` under 8 KB** is refused with a message. That is on
+  purpose: the SNES core crashes on such a file instead of rejecting it, and
+  the two things that produce one are a half-finished download and the
+  `._name.smc` stubs macOS leaves on memory cards. Neither is a game.
+
+---
 
 ## Install
 
-Unzip `koboy-<version>.zip` at the root of the drive the Kobo shows up as over
-USB. That creates one directory, `.adds/koboy/`, and writes nothing anywhere
-else: no `KoboRoot.tgz`, nothing under `/usr`, nothing the firmware updater or
-the recovery partition will ever look at. Uninstalling is deleting that
-directory.
+1. Plug the Kobo into a computer with USB. It appears as a drive.
+2. **Unzip `koboy-<version>.zip` at the top level of that drive.** It creates
+   one folder, `.adds/koboy/`, and writes nothing anywhere else.
+3. Copy your games into `.adds/koboy/roms/`. Subfolders work — the browser
+   walks them one level at a time, which is what makes a thousand-file
+   collection usable.
+4. Set up one launcher, by copying a file that is already in the folder:
+   - **NickelMenu** (most people): copy `.adds/koboy/nm-koboy` to
+     `.adds/nm/koboy`.
+   - **KFMon**: copy `.adds/koboy/kfmon-koboy.ini` to
+     `.adds/kfmon/config/koboy.ini`, and put any PNG at `/koboy.png` for it
+     to watch.
+5. Eject the drive and let the library scan finish. **The menu entry appears
+   after the Kobo next restarts its reading software**, because NickelMenu
+   reads its configuration at startup.
 
-Then, one of:
+You need NickelMenu or KFMon. koboy will not start without one, and this is
+enforced rather than recommended — see [Why it will not start over
+SSH](#why-it-will-not-start-over-ssh).
 
-- **NickelMenu**: copy `.adds/koboy/nm-koboy` to `.adds/nm/koboy`.
-- **KFMon**: copy `.adds/koboy/kfmon-koboy.ini` to
-  `.adds/kfmon/config/koboy.ini` and put a PNG at `/mnt/onboard/koboy.png` for
-  it to watch.
+### The download is 18.6 MB, and 13.6 of that is arcade
 
-Put a ROM somewhere on the drive and set `rom=` in `.adds/koboy/koboy.ini`.
-Eject, and let the library rescan finish. The menu entry appears after Nickel
-next restarts, because NickelMenu reads its configuration at Nickel's startup.
+`fbneo_libretro.so` is the FinalBurn Neo arcade core: 41 MB of the 61 MB the
+folder takes up on the card, and 13.6 MB of the 18.6 MB you download.
+**If you do not have an arcade romset, delete
+`.adds/koboy/fbneo_libretro.so`.** Nothing else depends on it, no other
+system changes, and `.zip` files simply stop appearing in the browser.
 
-## Launching
+If you do keep it, `.adds/koboy/README-fbneo.txt` has the arcade specifics —
+the romset version it has to match, why some zips in a complete set are not
+games, and where to put `hiscore.dat`.
 
-From the Kobo's own menu. Not from a shell over ssh --- and koboy enforces that
-rather than merely recommending it.
-
-koboy has to stop Nickel to run at all: Nickel holds an exclusive grab on every
-input device, so while it is up nothing else can read a button press. Starting
-it again afterwards is the hard part. Kobo's `rcS` exports a set of variables
-(`PLATFORM`, `PRODUCT`, the NTX hardware identity) before Nickel is first
-launched, and a Nickel started *without* them rewrites
-`/mnt/onboard/.kobo/version` with a placeholder serial --- which is the file
-FBInk reads to identify the device, so afterwards every FBInk-based tool on the
-device, KOReader included, silently loses its per-device quirks until the next
-reboot. That was measured on a Libra 2, not theorised.
-
-A process spawned by NickelMenu or KFMon inherits that environment from Nickel
-itself, which is what makes the restart safe. So `koboy.sh` checks for it, and
-if it is missing it refuses to touch Nickel at all: it draws a message on the
-panel, leaves Nickel running, and exits non-zero. An ssh launch therefore
-cannot damage the device identity; it just declines to start.
+---
 
 ## Playing
 
-- If `rom=` in `koboy.ini` is unset, koboy opens a MAIN MENU instead of going
-  straight to a game: **RECENT** (the last few ROMs actually played, newest
-  first -- empty on a first run), **ALL GAMES** (the contents of `rom_dir`,
-  default `roms` i.e. `.adds/koboy/roms/`, one folder at a time),
-  or **QUIT**. ALL GAMES pages with the page-turn buttons, jumps by starting
-  letter with a tap on the right-edge strip or with both page-turn buttons
-  together, and is picked with a tap; set `rom=` to a specific path to skip
-  this menu entirely and go straight to that ROM.
-- The two page-turn buttons are A and B, mapped out of the box to the codes the
-  Libra 2 emits (193 and 194). If yours differ, clear `key_a`/`key_b` in
-  `koboy.ini` and the next launch asks you to press each one and records what it
-  sees. That prompt can always be dismissed by tapping the screen, so a Kobo
-  with no page-turn buttons at all keeps the on-screen controls and plays.
-- The touchscreen is the d-pad: the lower-left region of the faceplate. The
-  default `cross` mode splits the drawn cross into four fixed zones, which is
-  what the drawing implies; `dpad_mode = relative` instead steers from wherever
-  you first touched, thumb-pad style, and needs a drag rather than a tap.
-- A drawn **MENU** box opens the in-game menu: save to or load from one of
-  three per-ROM save-state slots, reset the core, switch to a different ROM
-  (back to the same MAIN MENU above, so RECENT is reachable mid-session too),
-  or quit. The save-state format is gambatte's
-  own serialised core state, written and read through `safefile.c`'s
-  all-or-nothing helpers so a crash or a full disk mid-write cannot leave a
-  slot half-written; loading a slot never touches the core until the whole
-  blob has been read.
-- The power button quits, and so does `SIGTERM`. Battery saves (the
-  cartridge's own SRAM, not save states) are written atomically every ten
-  seconds and again on exit.
-- Exiting puts the panel back the way Nickel left it and starts Nickel again.
-  You should end up back on the home screen without rebooting.
+- **The two page-turn buttons are A and B.** They work out of the box on a
+  Libra 2. If yours do not, clear `key_a` and `key_b` in
+  `.adds/koboy/koboy.ini` and the next launch asks you to press each button
+  and records what it sees. You can always tap the screen to skip that, so a
+  Kobo with no page-turn buttons at all still plays with the on-screen
+  controls.
+- **The touchscreen is the d-pad**, in the lower-left of the drawn faceplate,
+  with the other buttons around it.
+- **`MENU`** is a drawn box on the panel. It opens save states (three slots
+  per game), reset, the three screen settings below, a different game, and
+  quit.
+- **The power button quits**, and puts you back on the home screen without a
+  reboot.
+- **Battery saves are automatic** — the cartridge's own save memory is
+  written every ten seconds and again on exit, the same as the real hardware.
 
-Everything else is in `koboy.ini`, which documents each key inline: render
-scale, which waveform to use for fast refreshes, d-pad geometry, `rom_dir` for
-ALL GAMES above, and the two ghosting mitigations that ship *disabled* ---
-the driver's own waveform choice made them redundant, and measuring showed
-they were the only thing making the panel flash. The file explains that in
-place, so nobody turns them back on thinking they were forgotten.
+---
 
-One key, `refresh_fixed_tiles`, ships at a starting guess (40) rather than a
-measurement: it trades off merging nearby dirty rectangles against refreshing
-them separately, and the on-device tuning run that would pin down its real
-value has not happened yet. See [TESTED.md](TESTED.md).
+## Screen settings: the section that actually matters
 
-If something goes wrong, `.adds/koboy/koboy.log` has the whole story --- the
-launcher logs every step of stopping and restarting Nickel, and koboy's own
-output goes to the same file.
+E-ink is not a slow LCD, it is a different thing. Three settings in the
+in-game `MENU` decide how the picture looks, and **the default is not the
+best setting for most games**. Try them in this order.
 
-## Building
+### 1. `MOTION` — turn this on first
 
-`make test` runs the unit tests on the host. `make host` builds a desktop SDL
-build, which is the practical way to work on anything that is not
-device-specific. `make kobo` cross-compiles for the device and `make dist`
-produces the zip; both need an ARM toolchain targeting glibc 2.19 or older, for
-reasons documented at length in `docs/cross-compiling.md`.
+Cycles: `4 GREYS / AUTO` → `1-BIT / AUTO` → `1-BIT / DU`
 
-## Licence
+**If moving things leave smears behind them, this is the fix.** It renders the
+game in pure black and white — dithered, like a newspaper photograph — instead
+of four shades of grey.
 
-koboy is free software: you can redistribute it and/or modify it under the terms
-of the GNU General Public License as published by the Free Software Foundation,
-either version 3 of the License, or (at your option) any later version.
+That sounds like a downgrade and it is the single biggest improvement
+available on this device. The reason is that the screen's *fast* refresh can
+only drive a pixel fully black or fully white. Ask it for a middle grey in a
+hurry and the pixel lands somewhere between: the old image does not clear, the
+new one arrives on top of it, and a jumping sprite leaves a faint ghost above
+itself and a bright band below. Give it black and white only and every
+transition completes.
 
-It is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
-without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
-PURPOSE. See the GNU General Public License for more details:
-<https://www.gnu.org/licenses/>.
+Verified on the panel by the device's owner, playing Super Mario Bros.:
+*"motion is much better in both 1bit modes, no white flashing now, even
+scrolling looks not bad."* Scrolling was the worst case and had been the
+oldest unsolved problem in this project.
 
-gambatte is licensed under the GPL version 2; FBInk under the GPL version 3 or
-later. Neither project's code is reproduced here --- both are fetched and built
-by the scripts in `scripts/`.
+Two notes. The two `1-BIT` settings look identical in practice — measurement
+later explained why (`AUTO` was already choosing the same refresh mode), so
+pick either. And **the Game Boy is the one system with something to lose**:
+its four shades already *are* the four the screen can show, so it is the one
+case where four greys may look better. Try both.
+
+### 2. `FRAMES` — how often the screen redraws
+
+Cycles: every frame, every 2nd, every 3rd … up to every 8th.
+
+**Fewer, complete redraws beat more incomplete ones.** A full-screen update on
+this panel takes about 150 ms to finish, and nothing in the device stops you
+asking for another one before the last has settled — the driver accepts work
+it cannot do and says nothing. Ask too often during a scroll and you get a
+washed-out mess.
+
+At the shipped setting, koboy asks for a frame every third one and then holds
+it back if the previous update is probably still settling, sized by how much
+of the picture changed. That means a menu or a mostly-static game stays
+responsive while a scroll slows down on its own — which is the thing a fixed
+setting cannot do.
+
+**Raise this if scrolling looks washed out. Lower it if the game feels
+laggy.** The owner had reached "every 8th" by hand before the automatic
+throttle existed; measured afterwards, "every 3rd" plus the throttle delivered
+24% *more* frames than their manual setting while never overdriving the panel.
+So if you are unsure, 3 is the answer.
+
+### 3. `GREYSCALE` — how colour becomes four greys
+
+Cycles: `BALANCED` (default), `LUMA`, `BRIGHT`, `EQUAL`, `VALUE`
+
+Only matters on colour systems; a Game Boy or a mono WonderSwan looks the same
+under all five.
+
+The obvious way to turn colour into grey — standard TV luma — weights blue at
+about 11%, so **a bright blue sky comes out as the darkest of the four
+levels**. Sonic Pocket Adventure's first zone renders with a black sky that
+Sonic disappears into. `BALANCED` reweights the colours and lifts the shadows,
+which cuts the pixels crushed to black from 6.7% to 2.5% across a sample of
+real gameplay frames.
+
+Change it if a game looks too dark or too washed out. `VALUE` is the one to
+avoid on most games — it can blow bright scenes out to white and make a HUD
+vanish.
+
+### If the picture looks wrong, try this
+
+| What you see | Try |
+|---|---|
+| Moving sprites leave grey smears | `MOTION` → `1-BIT` |
+| Scrolling washes the screen out | `MOTION` → `1-BIT`, then raise `FRAMES` |
+| The game feels laggy or slow | lower `FRAMES` |
+| The whole picture is too dark | `GREYSCALE` → `BRIGHT` or `EQUAL` |
+| A blue sky is nearly black | `GREYSCALE` → anything but `LUMA` |
+| Bright areas blow out; the HUD vanishes | `GREYSCALE` → away from `VALUE` |
+| A Game Boy game looks worse in 1-bit | `MOTION` → `4 GREYS`; it is the one system where that is expected |
+| The picture is a small box on a big screen | some systems cap their size on purpose, for speed. `scale` in `koboy.ini` overrides it |
+
+Everything is remembered — the menu writes your choice back to `koboy.ini`.
+
+### What it is like to actually play
+
+Honestly: **excellent for games with small moving parts, and a compromise for
+full-screen scrollers.** Tetris, a strategy game, a turn-based RPG, a
+single-screen arcade board — these are what an e-ink screen is for. A
+side-scrolling platformer works and is playable, but it will never look like
+an LCD, and `MOTION` is the difference between "playable" and "unpleasant".
+
+The frame rate is not the emulator's fault. Every one of the fifteen systems
+emulates a frame in 2 to 4.4 milliseconds on this hardware — a whole Mega
+Drive for 4 ms. Getting the picture onto the panel is what costs 14 to 23 ms.
+See [INTERNALS.md](INTERNALS.md) if that is interesting to you.
+
+---
+
+## Why it will not start over SSH
+
+koboy has to stop the Kobo's own reading software to run at all — it holds an
+exclusive claim on every button and the touchscreen, so while it is up nothing
+else can read a single press. Starting it again afterwards is the hard part.
+
+The Kobo sets up a handful of environment variables before it first launches
+that software, and a copy started *without* them **rewrites the file that
+identifies the device**, replacing the real serial number with a placeholder.
+That file is what every e-ink tool on the device reads to know which Kobo it
+is on, so afterwards everything — KOReader included — quietly loses its
+per-device tuning until you reboot. That was measured on a Libra 2, not
+theorised. It happened once, by hand.
+
+A program launched from NickelMenu or KFMon inherits that environment, which
+is what makes the restart safe. So koboy's launcher checks for it, and if it
+is missing it refuses to touch anything: it draws a message on the screen,
+leaves everything running, and exits. An SSH launch cannot damage the device;
+it simply declines to start.
+
+---
+
+## What is verified
+
+**One device: a Kobo Libra 2.** Games played on it, exits cleanly to the home
+screen without a reboot.
+
+[TESTED.md](TESTED.md) is the real record and is more careful than this
+summary. In short:
+
+**Played by a person, on the device:** Game Boy, NES and Game & Watch. Those
+three sessions are also what verifies the parts of koboy that only a finger
+can reach — stopping and restarting the reader software, the touch d-pad, the
+drawn `MENU` and everything in it, and the game browser.
+
+**Run on the device but not played:** all fifteen systems. Each one loads,
+works out its screen geometry, paces itself at its own frame rate and renders
+at a measured speed. Those runs were driven automatically over SSH, so they
+answer "does it work" and say nothing about "is it nice to play".
+
+**Not established, and worth knowing before you rely on it:**
+
+- The two BIOS files have never been read off a real memory card. Both were
+  verified on a desktop.
+- **Save states have never been written and re-read on the device.** Cartridge
+  battery saves have — Game Boy, NES and Game Boy Advance games have all
+  written a save file on real hardware and read it back byte-identical, and
+  the case where the file is damaged leaves it alone rather than making it
+  worse. Save states are a different mechanism and only desktop tests cover
+  them.
+- Twelve of the fifteen systems have never had a thumb on their controls, so
+  nothing says whether their on-screen buttons are laid out usably.
+- One Game Boy Advance file out of 1693 in a real collection crashes the
+  emulator. It is homebrew, and no check can catch it before it runs.
+
+**Every other Kobo is unverified — not known broken, just unmeasured.** koboy
+works out what it can from the hardware at runtime (screen size, colour depth,
+touch orientation, which refresh modes exist), so it has a fair chance
+elsewhere. A fair chance is not the same as tested.
+
+**If you run it on another Kobo, please add a row.** You do not need to build
+anything: `koboy-probe`, included in the download, characterises a device
+safely over SSH without stopping anything or changing anything. TESTED.md's
+"How to add a row" section is the walkthrough, and a report saying "the d-pad
+was unusable, the touch axes came out sideways" is worth far more than
+silence.
+
+---
+
+## More
+
+- [BUILD.md](BUILD.md) — building from source, and the toolchain, which is the
+  hard part.
+- [INTERNALS.md](INTERNALS.md) — how it works, and the decisions the hardware
+  forced that look like mistakes from the outside.
+- [TESTED.md](TESTED.md) — every measurement, and everything that is not
+  established.
+- [LICENSES.md](LICENSES.md) — koboy is **GPL-3**; the fifteen emulator cores
+  each carry their own licence and three of them restrict commercial use.

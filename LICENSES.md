@@ -11,9 +11,10 @@ file has a table in it rather than one line:
 - **`koboy` itself** — one ARM binary. It is this project's own C code plus
   **FBInk linked statically into it**. FBInk is GPL-3, koboy is GPL-3, and the
   shipped binary is one work under GPL-3.
-- **Fifteen emulator cores** — `gambatte_libretro.so` and the fourteen beside
-  it. Each is a separate shared object built from a separate upstream project
-  and shipped as its own file. koboy loads one at runtime with `dlopen`,
+- **Fourteen emulator cores**, covering fifteen systems —
+  `gambatte_libretro.so` and the thirteen beside it. Each is a separate
+  shared object built from a separate upstream project and shipped as its own
+  file. koboy loads one at runtime with `dlopen`,
   chosen from the ROM's extension, and talks to it across the libretro C ABI.
   Nothing from a core is linked into `koboy`, and `koboy` contains no core's
   code. That is the standard libretro arrangement.
@@ -22,7 +23,7 @@ Those are the facts of how the pieces fit together. This file does not draw a
 legal conclusion from them; a reader who needs one now has what they need to
 form it.
 
-**Three of the fifteen cores carry a non-commercial clause.** They are marked
+**Three of the fourteen cores carry a non-commercial clause.** They are marked
 in the table and set out again below it. Those are their own upstream terms
 and koboy's licence does not change them.
 
@@ -70,8 +71,8 @@ was built from.
 | Game Boy Advance | gpSP | <https://github.com/libretro/gpsp> | `8d268a6bb2cd` | GPL-2.0 |
 | Arcade | FinalBurn Neo | <https://github.com/libretro/FBNeo> | `ae41c16e10a1` | **own terms — NON-COMMERCIAL** |
 
-Fifteen systems, fourteen rows: Genesis Plus GX answers for Master System,
-Game Gear and Mega Drive out of one shared object.
+Fifteen systems, fourteen rows: Genesis Plus GX answers for two of them
+(Master System / Game Gear, and Mega Drive) out of one shared object.
 
 Every entry above was read out of the licence file in the built tree, not
 taken from a summary. The file each came from:
