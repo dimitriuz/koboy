@@ -1012,6 +1012,52 @@ systems' presentation and has still never been judged on the panel by a
 person; `pixel_aspect = false` is the way back. `refresh_fixed_tiles` is
 still 40, against rects two to four times larger than it was tuned for.
 
+### 1-bit output fixes the motion smearing, 2026-08-27 --- confirmed by the owner
+
+**The oldest open defect in this project (`docs/FOLLOWUPS.md` #25) is
+substantially fixed**, by the one mechanism nobody had tried: rendering the
+game as GENUINELY TWO-VALUED content instead of four grey levels.
+
+Owner's verdict, playing NES Super Mario Bros. on the panel: *"motion is much
+better in both 1bit modes, no white flashing now, even scrolling looks not
+bad, there are some ghosting of background, but still it is better than
+before."* Scrolling was the worst case and the reason this defect has stood
+since v1.
+
+**Why it works, and why every earlier attempt failed.** A DU-class waveform
+is TWO-LEVEL: it drives a changed pixel to black or white. Four-level content
+therefore asks a fast waveform for states it cannot reach, and at partial
+refresh speed it lands somewhere between --- which is what the owner's first
+video shows, a vertical column containing a stale ghost above, the sprite in
+the middle and bands of overshoot BRIGHTER THAN THE SKY below. Both directions
+of the transition were failing at once.
+
+Measured from the live framebuffer during play, the cause was visible in the
+data: SMB's sky is written at level 2 (170) --- a MID GREY. Every sprite
+transition therefore had to travel most of the way to an extreme. Made 1-bit,
+every pixel is 0x00 or 0xFF and a two-level waveform completes every
+transition exactly.
+
+This does NOT contradict the appendix finding that forced DU4 "cannot erase".
+DU4 is the FOUR-level variant; that failure is this mechanism seen from the
+other side.
+
+| | |
+|---|---|
+| Both `1-BIT / AUTO` and `1-BIT / DU` | better than 4-level |
+| White flashing | **gone** |
+| Scrolling | "not bad" --- previously unplayable |
+| Residual | some background ghosting remains |
+
+**Still unknown:** which of the two 1-bit rungs is better --- the owner
+reported both as improved without separating them --- and DU has never been
+TIMED on any panel (`FOLLOWUPS` #96). `koboy-probe --coexist` measures it with
+Nickel up.
+
+**The Game Boy is the case with most to lose** and has not been judged: its
+four shades already ARE the panel's four levels, so it is the one system where
+4-level content asks the panel for nothing it cannot do.
+
 ### Second title, an action game (Darkwing Duck, MBC1)
 
 Tetris is a generous first test: small dirty rectangles, no scrolling. An action

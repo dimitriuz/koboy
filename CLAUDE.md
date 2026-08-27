@@ -395,6 +395,15 @@ spec's appendices are the record; the short version:
   and centred at x=632 in BOTH -- same size, same place, only the detail
   changes. With `pixel_aspect = false` it jumps between 512x486 and 704x486
   every scene change. Verified by rendering both sides and looking.
+- **Four-level content is what smears; 1-bit content does not.** The panel's
+  fast waveforms are TWO-LEVEL --- DU drives a changed pixel to black or
+  white. Asking one for an intermediate grey at partial-refresh speed lands
+  between, leaving a stale ghost AND overshoot brighter than the background.
+  Rendering the game as genuinely two-valued (`force_dither`, `MENU ->
+  MOTION`) fixes the motion smearing that stood open from v1 --- confirmed on
+  the panel by the owner, 2026-08-27. The old "forced DU4 cannot erase"
+  finding is the same mechanism seen from the other side: DU4 is the
+  four-level variant.
 - Scale 5 with a procedural faceplate, not full-width 7x.
 - `viewVertOrigin` is **not** a blit offset.
 - "Grab the buttons but not power" is impossible: they share `gpio-keys`.
