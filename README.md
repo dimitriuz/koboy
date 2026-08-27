@@ -11,6 +11,21 @@ boards, on the e-ink screen you already own.
 
 ---
 
+<table>
+<tr>
+<td width="50%"><img src="docs/screenshots/Legend_of_Zelda_The_-_Link_s_Awakening_USA_Europe_Rev_2-002.png" alt="Link's Awakening on a Game Boy faceplate"></td>
+<td width="50%"><img src="docs/screenshots/Streets_of_Rage_2_USA-002.png" alt="Streets of Rage 2 with a six-button Mega Drive pad"></td>
+</tr>
+<tr>
+<td align="center"><em>Game Boy — the faceplate koboy started with</em></td>
+<td align="center"><em>Mega Drive — six buttons, laid out like the real pad</em></td>
+</tr>
+</table>
+
+**[More screenshots, grouped by system →](docs/SCREENSHOTS.md)**
+
+---
+
 ## Systems
 
 | System | File extension | Emulator core | BIOS needed? |
@@ -198,6 +213,8 @@ the file is written, so it is never in the picture.
 The number is read off the directory each time, so shots you keep are never
 overwritten by a later session. `shot_dir` in `koboy.ini` moves the
 directory.
+
+Every image in [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) was made this way.
 
 Practical notes: an e-ink game does not pause, so the capture is of the
 frame that follows your last touch — for an action game, arm it somewhere
