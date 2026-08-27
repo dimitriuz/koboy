@@ -424,6 +424,117 @@ static void sweep_cell(int fbfd, unsigned char *fbmem, uint32_t stride, uint32_t
     *block_us  = median_u64(b, SWEEP_PASSES);
 }
 
+/* ------------------------------------------------ sustained update period */
+
+/* How many back-to-back updates one sustain cell issues, and how many of them
+   are discarded before the median is taken. The EPDC hands out a small pool of
+   update descriptors, so the first submissions return immediately regardless
+   of how long the panel needs; only once the pool is exhausted does
+   MXCFB_SEND_UPDATE start blocking on a slot, and only from then on does the
+   loop run at the panel's rate. Two warmups empty the pool on every driver
+   depth this code has seen; ten timed iterations then keep a cell under three
+   seconds even at GC16 speeds. */
+#define SUSTAIN_PASSES 12
+#define SUSTAIN_WARMUP 2
+
+/* A checkerboard of `cell`-sized squares, phase-shifted by `phase`. Two
+   consecutive phases differ on about half the pixels, which is what a
+   DITHERED scene scrolling under koboy actually asks the panel for; a solid
+   black/white flip (fb_fill, above) is the 100%-transition worst case and
+   nothing on screen ever looks like it. Both are measured because the gap
+   between them is the difference between a pacing constant that is merely
+   safe and one that is honest. */
+static void fb_checker(unsigned char *fbmem, uint32_t stride, uint32_t bpp, bool inv,
+                       int origin_x, int origin_y, int w, int h, int cell, int phase)
+{
+    uint32_t bytes = bpp / 8;
+    for (int row = 0; row < h; row++) {
+        unsigned char *dp = fbmem + (size_t)(row + origin_y) * stride
+                                  + (size_t)origin_x * bytes;
+        for (int col = 0; col < w; col++) {
+            uint8_t val = (((col + phase) / cell + (row + phase) / cell) & 1)
+                          ? 0xFFu : 0x00u;
+            if (inv) val = (uint8_t)(0xFFu - val);
+            unsigned char *p = dp + (size_t)col * bytes;
+            switch (bpp) {
+            case 8:  p[0] = val; break;
+            case 16: { uint16_t v = (uint16_t)(((val & 0xF8u) << 8) |
+                                               ((val & 0xFCu) << 3) | (val >> 3));
+                       memcpy(p, &v, sizeof v); break; }
+            default: p[0] = p[1] = p[2] = val; p[3] = 0xFF; break;
+            }
+        }
+    }
+}
+
+/* THE MEASUREMENT THIS FILE GAINED FOR AREA-AWARE PACING, and it deliberately
+   does NOT use fbink_wait_for_complete().
+
+   Appendix B records why: this device reports `unreliable_wait_for=1`, and
+   that flag applies to exactly the MXCFB_WAIT_FOR_UPDATE_COMPLETE ioctl every
+   blocking figure in the sweep above depends on. A pacing constant derived
+   from a suspect ioctl would be a guess wearing a measurement's clothes.
+
+   What this measures instead is the rate at which the panel will ACCEPT work.
+   Submit updates to one region back to back with no wait at all; once the
+   driver's descriptor pool is full, each further submission blocks until an
+   earlier update retires, so the loop settles at one iteration per completed
+   update. The interval between iteration starts, in that steady state, IS the
+   panel's period for that (waveform, area) -- measured through the same
+   non-blocking path koboy's main loop uses, with no privileged ioctl in it.
+
+   `fill_us` is reported alongside and is not noise: the loop period is
+   max(panel period, fill + submit), so a cell whose fill cost approaches its
+   period is measuring this process, not the panel. Read the two together or
+   do not read either. */
+static void sustain_cell(int fbfd, unsigned char *fbmem, uint32_t stride, uint32_t bpp,
+                         bool inv, int origin_x, int origin_y, int w, int h,
+                         const wfm_case *wc, FBInkConfig base_cfg, uint8_t *toggle,
+                         bool pattern,
+                         uint64_t *period_us, uint64_t *submit_us, uint64_t *fill_us)
+{
+    FBInkConfig cfg = base_cfg;
+    cfg.wfm_mode    = wc->wfm;
+    cfg.is_flashing = wc->flash;
+
+    uint64_t iv[SUSTAIN_PASSES], su[SUSTAIN_PASSES], fu[SUSTAIN_PASSES];
+    uint64_t prev = 0;
+    int      n = 0;
+
+    for (int p = 0; p < SUSTAIN_PASSES + SUSTAIN_WARMUP; p++) {
+        uint64_t t0 = now_us();
+        *toggle = (*toggle == 0xFF) ? 0x00 : 0xFF;
+        if (pattern)
+            /* 8 px cells at phase 0/8 -- an 8x8 tile is also koboy's dirty-diff
+               granularity, so this is the coarsest pattern its own pipeline can
+               still call "everything changed". */
+            fb_checker(fbmem, stride, bpp, inv, origin_x, origin_y, w, h, 8,
+                       (*toggle == 0xFF) ? 0 : 8);
+        else
+            fb_fill(fbmem, stride, bpp, inv, origin_x, origin_y, 0, 0, w, h, *toggle);
+        uint64_t t1 = now_us();
+        fbink_refresh(fbfd, (uint32_t)origin_y, (uint32_t)origin_x,
+                      (uint32_t)w, (uint32_t)h, &cfg);
+        uint64_t t2 = now_us();
+
+        if (p >= SUSTAIN_WARMUP) {
+            if (prev) iv[n] = t0 - prev;
+            else      iv[n] = 0;          /* replaced below; first has no interval */
+            su[n] = t2 - t1;
+            fu[n] = t1 - t0;
+            n++;
+        }
+        prev = t0;
+    }
+    /* The first retained pass has no predecessor inside the retained window,
+       so its interval slot carries the warmup's -- which is exactly the
+       not-yet-saturated iteration this window exists to exclude. Drop it by
+       taking the median over [1, n) rather than [0, n). */
+    *period_us = median_u64(iv + 1, n - 1);
+    *submit_us = median_u64(su, n);
+    *fill_us   = median_u64(fu, n);
+}
+
 /* ========================================================================
  * --coexist
  * ======================================================================== */
@@ -702,6 +813,43 @@ static int run_coexist(void)
                 (fast_region_w == 0 || (w == 1120 && h == 1008))) {
                 fast_region_w = w; fast_region_h = h;
                 fast_block_us = block_us; fast_submit_us = submit_us;
+            }
+        }
+    }
+
+    /* ------------------------------------------------- sustained update rate */
+
+    /* Only the two waveforms koboy can be told to use WHILE A GAME IS RUNNING
+       (MENU -> MOTION cycles AUTO and DU), because this section exists to
+       feed one specific consumer: the area-aware present pacer, which needs
+       to know how fast the panel will accept full-area work. A2/DU4/GC16 keep
+       their place in the blocking sweep above, where the question is "how does
+       this device rank its waveforms", not "how fast may we feed it". */
+    wfm_case sustain_cases[2];
+    int      n_sustain = 0;
+    sustain_cases[n_sustain++] = (wfm_case){ "AUTO", WFM_AUTO, false };
+    sustain_cases[n_sustain++] = (wfm_case){ "DU",   WFM_DU,   false };
+
+    for (int r = 0; r < N_REGIONS; r++) {
+        int w = REGIONS[r].w, h = REGIONS[r].h;
+        if (w > view_w || h > view_h) continue;
+        note("koboy-probe: sustaining %dx%d ...\n", w, h);
+
+        for (int c = 0; c < n_sustain; c++) {
+            for (int pat = 0; pat < 2; pat++) {
+                uint64_t period_us, submit_us, fill_us;
+                sustain_cell(fbfd, fbmem, stride, bpp, st.inverted_grayscale,
+                             origin_x, origin_y, w, h, &sustain_cases[c], fb_cfg,
+                             &toggle, pat != 0, &period_us, &submit_us, &fill_us);
+                const char *kind = pat ? "checker" : "solid";
+                kv("sustain_%s_%s_%dx%d_n=%d\n", sustain_cases[c].name, kind, w, h,
+                   SUSTAIN_PASSES);
+                kv("sustain_%s_%s_%dx%d_period_us=%llu\n", sustain_cases[c].name, kind,
+                   w, h, (unsigned long long)period_us);
+                kv("sustain_%s_%s_%dx%d_submit_us=%llu\n", sustain_cases[c].name, kind,
+                   w, h, (unsigned long long)submit_us);
+                kv("sustain_%s_%s_%dx%d_fill_us=%llu\n", sustain_cases[c].name, kind,
+                   w, h, (unsigned long long)fill_us);
             }
         }
     }
