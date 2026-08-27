@@ -183,9 +183,12 @@ static bool load_failed_recoverable(bool recoverable, const char *rom_path,
     }
     char name[KOBOY_RECENT_DISPLAY];
     recent_name_from_path(name, sizeof name, rom_path);
-    /* Explicit precisions, not snprintf's own bound: err can fill the
-       message buffer on its own, and clipping the REASON is better than
-       clipping the name the user is looking for. */
+    /* Explicit precisions, not snprintf's own bound: `name` and `err` can
+       each fill the 512-byte message buffer on their own, and left to
+       snprintf the FIRST one to overflow would silently eat the other. The
+       two numbers are a panel budget, not a guess -- at fontmult 3 the Libra
+       2's 1264px width takes about 20 characters, so 60 is three lines of
+       filename and 300 is the reason under it. */
     notify("COULD NOT LOAD\n%.60s\n\n%.300s", name, err);
     return true;
 }
