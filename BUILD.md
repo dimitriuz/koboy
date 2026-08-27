@@ -176,8 +176,8 @@ For reference, the highest symbol versions in the real artefacts:
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
 
 make kobo        # build/koboy-arm + build/koboy-probe-arm (builds FBInk first)
-make dist        # -> dist/koboy-0.1.0.zip, everything under .adds/koboy/
-make probe-dist  # -> dist/koboy-probe-0.1.0.zip, the probe alone
+make dist        # -> dist/koboy-0.5.0.zip, everything under .adds/koboy/
+make probe-dist  # -> dist/koboy-probe-0.5.0.zip, the probe alone
 ```
 
 **`make kobo` needs that `PATH` and it is not there by default.** `CROSS`

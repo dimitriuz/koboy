@@ -242,7 +242,7 @@ core-fbneo: $(CORE_FBNEO_SO)
 # no KoboRoot.tgz, nothing under /usr, nothing the firmware updater will notice.
 # Everything it writes lives in .adds/koboy/, so uninstalling is `rm -rf` of one
 # directory and a bad build cannot brick anything.
-VERSION := 0.1.0
+VERSION := 0.5.0
 
 dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $(CORE_NGP_SO) \
       $(CORE_A26_SO) $(CORE_COL_SO) $(CORE_INT_SO) $(CORE_SMS_SO) \
