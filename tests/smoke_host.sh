@@ -1527,3 +1527,57 @@ SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
     rm -rf "$rd"; exit 1; }
 rm -rf "$rd"
 echo "ok: --rom with an unloadable file still ends the run (rc=$rc)"
+
+# ------------------- ...and the same failure from MENU -> CHOOSE ROM
+# The mid-session half. It had the same fatal()-then-quit shape as the startup
+# path and a weaker excuse: the startup path could at least argue there was
+# nowhere to go back to, while this one is written INSIDE the loop that draws
+# the MAIN MENU. The previous game is gone by then (flushed and unloaded so
+# CHOOSE ROM can have the core to itself), so there is no resuming it -- but
+# choosing a different game is what the user opened this screen to do.
+#
+# This is the first automated coverage the mid-session load has ever had.
+# MODE_MENU's sub-screens were passed NULL for every script argument with a
+# comment saying they could never be driven; the `menu` verb made that stale,
+# and they now take the same cursor as every other screen.
+#
+# ROW COORDINATES ARE HARDCODED, same derivation as every other tap in this
+# file (row_h=64, row r's centre is 8 + 64 + r*64 + 32) and same fragility: a
+# row inserted ABOVE CHOOSE ROM in the MENU strands this tap on RESUME or
+# FRAMES, and the run then exits 0 having tested nothing. The "switched to"
+# assertion below is what catches that -- it is printed only by a mid-session
+# load that SUCCEEDED, so a tap that missed CHOOSE ROM fails here rather than
+# passing quietly.
+rd="$(mktemp -d)"; sd="$(mktemp -d)"
+head -c 212 /dev/zero > "$rd/BAD.sfc"
+: > "$rd/GOOD.gb"
+s5="$(mktemp)"
+#   menu        -- open the in-game MENU
+#   tap 200 424 -- MENU row 5, CHOOSE ROM (SAVE LOAD RESET GRAY FRAMES ...)
+#   tap 200 168 -- mid-session MAIN MENU row 1, ALL GAMES
+#   tap 200 104 -- browser row 0, BAD.sfc   <- the load that fails
+#   tap 200 168 -- MAIN MENU row 1 again    <- proves we came BACK
+#   tap 200 168 -- browser row 1, GOOD.gb   <- and can still start a game
+printf 'menu\ntap 200 424\ntap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s5"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom "$rd/GOOD.gb" --rom-dir "$rd" --save-dir "$sd" --ui-script "$s5" \
+        --panel 1264x1680 --frames 60 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: a mid-session pick that could not load exited $rc instead of recovering"
+    echo "$out" | tail -20; rm -rf "$rd" "$sd" "$s5"; exit 1; }
+echo "$out" | grep -q "COULD NOT LOAD" || {
+    echo "FAIL: the mid-session run never reached the failing load"
+    echo "      (a tap that missed CHOOSE ROM leaves the game running and exits 0)"
+    echo "$out"; rm -rf "$rd" "$sd" "$s5"; exit 1; }
+echo "$out" | grep -q "switched to $rd/GOOD.gb" || {
+    echo "FAIL: the mid-session run did not come back and load another game"
+    echo "$out"; rm -rf "$rd" "$sd" "$s5"; exit 1; }
+echo "$out" | grep -q "switched to $rd/BAD.sfc" && {
+    echo "FAIL: the rom that failed to load was reported as loaded"
+    echo "$out"; rm -rf "$rd" "$sd" "$s5"; exit 1; }
+grep -qa "BAD.sfc" "$sd/recent.dat" && {
+    echo "FAIL: a mid-session rom that never loaded was recorded as recently played"
+    rm -rf "$rd" "$sd" "$s5"; exit 1; }
+rm -rf "$rd" "$sd" "$s5"
+echo "ok: MENU -> CHOOSE ROM survives a rom that cannot load"

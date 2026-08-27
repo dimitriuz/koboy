@@ -14,7 +14,10 @@
 
    run_slot_picker (SAVE/LOAD STATE) is reachable from here in principle -- it
    is an ordinary run_list screen hanging off the menu -- but nothing scripts
-   it yet, so no claim is made about it.
+   it yet, so no claim is made about it. MENU -> CHOOSE ROM, on the other
+   hand, IS driven: the mid-session MAIN MENU, RECENT list and browser take
+   the same cursor, which is what gives the mid-session ROM load its first
+   automated coverage.
 
    This exists because of a recorded v1 failure: the first-run deadlock was
    invisible to twenty reviews because the scripted-run branch skipped

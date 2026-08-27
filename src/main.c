@@ -241,13 +241,15 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
    `script`/`script_n` make the startup flow reachable in a bounded unattended
    run. Without them every automated test would pass --rom and skip every
    list screen entirely -- the same blind spot that hid v1's first-run
-   deadlock through twenty reviews. MODE_MENU is NOT scripted: nothing passes
-   a script to run_menu or run_slot_picker (they are only ever reached from
-   the emulator loop, which has no --ui-script hook), and saying otherwise
-   here would overclaim coverage the suite does not have.
+   deadlock through twenty reviews. MODE_MENU joined them with the `menu`
+   verb: run_menu is scripted, and so is everything CHOOSE ROM opens
+   underneath it. run_slot_picker is the one screen nothing drives yet -- it
+   is wired for a script (see its own comment) but no test walks into it, and
+   saying otherwise here would overclaim coverage the suite does not have.
 
    `script_i`, when not NULL, is a CURSOR shared across every screen one
-   --ui-script run drives (MAIN MENU, then RECENT or ALL GAMES) -- a pointer
+   --ui-script run drives (MAIN MENU, then RECENT or ALL GAMES; then, past a
+   `menu` verb, the in-game MENU and the same two lists again) -- a pointer
    rather than a local index so a script written as one flat sequence of taps
    can walk through several run_list calls in a row, each screen picking up
    exactly where the previous one's last consumed state left off. Every call
@@ -1541,36 +1543,38 @@ int main(int argc, char **argv)
                    task 5's decision: this is the ONLY way a mid-session
                    switch can reach RECENT, so "recently played" stays useful
                    past the first pick of the session, not just at startup.
-                   Never scripted (MODE_MENU has no --ui-script hook -- see
-                   run_list's comment), so NULL/0 for every script argument
-                   below, same as run_menu/run_slot_picker above. */
+
+                   SCRIPTED, since the `menu` verb: the comment here used to
+                   say these screens could never be, because MODE_MENU had no
+                   --ui-script hook. It has one now -- run_menu one frame up
+                   is handed the same cursor -- and passing NULL below meant
+                   the script reached CHOOSE ROM and then died against a
+                   screen with nothing driving it. Everything from the menu
+                   down is one flat sequence of taps, exactly as it is at
+                   startup (run_list's script_i comment). */
                 bool picked = false;
                 while (!picked && !g_stop && !pf->should_quit(pf->ctx)) {
                     int choice = run_main_menu(pf, in, panel, panel_stride,
-                                               pw, ph, NULL, NULL, 0);
+                                               pw, ph, ui_scr, ui_scr_i,
+                                               ui_script_n);
                     if (choice == MAIN_RECENT) {
                         koboy_recent rc;
                         recent_load(&rc, recents_file);
                         recent_prune_missing(&rc);
                         int ri = run_recent_picker(pf, in, panel, panel_stride,
-                                                   pw, ph, &rc, NULL, NULL, 0);
+                                                   pw, ph, &rc, ui_scr,
+                                                   ui_scr_i, ui_script_n);
                         if (ri >= 0) {
                             snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s",
                                     recent_path(&rc, ri));
-                            recent_touch(&rc, cfg.rom_path);
-                            recent_save(&rc, recents_file);
                             picked = true;
                         }
                         /* else: BACK -- loop shows MAIN MENU again. */
                     } else if (choice == MAIN_ALL_GAMES) {
-                        /* Never scripted here -- MODE_MENU has no --ui-script
-                           hook (see run_list's comment) -- so NULL/0 for
-                           every script argument, same as run_menu and
-                           run_slot_picker. */
                         int br = run_browser(pf, in, panel, panel_stride, pw, ph,
                                              cfg.rom_dir, cfg.rom_path,
                                              sizeof cfg.rom_path,
-                                             NULL, NULL, 0);
+                                             ui_scr, ui_scr_i, ui_script_n);
                         if (br == BROWSE_ERR_DIR) {
                             /* Distinct from the empty case, matching the
                                startup browser's two messages: romlist.h
@@ -1578,15 +1582,14 @@ int main(int argc, char **argv)
                                "your rom_dir is wrong" and "you have no ROMs"
                                are different diagnoses to a user with no
                                terminal, and this is the only diagnostic they
-                               get. */
-                            fatal("cannot read rom directory\n%s", cfg.rom_dir);
+                               get. notify, not fatal: both of these ALREADY
+                               fell through to the MAIN MENU rather than
+                               ending the run, and only the name said
+                               otherwise. */
+                            notify("cannot read rom directory\n%s", cfg.rom_dir);
                         } else if (br == BROWSE_ERR_EMPTY) {
-                            fatal("no .gb, .gbc or .mgw files in\n%s", cfg.rom_dir);
+                            notify("no .gb, .gbc or .mgw files in\n%s", cfg.rom_dir);
                         } else if (br == BROWSE_PICKED) {
-                            koboy_recent rc;
-                            recent_load(&rc, recents_file);
-                            recent_touch(&rc, cfg.rom_path);
-                            recent_save(&rc, recents_file);
                             picked = true;
                         }
                         /* BROWSE_NONE: nothing chosen from ALL GAMES either
@@ -1599,22 +1602,29 @@ int main(int argc, char **argv)
                            unloaded above), so this ends the session. */
                         break;
                     }
-                }
-                /* No "return to the game" option when nothing was picked:
-                   the running game was already flushed and unloaded above so
-                   CHOOSE ROM could have the core to itself, and by the time
-                   the flow above ends without a pick there is nothing left to
-                   resume. Quitting is the only coherent option: the
-                   alternative is a black or frozen screen with no
-                   explanation, which this project's own constraint calls
-                   "indistinguishable from a crash". A DIAGNOSABLE failure
-                   (rom_dir missing or empty) already told the user why on the
-                   panel above, via fatal(); a plain QUIT or backing all the
-                   way out needs no extra message. */
-                if (!picked) {
-                    mode = MODE_QUIT;
-                } else {
-                    /* This mid-session load deliberately does NOT re-query
+                    if (!picked) continue;
+
+                    /* THE LOAD IS INSIDE THE PICKER LOOP, which is the whole
+                       of this path's half of the fix. It used to sit after
+                       the loop and set MODE_QUIT on failure -- and unlike the
+                       startup path, where the argument for quitting was at
+                       least "there is nowhere to go back to", here the MAIN
+                       MENU is literally the top of the loop this is written
+                       in. The previous game is gone (flushed and unloaded
+                       above, so CHOOSE ROM could have the core to itself), so
+                       there is no resuming it -- but choosing a DIFFERENT
+                       game is exactly what the user came here to do, and a
+                       stale RECENT row taking the whole session down is the
+                       reported bug, one screen deeper.
+
+                       One thing this path genuinely cannot do is switch
+                       SYSTEMS: it reuses the same core handle rather than
+                       re-picking one from the extension (see the layout
+                       comment at startup). So handing gambatte a .gba fails
+                       here, and now it fails by saying so and offering the
+                       list again instead of ending the session.
+
+                       This mid-session load deliberately does NOT re-query
                        core_get_geometry, and that is not the gap it looks
                        like. core_load_rom clears geom_dirty (core.c), the new
                        ROM's first retro_run re-announces via
@@ -1640,16 +1650,58 @@ int main(int argc, char **argv)
                        would be silently dropped by the bounds guard. */
                     char lerr[512];
                     if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
-                        fatal("%s", lerr);
-                        mode = MODE_QUIT;
-                    } else if (sb.mem && sb.len &&
-                               !sram_load(sb.path, sb.mem, sb.len) &&
-                               access(sb.path, F_OK) == 0) {
+                        /* Always recoverable here, and not by judgement: the
+                           MAIN MENU is the next statement. The return value
+                           is discarded because it cannot be false. */
+                        (void)load_failed_recoverable(true, cfg.rom_path, lerr);
+                        /* sb is untouched by a failed load, so mem/len are
+                           still the NULL/0 set before the picker -- the final
+                           flush after the loop must not see a dangling
+                           pointer from the game that was unloaded. */
+                        picked = false;
+                        continue;
+                    }
+
+                    /* Logged, and it was not before: a mid-session switch
+                       left NOTHING in koboy.log, so the one question a
+                       device with no terminal cannot otherwise answer --
+                       which game is actually running now -- had no answer
+                       after the first one. Printed after the load, not at
+                       the pick, so the line means the game started;
+                       tests/smoke_host.sh uses exactly that distinction. */
+                    say("koboy: switched to %s\n", cfg.rom_path);
+
+                    /* Recorded only now, for the same reason as at startup:
+                       "played" means the game started, so a row that fails
+                       is not promoted to the top of the list the user has to
+                       walk past to try again. */
+                    {
+                        koboy_recent rc;
+                        recent_load(&rc, recents_file);
+                        recent_touch(&rc, cfg.rom_path);
+                        recent_save(&rc, recents_file);
+                    }
+
+                    if (sb.mem && sb.len &&
+                        !sram_load(sb.path, sb.mem, sb.len) &&
+                        access(sb.path, F_OK) == 0) {
                         sb.writeback = false;
                         notify("Save file unreadable.\nStarting fresh.\n"
                                "Saving is OFF this run.");
                     }
                 }
+                /* No "return to the game" option when nothing was picked:
+                   the running game was already flushed and unloaded above so
+                   CHOOSE ROM could have the core to itself, and by the time
+                   the flow above ends without a pick there is nothing left to
+                   resume. Quitting is the only coherent option: the
+                   alternative is a black or frozen screen with no
+                   explanation, which this project's own constraint calls
+                   "indistinguishable from a crash". A failed LOAD no longer
+                   arrives here at all -- it goes back round the picker -- so
+                   this is now only QUIT, backing all the way out, or a
+                   signal. */
+                if (!picked) mode = MODE_QUIT;
             }
 
             /* Whatever happened, the panel is now showing a menu. */
