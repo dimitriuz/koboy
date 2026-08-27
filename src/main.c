@@ -506,7 +506,10 @@ static int run_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel
 
 /* Drives the ROM browser until the user picks a ROM, backs out of the root, or
    the run ends. Returns a BROWSE_*; on BROWSE_PICKED it writes the ROM's full
-   path (out_path) and the row text the RECENT list should display (out_name).
+   path into out_path. It used to hand back the row's TEXT as well, for the
+   RECENT list to store; the row text is the path's last component and
+   recent.c derives it (recent_name_from_path), so a second output that could
+   disagree with the first no longer exists.
 
    Both entry points -- startup ALL GAMES and the in-game MENU's CHOOSE ROM --
    call this. They used to carry a hand-copied browser each, which was already
@@ -517,7 +520,6 @@ enum { BROWSE_PICKED = 0, BROWSE_NONE, BROWSE_ERR_DIR, BROWSE_ERR_EMPTY };
 static int run_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                        int stride, int pw, int ph, const char *rom_dir,
                        char *out_path, size_t out_path_n,
-                       char *out_name, size_t out_name_n,
                        const koboy_input_state *script, int *script_i,
                        int script_n)
 {
@@ -573,7 +575,6 @@ static int run_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
         int kind = romlist_kind(&rl, pick);
         if (kind == ROMLIST_ROM) {
             romlist_path(&rl, pick, out_path, out_path_n);
-            snprintf(out_name, out_name_n, "%s", romlist_name(&rl, pick));
             result = BROWSE_PICKED;
             break;
         }
@@ -910,7 +911,7 @@ int main(int argc, char **argv)
             if (ri >= 0) {
                 snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s", recent_path(&rc, ri));
                 say("koboy: chose %s (recent)\n", cfg.rom_path);
-                recent_touch(&rc, cfg.rom_path, recent_display(&rc, ri));
+                recent_touch(&rc, cfg.rom_path);
                 recent_save(&rc, recents_file);
                 mode = MODE_PLAY;
             }
@@ -921,10 +922,8 @@ int main(int argc, char **argv)
                it (the `else` branch below) -- this does not need its own
                copy of that handling. */
         } else if (choice == MAIN_ALL_GAMES) {
-            char chosen_name[ROMLIST_NAME];
             int br = run_browser(pf, ui_in, panel, panel_stride, pw, ph,
                                  cfg.rom_dir, cfg.rom_path, sizeof cfg.rom_path,
-                                 chosen_name, sizeof chosen_name,
                                  ui_scr, ui_scr_i, ui_script_n);
             input_destroy(ui_in);
 
@@ -959,7 +958,7 @@ int main(int argc, char **argv)
                    entry points that can load a rom at startup. */
                 koboy_recent rc;
                 recent_load(&rc, recents_file);
-                recent_touch(&rc, cfg.rom_path, chosen_name);
+                recent_touch(&rc, cfg.rom_path);
                 recent_save(&rc, recents_file);
             }
             mode = MODE_PLAY;
@@ -1437,7 +1436,7 @@ int main(int argc, char **argv)
                         if (ri >= 0) {
                             snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s",
                                     recent_path(&rc, ri));
-                            recent_touch(&rc, cfg.rom_path, recent_display(&rc, ri));
+                            recent_touch(&rc, cfg.rom_path);
                             recent_save(&rc, recents_file);
                             picked = true;
                         }
@@ -1447,11 +1446,9 @@ int main(int argc, char **argv)
                            hook (see run_list's comment) -- so NULL/0 for
                            every script argument, same as run_menu and
                            run_slot_picker. */
-                        char chosen_name[ROMLIST_NAME];
                         int br = run_browser(pf, in, panel, panel_stride, pw, ph,
                                              cfg.rom_dir, cfg.rom_path,
                                              sizeof cfg.rom_path,
-                                             chosen_name, sizeof chosen_name,
                                              NULL, NULL, 0);
                         if (br == BROWSE_ERR_DIR) {
                             /* Distinct from the empty case, matching the
@@ -1467,7 +1464,7 @@ int main(int argc, char **argv)
                         } else if (br == BROWSE_PICKED) {
                             koboy_recent rc;
                             recent_load(&rc, recents_file);
-                            recent_touch(&rc, cfg.rom_path, chosen_name);
+                            recent_touch(&rc, cfg.rom_path);
                             recent_save(&rc, recents_file);
                             picked = true;
                         }

@@ -10,31 +10,43 @@ void recent_init(koboy_recent *rc)
     memset(rc, 0, sizeof *rc);
 }
 
-void recent_touch(koboy_recent *rc, const char *path, const char *display)
+void recent_name_from_path(char *out, size_t n, const char *path)
+{
+    if (!out || n == 0) return;
+    out[0] = 0;
+    if (!path) return;
+
+    const char *slash = strrchr(path, '/');
+    const char *name  = slash ? slash + 1 : path;
+    /* A path ending in '/' has an empty last component. Falling back to the
+       whole path keeps the row readable instead of blank -- a row you cannot
+       read is a row you cannot avoid tapping. */
+    if (!*name) name = path;
+    /* Clipped by an EXPLICIT precision rather than by snprintf's own bound.
+       Same result, but the destination (160 bytes) is smaller than the
+       longest possible source (a 511-byte path with no separator), and this
+       project ships at zero warnings -- a bare "%s" there is a
+       -Wformat-truncation the compiler is right to raise and nobody can fix
+       any other way. */
+    snprintf(out, n, "%.*s", (int)n - 1, name);
+}
+
+void recent_touch(koboy_recent *rc, const char *path)
 {
     if (!rc || !path || !*path) return;
 
-    /* SNAPSHOT BOTH ARGUMENTS BEFORE TOUCHING rc, because a caller is allowed
-       to pass pointers INTO rc and one does: main.c re-touches a chosen
-       recent entry as
-           recent_touch(&rc, cfg.rom_path, recent_display(&rc, ri));
-       and recent_display returns a pointer to rc->entries[ri].display.
-
-       The shifts below overwrite that slot with its neighbour's contents, so
-       reading `display` afterwards copied THE WRONG NAME -- observed on the
-       device as a recent list showing one game's title twice, the second row
-       carrying a different game's path underneath. Selecting it started a
-       game other than the one named.
-
-       Copying up front costs one buffer on the stack and makes the aliasing
-       question stop existing, which is better than a comment telling every
-       future caller not to do the obvious thing. */
+    /* SNAPSHOT BEFORE TOUCHING rc, because a caller is allowed to pass a
+       pointer INTO rc and one does: main.c re-touches a chosen recent entry
+       with recent_path(&rc, ri), which points at rc->entries[ri].path, and
+       the shifts below overwrite that slot with its neighbour's contents.
+       Reading the argument afterwards would copy THE WRONG ROW -- which is
+       exactly what happened to the display name this function no longer
+       takes (recent.h). One buffer on the stack makes the aliasing question
+       stop existing, which beats a comment telling every future caller not
+       to do the obvious thing. */
     char path_copy[sizeof rc->entries[0].path];
-    char disp_copy[sizeof rc->entries[0].display];
     snprintf(path_copy, sizeof path_copy, "%s", path);
-    snprintf(disp_copy, sizeof disp_copy, "%s", display ? display : path);
     path = path_copy;
-    display = disp_copy;
 
     int found = -1;
     for (int i = 0; i < rc->count; i++)
@@ -60,7 +72,10 @@ void recent_touch(koboy_recent *rc, const char *path, const char *display)
         for (int i = last; i > 0; i--) rc->entries[i] = rc->entries[i - 1];
         if (rc->count < KOBOY_RECENT_MAX) rc->count++;
     }
-    snprintf(moved.display, sizeof moved.display, "%s", display ? display : path);
+    /* Derived, never carried: see recent.h. Recomputed for an entry that was
+       already present too, so a row loaded from an older, wrong recent.dat is
+       corrected by playing it as well as by loading it. */
+    recent_name_from_path(moved.display, sizeof moved.display, path);
     rc->entries[0] = moved;
 }
 
@@ -121,12 +136,15 @@ bool recent_load(koboy_recent *rc, const char *file)
                 (int)sizeof buf[n].path - 1, buf[n].path);
         if (!path[0]) break;              /* first empty path ends the list */
 
-        char display[KOBOY_RECENT_DISPLAY];
-        snprintf(display, sizeof display, "%.*s",
-                (int)sizeof buf[n].display - 1, buf[n].display);
-
         snprintf(rc->entries[n].path, sizeof rc->entries[n].path, "%s", path);
-        snprintf(rc->entries[n].display, sizeof rc->entries[n].display, "%s", display);
+        /* The file's own display bytes are NEVER read. They are a cache of
+           this exact derivation (recent.h), and a recent.dat written before
+           that was true can hold a name belonging to a different game -- one
+           such row is on the author's device. Deriving here is what repairs
+           it, and it is also why nothing needs a bounded read of
+           buf[n].display: the field is not an input. */
+        recent_name_from_path(rc->entries[n].display,
+                              sizeof rc->entries[n].display, path);
     }
     rc->count = n;
     return true;
