@@ -123,10 +123,20 @@ static int stub_late_fired = 0;
    frames, leaving max alone -- the measured Game & Watch behaviour, where a
    title flips between showing the whole unit and the LCD alone several times
    a second. KOBOY_STUB_MAXGROW=1 instead announces a LARGER max once, at
-   frame 30. The pair exists so a test can assert both directions: base churn
-   must NOT provoke a re-fit, a max change MUST. Asserting only the first
-   would pass against a frontend that ignored geometry entirely. */
-static int stub_osc = -1, stub_maxgrow = -1, stub_tick = 0;
+   frame 30, base moving with it. The pair exists so a test can assert both
+   directions: base churn must not provoke a re-fit in the layout whose rect
+   comes from max, a rect change MUST. Asserting only the first would pass
+   against a frontend that ignored geometry entirely.
+
+   KOBOY_STUB_MAXONLY=1 is the third case and the one neither of those can
+   reach: max grows at frame 30 and BASE DOES NOT MOVE. In KOBOY_LAYOUT_DMG
+   the rect is sized from base, so the presentation is identical either side
+   of that announcement -- and a re-fit is still required, because
+   video_create's intermediate buffer is sized from max and a frame the
+   bounds guard now accepts would not fit the old one. It exists because a
+   main.c that compared everything about the resolved profile EXCEPT max
+   passed every other check in this project. */
+static int stub_osc = -1, stub_maxgrow = -1, stub_maxonly = -1, stub_tick = 0;
 #define STUB_PLACEHOLDER_W 128
 #define STUB_PLACEHOLDER_H 128
 
@@ -367,6 +377,8 @@ void retro_run(void)
         stub_osc = (e && *e && *e != '0') ? 1 : 0;
         e = getenv("KOBOY_STUB_MAXGROW");
         stub_maxgrow = (e && *e && *e != '0') ? 1 : 0;
+        e = getenv("KOBOY_STUB_MAXONLY");
+        stub_maxonly = (e && *e && *e != '0') ? 1 : 0;
         /* A MID-RUN TIMING CHANGE, which is the half of SET_SYSTEM_AV_INFO
            koboy ignored until per-core pacing existed. Announced from inside
            retro_run() because that is where a real core announces it, and
@@ -398,6 +410,17 @@ void retro_run(void)
         int want_w = (stub_base_w == stub_max_w) ? half_w : stub_max_w;
         int want_h = (stub_base_h == stub_max_h) ? half_h : stub_max_h;
         stub_base_w = want_w; stub_base_h = want_h;
+        struct retro_game_geometry g;
+        memset(&g, 0, sizeof g);
+        g.base_width = (unsigned)stub_base_w; g.base_height = (unsigned)stub_base_h;
+        g.max_width  = (unsigned)stub_max_w;  g.max_height  = (unsigned)stub_max_h;
+        if (env_cb) env_cb(RETRO_ENVIRONMENT_SET_GEOMETRY, &g);
+    }
+    if (stub_maxonly && stub_tick == 30) {
+        /* Max only. Base stays at whatever it was, so in the DMG layout the
+           reserved rect does not move by a pixel -- and the buffers still
+           have to grow. Kept inside STUB_FB_MAX. */
+        stub_max_w = 200; stub_max_h = 150;
         struct retro_game_geometry g;
         memset(&g, 0, sizeof g);
         g.base_width = (unsigned)stub_base_w; g.base_height = (unsigned)stub_base_h;

@@ -767,6 +767,7 @@ echo "$out" | grep -q "game 400x360" \
 echo "$out" | grep -q "presented=" || { echo "FAIL: DMG oscillating run never presented"; exit 1; }
 echo "ok: base churn re-fits in the DMG layout, and the rect follows base ($n re-fits)"
 
+# (3) A max change re-fits.
 rc=0
 out=$(KOBOY_STUB_MAXGROW=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom "$ROM" --frames 120 2>&1) || rc=$?
@@ -774,6 +775,26 @@ out=$(KOBOY_STUB_MAXGROW=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
 echo "$out" | grep -q "geometry settled" \
     || { echo "FAIL: a max change did NOT re-fit"; exit 1; }
 echo "ok: a max change does re-fit"
+
+# (4) MAX GROWS AND BASE DOES NOT -- the case none of the three above can
+#     reach, and the one that says why max_w/max_h are in the comparison at
+#     all. The DMG rect comes from base, so the presentation is IDENTICAL
+#     either side of this announcement; the re-fit is still required, because
+#     video_create sized its intermediate buffer from the old max and the
+#     bounds guard will now accept frames that do not fit it. Dropping max
+#     from config_profile_presentation_same passes every other check in this
+#     file and fails here.
+rc=0
+out=$(KOBOY_STUB_MAXONLY=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$ROM" --frames 120 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: max-only run exited $rc"; exit 1; }
+echo "$out" | grep -q "geometry settled" \
+    || { echo "FAIL: max grew with base unchanged and koboy did NOT re-fit"; exit 1; }
+# ...and the rect really did stay put, so this is the max-only case and not a
+# rect change wearing its clothes.
+echo "$out" | grep "geometry settled" | grep -q "game 800x720" \
+    || { echo "FAIL: the max-only re-fit moved the rect; that is a different case"; exit 1; }
+echo "ok: a max-only change re-fits without moving the rect"
 
 rm -rf "$d"
 
