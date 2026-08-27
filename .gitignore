@@ -22,6 +22,12 @@ third_party/gpgx/
 third_party/fbneo/
 third_party/snes9x2005/
 third_party/beetle-pce-fast-libretro/
+third_party/gpsp/
+# The two GBA cores that LOST the shootout in scripts/build-gba-core.sh --
+# ignored, not removed, for the same reason the two SNES also-rans below are:
+# re-running that comparison is the only honest way to revisit the choice.
+third_party/mgba/
+third_party/vba-next/
 # The two SNES cores that LOST the shootout in scripts/build-snes-core.sh.
 # Ignored rather than deleted from the ignore list because re-running that
 # comparison is the only honest way to revisit the choice, and it needs both
@@ -62,6 +68,9 @@ roms/*.md
 *.sfc
 *.smc
 *.pce
+# Game Boy Advance. Unambiguous -- .gba has never been anything else -- so it
+# needs none of the qualification .md above does.
+*.gba
 # NOT *.sgx or *.chd: koboy does not list either (SuperGrafx needs a core this
 # project does not ship, PC Engine CD needs a BIOS it must not ship), so
 # neither can arrive here as content koboy put there.

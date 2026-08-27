@@ -55,6 +55,8 @@
  *                  reported fps, i.e. 100% means "real time with no
  *                  presentation cost at all" (default 0)
  *   --csv          one machine-readable line per title, for a report table
+ *   --mash         hold START, then A, on a 32-frame cycle, so the measured
+ *                  frames are GAMEPLAY and not a title screen. See state_cb.
  *
  * Build:  cc -O2 -o corebench scripts/corebench.c -ldl
  * Cross:  arm-linux-gnueabihf-gcc -std=c11 -O2 -march=armv7-a -mfpu=neon \
@@ -100,6 +102,15 @@
 #define RETRO_ENVIRONMENT_GET_AUDIO_VIDEO_ENABLE   (47 | RETRO_ENVIRONMENT_EXPERIMENTAL)
 
 #define RETRO_MEMORY_SAVE_RAM 0
+
+/* The joypad device and the two button ids --mash uses. Same three values as
+   libretro.h; koboy's own src/koboy.h carries the whole set as KOBOY_BTN_*
+   bit positions, and this file stays independent of it for the reason at the
+   top -- a measurement tool that shares headers with the thing being measured
+   cannot be used to check it. */
+#define RETRO_DEVICE_JOYPAD          1
+#define RETRO_DEVICE_ID_JOYPAD_A     8
+#define RETRO_DEVICE_ID_JOYPAD_START 3
 
 enum retro_pixel_format {
     RETRO_PIXEL_FORMAT_0RGB1555 = 0,
@@ -207,8 +218,51 @@ static void video_cb(const void *data, unsigned w, unsigned h, size_t pitch)
 static void audio_sample_cb(int16_t l, int16_t r) { (void)l; (void)r; }
 static size_t audio_batch_cb(const int16_t *d, size_t n) { (void)d; return n; }
 static void poll_cb(void) {}
+
+/* --mash: hold START, then A, on a 32-frame cycle, for as long as the run
+ * lasts. OFF by default, and the default is what every measurement before
+ * this file gained the option used.
+ *
+ * WHY IT EXISTS, and it is not a convenience. corebench presses nothing, so
+ * a run of 600 frames measures whatever the title does WITH NO PLAYER: on
+ * every system measured so far that was a logo, a title screen or an attract
+ * loop. For a Game Boy or a PC Engine the difference hardly matters -- those
+ * machines have one background layer and a handful of sprites, and the title
+ * screen costs about what the game does. On a Game Boy Advance it matters a
+ * great deal: a title screen is one static background, and the gameplay
+ * behind it is four scrolling layers, alpha blending, and a hundred sprites.
+ * Measuring the first and calling it playability is exactly the kind of
+ * number this project treats as worse than no number, because it is
+ * believed.
+ *
+ * START AND A, AND NOTHING ELSE, because the job is to get PAST the menus
+ * rather than to play well: every title tried opens with some combination of
+ * "press start", a language or file-select prompt, and an intro that A
+ * skips. A d-pad direction would be worse than useless -- it would walk a
+ * character into a wall and measure that.
+ *
+ * SIX-FRAME HOLDS with six-frame gaps, not one-frame taps: a GBA title polls
+ * the key register once a frame and most of them debounce, so a single-frame
+ * press is dropped by roughly half the library. Measured: Fire Emblem's
+ * file-select ignores 1-frame taps entirely and takes 4-frame ones.
+ *
+ * The pattern keeps running during the measured window on purpose. In a
+ * turn-based RPG -- the class this option was added to judge -- pressing A
+ * repeatedly IS what a player does, and the cost of the menus and text boxes
+ * it opens is part of what has to fit in the budget. */
+static int g_mash = 0;
+static unsigned long g_mash_frame = 0;
+
 static int16_t state_cb(unsigned p, unsigned d, unsigned i, unsigned id)
-{ (void)p; (void)d; (void)i; (void)id; return 0; }
+{
+    (void)p; (void)i;
+    if (!g_mash || d != RETRO_DEVICE_JOYPAD) return 0;
+    unsigned phase = (unsigned)(g_mash_frame % 32u);
+    if (phase < 6u)  return id == RETRO_DEVICE_ID_JOYPAD_START ? 1 : 0;
+    if (phase < 16u) return 0;
+    if (phase < 22u) return id == RETRO_DEVICE_ID_JOYPAD_A ? 1 : 0;
+    return 0;
+}
 
 static uint64_t now_us(void)
 {
@@ -252,12 +306,13 @@ int main(int argc, char **argv)
         else if (!strcmp(argv[argi], "--warmup") && argi + 1 < argc) warmup = atoi(argv[++argi]);
         else if (!strcmp(argv[argi], "--budget-us") && argi + 1 < argc) budget_us = atol(argv[++argi]);
         else if (!strcmp(argv[argi], "--csv")) csv = 1;
+        else if (!strcmp(argv[argi], "--mash")) g_mash = 1;
         else break;
     }
     if (argc - argi < 2) {
         fprintf(stderr,
             "usage: %s [--frames N] [--warmup N] [--budget-us N] [--csv]"
-            " <core.so> <content> [<content> ...]\n", argv[0]);
+            " [--mash] <core.so> <content> [<content> ...]\n", argv[0]);
         return 2;
     }
     /* LIVE CLAMP: a zero or negative --frames would malloc(0) and then divide
@@ -367,13 +422,18 @@ int main(int argc, char **argv)
            established here rather than discovered on the device. */
         size_t sram_at_load = p_get_memory_size ? p_get_memory_size(RETRO_MEMORY_SAVE_RAM) : 0;
 
-        for (int f = 0; f < warmup; f++) p_run();
+        /* The mash cycle restarts per title, and it runs through the warmup
+           too: getting past a title screen is precisely what those discarded
+           frames are for when --mash is on. */
+        g_mash_frame = 0;
+        for (int f = 0; f < warmup; f++) { p_run(); g_mash_frame++; }
         size_t sram_running = p_get_memory_size ? p_get_memory_size(RETRO_MEMORY_SAVE_RAM) : 0;
 
         for (int f = 0; f < frames; f++) {
             uint64_t t0 = now_us();
             p_run();
             samples[f] = now_us() - t0;
+            g_mash_frame++;
         }
 
         uint64_t total = 0, max = 0;
