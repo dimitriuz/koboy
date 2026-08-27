@@ -5,6 +5,10 @@ put some ROMs beside it, and launch it from the reader's own menu. It plays
 fifteen systems, from the Game Boy to the Super Nintendo to 1980s arcade
 boards, on the e-ink screen you already own.
 
+**Support the developer:**
+<a href="https://ko-fi.com/W3Q224VFOR" target="_blank"><img src="https://ko-fi.com/img/githubbutton_sm.svg" alt="ko-fi"></a>
+<a href="https://www.buymeacoffee.com/dmitriileshchenko" target="_blank"><img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me a Coffee" style="height: 30px !important;width: 140px !important;" ></a>
+
 ---
 
 ## Systems
