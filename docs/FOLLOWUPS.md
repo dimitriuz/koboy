@@ -1161,7 +1161,38 @@ rather than reporting a rejection needs a row in `config_min_rom_bytes`.
 
 ## The base-sized game rect (added 2026-08-27)
 
-### 73. The scale search has no per-system cap, and two SNES titles now need one
+### 73. ~~The scale search has no per-system cap, and two SNES titles now need one~~ --- CLOSED for five systems, OPEN for the other nine, 2026-08-27
+
+The mechanism exists (`ceiling` in `g_core_by_ext`, applied in
+`config_resolve_profile_par`; in `KOBOY_LAYOUT_LCD` it caps the fractional fit
+at N times the source instead of an integer scale) and five extensions carry
+a MEASURED number:
+
+| ext | system | ceiling | what it was measured against |
+|---|---|---|---|
+| `.sfc` `.smc` | SNES | 3 | Star Fox 67% -> 79%, Kirby Super Star 78% -> 95% |
+| `.sms` | Master System | 3 | Sonic Chaos 1172x768 83% -> 879x576 98% |
+| `.gg` | Game Gear | 5 | Sonic Chaos 1152x864 79% -> 960x720 |
+| `.md` | Mega Drive | 3 | Sonic 1264x966 -> 879x672 |
+
+**The remaining nine have none, and that is a statement about what has been
+measured, not about what is safe.** `.mgw` `.nes` `.min` `.ws` `.wsc` `.ngp`
+`.ngc` `.a26` `.col` `.int` `.pce` `.zip` all auto-fit uncapped.
+`tests/test_config.c` lists them explicitly, so adding a ceiling to one has to
+come there and say so.
+
+Two of those are worth a look before the rest: Intellivision reaches
+1408x896 on a 1440x1920 panel and ColecoVision 1024x768 on the verified one,
+which is Master-System territory. Nobody has run either at 900 frames.
+
+**The Game Gear is the cautionary tale and it should be read before adding
+any row here.** Its number was right, unwritten, for months: 160x144
+auto-fitted to exactly the Game Boy's 800x720 and TESTED.md said so. Then
+`pixel_aspect` widened its rect to 192 columns, the auto-fit went 5 -> 6, and
+the picture silently became 1.73x the Game Boy's on the same frame. A
+measured number that lives only in a comment is not protected.
+
+### 73 (original). The scale search has no per-system cap, and two SNES titles now need one
 
 MEASURED on the device (TESTED.md, "The rect-sizing trade"). Sizing the DMG
 rect from base gives SNES four times its old picture area, and the two SNES
@@ -1297,3 +1328,70 @@ transform. It establishes that the state mechanism itself works on the
 device's filesystem, at the device's geometry, through the real core.
 
 Still driven by nothing at all: `MENU_CHOOSE_ROM` and `MENU_QUIT`.
+
+## SNES and Mega Drive on the LCD strip, and the Sega ceilings (added 2026-08-27)
+
+### 77. The six-button Mega Drive pad is drawn, mapped and never pressed
+
+`config_lcd_pad_for_rom` gives `.md` a six-disc grid --- X Y Z above A B C ---
+and every one of the six bits is read out of Genesis Plus GX rather than
+guessed: its port-0 descriptor block and `osd_input_update_internal`'s
+fall-through switch agree that `JOYPAD_L` is the console's X, `JOYPAD_X` its
+Y, `JOYPAD_R` its Z, `JOYPAD_Y` its A, `JOYPAD_B` its B and `JOYPAD_A` its C.
+`tests/test_input_touch.c` asserts that tapping the disc labelled Z produces
+`KOBOY_BTN_R1` and so on for all six.
+
+**What has NOT happened is a finger on a device pressing one of them in a
+game that reads it.** Whether X/Y/Z are live at all is decided per ROM, by the
+CARTRIDGE HEADER: `input.c`'s `SYSTEM_GAMEPAD` case takes the default
+`PAD2B|PAD3B|PAD6B` as "auto" and replaces it with `DEVICE_PAD6B` iff
+`rominfo.peripherals & 2`, which is the `6` in the header's I/O-support field
+(`loadrom.c`, `peripheralinfo`). koboy answers no core options and never calls
+`retro_set_controller_port_device`, so that auto-detect stands. A title
+declaring three buttons gets three, which is also the answer to the
+"three-button games misbehave with a six-button pad" worry --- but neither
+half is observed.
+
+The cheap version: run Streets of Rage 2 (which declares six) on the device
+with `--frames`, hold each of X, Y and Z through a scripted input, and diff
+the frame. Nobody has.
+
+### 78. Nine systems still auto-fit uncapped, and two of them look like the ones that just needed capping
+
+Split out of #73 rather than left inside it, because #73's mechanism half is
+now closed and this is the part that is not. Intellivision reaches 1408x896
+on a 1440x1920 panel and ColecoVision 1024x768 on the verified one --- both
+Master-System territory, and the Master System needed a ceiling. Neither has
+been run at 900 frames on the device.
+
+Do not guess a table. The Game Gear's number was wrong for months precisely
+because it was believed rather than measured, and the Master System's turned
+out to be 3 while the Game Gear's is 5 even though they are the same core.
+
+### 79. The Mega Drive's ceiling was chosen from one title, in the session's noisiest window
+
+`.md` is capped at 3 on the strength of Sonic alone, and its sweep ran late in
+a long benchmarking session: its absolute figures are inflated relative to the
+Master System and Game Gear sweeps taken an hour earlier (the same drift
+TESTED.md's rect-sizing section documents). The ORDERING is unambiguous and
+the choice follows from it, but the margin between 3 and 4 was measured at
+74.6% against 90.4% under load, not at rest.
+
+Virtua Racing --- the heaviest Mega Drive title this project has met, 84% at
+957x720 before any of this --- is not on the device and was not measured at
+all. If any title is going to want a ceiling of 2, it is that one.
+
+### 80. Nothing in the LCD strip has been touched by a finger on the device
+
+The strip now serves three systems instead of one, and its geometry changed
+for two of them: the six-button grid is new, and the lower band drops from
+four pills to two under it. Every zone is asserted in
+`tests/test_input_touch.c` against `chrome_lcd_layout`'s own output, so a
+drawn control and its live zone cannot disagree --- but no run has stopped
+Nickel, so no real touch has reached any of it.
+
+The specific things a playtest would settle: whether a 54 px disc in a
+three-across grid is comfortable under a thumb at the right edge of the
+panel, whether MENU is still easy to hit with the grid pushed 33 px further
+left than the diamond, and whether MODE and START at half the panel's width
+each are too easy to hit by accident.

@@ -1343,3 +1343,150 @@ the FRAMES run above did. Nobody has done it. See `docs/FOLLOWUPS.md` #76.
 
 The temporary binary and ini files were removed afterwards; the device still
 runs the pre-change `koboy` and its `koboy.ini` is untouched.
+
+## SNES and Mega Drive on the LCD control strip, and four measured ceilings
+
+Kobo Libra 2, 2026-08-27, `--frames 900` over ssh with Nickel up. Never
+through `scripts/koboy.sh`; the takeover was not exercised. Every number is
+wall-clock against the 15,024 ms that 900 frames of 59.9227 Hz content takes
+in real time, so **ideal / measured IS the speed**. Ten to fifteen seconds of
+idle between runs, for the reason the rect-sizing section above gives: a
+saturated Cortex-A9 does not give repeatable numbers.
+
+### The layout move cost the two SNES titles nothing
+
+`.sfc`, `.smc` and `.md` moved from the DMG faceplate to the LCD control
+strip, because a SNES pad is A B X Y L R and a six-button Mega Drive is
+A B C X Y Z, against the faceplate's two spare pockets. The strip built for
+Game & Watch already carries a d-pad, four face buttons, two shoulders,
+SELECT and START.
+
+**The trap was that the LCD fit is fractional and full-width, so the SNES
+scale ceiling had to survive the move.** It does, and the picture is
+identical to the pixel: 897x672 in both layouts on this panel. Measured by
+alternating the two binaries on the same ROM, twice each:
+
+| Title | rect before | rect after | before | after | speed before | speed after |
+|---|---|---|---|---|---|---|
+| Star Fox (SuperFX) | 897x672 | 897x672 | 19,021 / 18,989 ms | 19,101 / 19,090 ms | 79.1% | **78.7%** |
+| Kirby Super Star (SA-1) | 897x672 | 897x672 | 16,048 / 16,056 ms | 15,968 / 15,843 ms | 93.6% | **94.5%** |
+
+`presented` is identical across every one of those eight runs (241 for Star
+Fox, 246 for Kirby), which is what makes the pairs comparable. Star Fox is
+0.4 points slower and Kirby 0.9 points faster --- both inside the run-to-run
+spread, on the same picture size. **The layout move is free.**
+
+Mega Drive did move, because its rect is fitted differently: 1172x896 on the
+faceplate, 1264x966 fractional on the strip, 1.16x the area. Sonic went
+17,017 / 17,117 ms to 17,459 / 17,458 ms --- 88.0% to 86.1%, repeatable to
+within a millisecond. That regression is what the ceiling below removes.
+
+### The three Sega rects were the largest in the project
+
+They are the only ones over 900k pixels, and the owner reported all three as
+slow in play. `video_submit` is paid per pixel, so this is one number each.
+Sonic Chaos on both handhelds, Sonic on the Mega Drive, `scale` pinned in a
+copy of the device's own ini, `presented` identical down each column:
+
+| System | scale | rect | px | wall | speed | submit | blit | refresh |
+|---|---|---|---|---|---|---|---|---|
+| **Master System** | 4 (auto) | 1172x768 | 900,096 | 18,127 ms | 82.9% | 24.7 ms | 3.6 | 1.0 |
+| | **3** | 879x576 | 506,304 | **15,373 ms** | **97.7%** | 15.3 | 1.9 | 0.5 |
+| | 2 | 586x384 | 225,024 | 15,364 ms | 97.8% | 7.5 | 0.9 | 0.8 |
+| **Game Gear** | 6 (auto) | 1152x864 | 995,328 | 19,097 ms | 78.7% | 25.5 | 6.6 | 1.9 |
+| | 4 | 768x576 | 442,368 | 15,377 ms | 97.7% | 11.9 | 2.5 | 0.8 |
+| | 3 | 576x432 | 248,832 | 15,385 ms | 97.7% | 7.4 | 1.4 | 0.5 |
+| **Mega Drive** | uncapped | 1264x966 | 1,221,024 | 21,358 ms | 70.3% | 29.8 | 6.2 | 0.6 |
+| | 4 | 1172x896 | 1,050,112 | 20,140 ms | 74.6% | 27.7 | 5.0 | 0.7 |
+| | **3** | 879x672 | 590,688 | **16,628 ms** | 90.4% | 17.3 | 2.8 | 0.3 |
+
+The Mega Drive column is later in the session than the other two and its
+absolute numbers are inflated by whatever accumulates on this device --- the
+same effect the rect-sizing section documents. Its ORDERING is what the
+choice rests on, and the ordering is unambiguous.
+
+**Master System takes 3.** Scale 2 buys nothing further (15,364 against
+15,373 is noise), and 4 is the 83%.
+
+**Mega Drive takes 3**, landing on 879x672 --- within eighteen columns of the
+SNES's own capped picture. The two 16-bit systems end up presented alike,
+which is a coincidence of the arithmetic and a welcome one.
+
+**Game Gear takes 5, and 5 is not a new judgement.** Its frame is 160x144,
+byte for byte the Game Boy's, and this file recorded for months that it
+"lands on exactly 800x720, the Game Boy's scale-5 picture, by arithmetic, so
+it needs no exemption". That was true when written. Then `pixel_aspect` made
+the reserved rect 192 columns wide, the auto-fit went from 5 to 6, and the
+picture became 1152x864 --- 1.73x the Game Boy's area on the same frame ---
+with nothing watching, because the reasoning was in a comment rather than in
+a test. The ceiling of 5 puts it back where it was believed to be: 960x720,
+the Game Boy's rows with the pixel aspect the correction added. 4 would be
+768x576, SMALLER than the Game Boy, for speed that 5 already has.
+
+The sub-scale steps do not exist on the DMG faceplate --- the fit is an
+integer --- so "the smallest reduction that works" is one of 4, 3 or 2 and
+nothing between.
+
+### The shipped ceilings, confirmed on the device
+
+The sweep above pins `scale` in a copy of the device's own ini. This run does
+not: it is the SHIPPED default path, no `--config`, no override, three
+minutes of idle before the batch, so what is measured is the `ceiling` table
+itself.
+
+| System | rect before | rect after | wall before | wall after | speed before | speed after |
+|---|---|---|---|---|---|---|
+| Master System | 1172x768 | **879x576** | 18,127 ms | **15,365 ms** | 82.9% | **97.8%** |
+| Game Gear | 1152x864 | **960x720** | 19,097 ms | **15,396 ms** | 78.7% | **97.6%** |
+| Mega Drive | 1264x966 | **879x672** | 21,358 ms | **15,383 ms** | 70.3% | **97.7%** |
+| Mega Drive (vs its pre-task DMG rect) | 1172x896 | 879x672 | 17,459 ms | 15,383 ms | 86.1% | **97.7%** |
+
+All three now finish within 400 ms of the 15,024 ms the content itself takes,
+which is the wall a paced emulator cannot go faster than. The last row is the
+comparison that matters most for the Mega Drive and it is exactly like for
+like: `presented` is 160 on both sides.
+
+**What the cap bought, as pipeline capacity.** `1000 / (submit + blit +
+refresh)` is the most presented frames a second this pipeline can deliver.
+The device's `koboy.ini` asks for one every other core frame, so the DEMAND
+is 29.96 a second:
+
+| System | before | after | demand |
+|---|---|---|---|
+| Master System | 34.1 /s | **58.1 /s** | 29.96 |
+| Game Gear | **29.4 /s** | **41.9 /s** | 29.96 |
+| Mega Drive (1264x966) | **27.3 /s** | **49.1 /s** | 29.96 |
+| Mega Drive (1172x896) | 29.9 /s | 49.1 /s | 29.96 |
+
+**Two of the three were literally unable to meet the demand** --- the Game
+Gear at 29.4 and the Mega Drive at 27.3, against 29.96 --- which is what the
+owner was reporting as slow. All three now clear it by 1.4x or better.
+
+A caveat on the `presented` counts: they are content-bound, and Sonic Chaos
+does not reach the same scene every run (235 here against 348 in the sweep).
+That does not weaken the speed claims --- a 15,3xx ms run is at the pacing
+wall regardless of how many frames it chose to present --- but it does mean
+presented-frames-per-second is not a like-for-like number across the two
+sessions, and the capacity table above is used instead.
+
+### The device is running `present_divisor = 2`, not 3
+
+Worth stating because it changes what "slow" means. The device's own
+`koboy.ini` says 2 (the owner cycled it there through the in-game menu), so
+the loop asks for a presented frame every 16.7 ms --- 30 a second, not 20.
+At the Master System's uncapped 29.3 ms of pipeline per presented frame there
+is no headroom at all; at 17.7 ms there is.
+
+### What is still not established
+
+- **Nothing here is a playtest.** Nickel stayed up for every run, so the
+  takeover, the touch d-pad, the six-button grid under a real thumb and the
+  in-game MENU by touch are all still unexercised on hardware for these
+  systems.
+- **The six-button Mega Drive pad is auto-detected from the cartridge
+  header** (`rominfo.peripherals & 2`, the `6` in the ROM's I/O-support
+  field). Read out of Genesis Plus GX, not observed: no six-button title has
+  been played on the device to see X, Y and Z respond.
+- **Only one title per Sega system was measured.** Virtua Racing, the
+  heaviest Mega Drive title this project has met (84% at 957x720 before any
+  of this), is not on the device.
