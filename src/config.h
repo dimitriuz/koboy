@@ -36,6 +36,9 @@ typedef struct {
                                      every absolute timing this project has
                                      measured moved by up to a factor of 2.2
                                      between sessions -- see config/koboy.ini. */
+    int      scale_ceiling;      /* auto-fit cap for the loaded system, 0 = none.
+                                    Set from config_scale_ceiling_for_rom at the
+                                    same point the core is chosen. */
     bool     pixel_aspect;       /* honour a core's reported pixel aspect. ON by
                                     default -- eight systems render wrongly
                                     without it, the Atari 2600 by 1.75x. It is a
@@ -98,6 +101,8 @@ bool config_load(koboy_config *c, const char *path);
    makes it safe. All four must be >= 1 or this returns false, the same way an
    impossibly small panel already does -- base included, now that it is
    divided by. Both pairs are carried into the profile unchanged. */
+int config_scale_ceiling_for_rom(const char *rom_path);
+
 bool config_resolve_profile(koboy_profile *p, const koboy_config *c,
                             int panel_w, int panel_h,
                             int base_w, int base_h, int max_w, int max_h);

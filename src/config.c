@@ -184,10 +184,20 @@ static bool ends_with_ext(const char *s, const char *ext)
    romlist_is_rom, and a table makes the pair reviewable side by side.
    Extensions are lowercase because ends_with_ext lowercases only the
    candidate, not the pattern. */
-static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
-    { ".mgw", "gw_libretro.so"       },   /* Game & Watch, gw-libretro   */
-    { ".nes", "fceumm_libretro.so"   },   /* NES, libretro-fceumm        */
-    { ".min", "pokemini_libretro.so" },   /* Pokemon Mini, libretro/PokeMini */
+/* `ceiling` caps the auto-fitted scale for this system, 0 meaning no cap.
+   It exists because the rect is now sized from the frame a core really draws
+   (commit ae03e76), which quadrupled SNES's picture and, MEASURED on the
+   device, cost its heaviest titles real speed: Star Fox 93%->67%, Kirby Super
+   Star 96%->78%, while Mario World and Zelda stayed at 98%. At scale 3 the
+   picture is still 2.25x what it was and every measured title is back at 95%
+   or better, so the cap buys universal playability with a quarter of the
+   area. A per-system number rather than a global one because the global
+   `scale` is shared with thirteen other systems that pay nothing for 4x, and
+   an explicit `scale =` in the ini still overrides this. */
+static const struct { const char *ext; const char *core; int ceiling; } g_core_by_ext[] = {
+    { ".mgw", "gw_libretro.so", 0 },   /* Game & Watch, gw-libretro   */
+    { ".nes", "fceumm_libretro.so", 0 },   /* NES, libretro-fceumm        */
+    { ".min", "pokemini_libretro.so", 0 },   /* Pokemon Mini, libretro/PokeMini */
     /* One core per SYSTEM FAMILY, not per extension: beetle-wswan reports
        `ws|wsc|pc2` and RACE reports `ngp|ngc|ngpc|npc`, so the mono and the
        Color halves of each family are the same .so. Two rows each rather
@@ -196,13 +206,13 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        correspondence. .pc2/.ngpc/.npc are left out for the same reason .fds
        is: no evidence anyone's collection uses them, and an extension the
        browser lists but nobody has ever loaded is an untested claim. */
-    { ".ws",  "mednafen_wswan_libretro.so" }, /* WonderSwan, beetle-wswan */
-    { ".wsc", "mednafen_wswan_libretro.so" }, /* WonderSwan Color         */
-    { ".ngp", "race_libretro.so"       },  /* Neo Geo Pocket, libretro/RACE */
-    { ".ngc", "race_libretro.so"       },  /* Neo Geo Pocket Color        */
-    { ".a26", "stella2014_libretro.so" },  /* Atari 2600, stella2014      */
-    { ".col", "gearcoleco_libretro.so" },  /* ColecoVision, drhelius/Gearcoleco */
-    { ".int", "freeintv_libretro.so"   },  /* Intellivision, libretro/FreeIntv */
+    { ".ws",  "mednafen_wswan_libretro.so", 0 }, /* WonderSwan, beetle-wswan */
+    { ".wsc", "mednafen_wswan_libretro.so", 0 }, /* WonderSwan Color         */
+    { ".ngp", "race_libretro.so", 0 },  /* Neo Geo Pocket, libretro/RACE */
+    { ".ngc", "race_libretro.so", 0 },  /* Neo Geo Pocket Color        */
+    { ".a26", "stella2014_libretro.so", 0 },  /* Atari 2600, stella2014      */
+    { ".col", "gearcoleco_libretro.so", 0 },  /* ColecoVision, drhelius/Gearcoleco */
+    { ".int", "freeintv_libretro.so", 0 },  /* Intellivision, libretro/FreeIntv */
     /* The second family after WonderSwan and Neo Geo Pocket where one .so
        covers two systems, and the first where the two are not a mono/colour
        pair: a Master System and a Game Gear are the same VDP behind a
@@ -212,8 +222,8 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        deliberately absent: nobody's collection here has them, and an
        extension the browser lists but nobody has loaded is an untested
        claim. */
-    { ".sms", "genesis_plus_gx_libretro.so" }, /* Master System, GPGX     */
-    { ".gg",  "genesis_plus_gx_libretro.so" }, /* Game Gear, same core    */
+    { ".sms", "genesis_plus_gx_libretro.so", 0 }, /* Master System, GPGX     */
+    { ".gg",  "genesis_plus_gx_libretro.so", 0 }, /* Game Gear, same core    */
     /* MEGA DRIVE, and it is the SAME .so as the two rows above -- Genesis
        Plus GX is natively a Mega Drive core and always was; the comment
        above used to say the Mega Drive list was "deliberately absent"
@@ -240,7 +250,7 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        rule a reader can hold in their head: one system, one extension.
        roms/README.txt says so on the device, which is where somebody
        wondering why a file is missing will actually look. */
-    { ".md",  "genesis_plus_gx_libretro.so" }, /* Mega Drive, same core   */
+    { ".md",  "genesis_plus_gx_libretro.so", 0 }, /* Mega Drive, same core   */
     /* SNES, and the interesting part is that the v1 design spec ruled this
        system OUT on CPU grounds. That judgement was re-tested rather than
        inherited -- see scripts/build-snes-core.sh for the three-core
@@ -256,8 +266,8 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        Case-insensitivity is load-bearing again and not hypothetically: the
        author's SNES directory holds 47 files ending .smc and 11 ending
        .SMC, side by side, on top of the device's FAT32. */
-    { ".sfc", "snes9x2005_libretro.so" },   /* SNES, libretro/snes9x2005  */
-    { ".smc", "snes9x2005_libretro.so" },   /* SNES, copier-header dump   */
+    { ".sfc", "snes9x2005_libretro.so", 3 },   /* SNES -- see `ceiling` above */
+    { ".smc", "snes9x2005_libretro.so", 3 },   /* SNES, copier-header dump   */
     /* PC ENGINE / TurboGrafx-16, CARTRIDGE ONLY. The core advertises
        `pce|sgx|cue|ccd|chd|toc|m3u` and exactly one is claimed.
        .sgx (SuperGrafx, 7 files in the author's collection) is refused
@@ -267,7 +277,7 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        treats as worse than absence. .chd and the other CD extensions (48
        titles) need a system-card BIOS that is not ours to ship. Both
        exclusions are argued at length in scripts/build-pce-core.sh. */
-    { ".pce", "mednafen_pce_fast_libretro.so" }, /* PC Engine, beetle-pce-fast */
+    { ".pce", "mednafen_pce_fast_libretro.so", 0 }, /* PC Engine, beetle-pce-fast */
     /* THE FIRST EXTENSION IN THIS TABLE THAT IS NOT A SYSTEM'S OWN, and the
        decision behind it is the interesting part of adding arcade.
        An arcade "ROM" is a ZIP of the individual EPROM dumps off one PCB,
@@ -300,7 +310,7 @@ static const struct { const char *ext; const char *core; } g_core_by_ext[] = {
        switches it off (see the script) and the shipped core physically
        cannot open one. .cue/.ccd are Neo Geo CD, which is outside this
        batch's pre-1990 scope and wants a BIOS besides. */
-    { ".zip", "fbneo_libretro.so"          }, /* arcade, FinalBurn Neo    */
+    { ".zip", "fbneo_libretro.so", 0 }, /* arcade, FinalBurn Neo    */
 };
 
 const char *config_core_for_rom(const char *rom_path)
@@ -315,6 +325,17 @@ const char *config_core_for_rom(const char *rom_path)
         if (ends_with_ext(rom_path, g_core_by_ext[i].ext))
             return g_core_by_ext[i].core;
     return "gambatte_libretro.so";
+}
+
+/* The scale ceiling for this ROM's system, or 0 for none. Same table and the
+   same lookup as config_core_for_rom, so a system's core and its ceiling
+   cannot drift apart. */
+int config_scale_ceiling_for_rom(const char *rom_path)
+{
+    for (size_t i = 0; i < sizeof g_core_by_ext / sizeof g_core_by_ext[0]; i++)
+        if (ends_with_ext(rom_path, g_core_by_ext[i].ext))
+            return g_core_by_ext[i].ceiling;
+    return 0;
 }
 
 size_t config_min_rom_bytes(const char *rom_path)
@@ -1094,6 +1115,11 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     int want = (c->scale_explicit || is_game_boy) ? c->scale : 0;
     int s = want > 0 ? want : max_fit;
     if (s > max_fit) s = max_fit;        /* configured scale does not fit */
+    /* The per-system ceiling applies to an AUTO-fitted scale only: an
+       explicit `scale =` is the owner overriding a default, and a default is
+       all this is. See `ceiling` on g_core_by_ext for the measurement. */
+    if (!c->scale_explicit && c->scale_ceiling > 0 && s > c->scale_ceiling)
+        s = c->scale_ceiling;
 
     /* Two reservations, not one. KOBOY_CHROME_MARGIN keeps the bezel inside the
        buffer; ctrl_top keeps the game rect off the CONTROLS. Reserving only the

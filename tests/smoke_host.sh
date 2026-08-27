@@ -796,6 +796,39 @@ echo "$out" | grep "geometry settled" | grep -q "game 800x720" \
     || { echo "FAIL: the max-only re-fit moved the rect; that is a different case"; exit 1; }
 echo "ok: a max-only change re-fits without moving the rect"
 
+
+# THE PER-SYSTEM SCALE CEILING, end to end.
+#
+# Sizing the rect from the frame a core really draws quadrupled SNES's picture
+# and, MEASURED on the device, cost its heaviest titles real speed: Star Fox
+# 93%->67%, Kirby Super Star 96%->78%. At scale 3 the picture is still 2.25x
+# the old one and everything measured is back above 95%, so .sfc/.smc carry a
+# ceiling of 3 while every other system auto-fits.
+#
+# Asserted with the SAME geometry on both runs and only the extension
+# differing, which is the only way to show the ceiling is doing the work
+# rather than the geometry: 256x224 auto-fits to scale 4 (1024x896), and the
+# ceiling takes .sfc to scale 3 (768x672). A test that let the geometry differ
+# too would pass with the ceiling deleted.
+d_sc=$(mktemp -d)
+cp build/stub_core.so "$d_sc/"
+head -c 32768 /dev/zero > "$d_sc/GAME.sfc"
+head -c 32768 /dev/zero > "$d_sc/GAME.gb"
+out=$(KOBOY_STUB_GEOM=256x224 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core "$d_sc/stub_core.so" --rom "$d_sc/GAME.sfc" \
+        --panel 1264x1680 --frames 2 2>&1) || { echo "FAIL: .sfc ceiling run"; rm -rf "$d_sc"; exit 1; }
+echo "$out" | grep -q "game 768x672" || {
+    echo "FAIL: a .sfc did not take the scale-3 ceiling"
+    echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sc"; exit 1; }
+out=$(KOBOY_STUB_GEOM=256x224 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core "$d_sc/stub_core.so" --rom "$d_sc/GAME.gb" \
+        --panel 1264x1680 --frames 2 2>&1) || { echo "FAIL: .gb ceiling run"; rm -rf "$d_sc"; exit 1; }
+echo "$out" | grep -q "game 1024x896" || {
+    echo "FAIL: a system with no ceiling stopped auto-fitting"
+    echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sc"; exit 1; }
+rm -rf "$d_sc"
+echo "ok: .sfc takes the scale-3 ceiling, an uncapped system still auto-fits"
+
 rm -rf "$d"
 
 # ------------------------------------------------- the greyscale mapping

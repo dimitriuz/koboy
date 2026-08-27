@@ -1,6 +1,7 @@
 #include "libretro_min.h"
 #include <string.h>
 #include <stdlib.h>
+#include <stdio.h>
 
 static retro_environment_t   env_cb;
 static retro_video_refresh_t video_cb;
@@ -246,6 +247,25 @@ void retro_deinit(void) {}
 void retro_get_system_info(struct retro_system_info *i)
 {
     memset(i, 0, sizeof *i);
+    /* KOBOY_STUB_GEOM=WxH, read BEFORE the fields below are filled in -- which
+       is the whole point, and the mistake the comment further down already
+       records somebody making with the aspect knob. Set after, it changes a
+       global nothing reads again and the run proves nothing.
+
+       It exists so a subprocess run can present a geometry other than the
+       Game Boy's: anything keyed on the SYSTEM rather than the core (the
+       per-system scale ceiling, for one) is untestable while the stub is
+       stuck at 160x144, because a .sfc and a .gb then resolve identically. */
+    {
+        const char *g = getenv("KOBOY_STUB_GEOM");
+        if (g && *g) {
+            int gw = 0, gh = 0;
+            if (sscanf(g, "%dx%d", &gw, &gh) == 2 && gw > 0 && gh > 0) {
+                stub_base_w = stub_max_w = gw;
+                stub_base_h = stub_max_h = gh;
+            }
+        }
+    }
     i->library_name = "stub"; i->library_version = "1";
     i->valid_extensions = "gb|gbc"; i->need_fullpath = false;
 }

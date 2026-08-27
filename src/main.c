@@ -1009,6 +1009,11 @@ int main(int argc, char **argv)
        chrome_controls_top counts the extra discs when there are any, and the
        profile is resolved against what that returns. */
     config_extra_buttons_for_rom(&cfg.layout, cfg.rom_path);
+    /* Set from the ROM, and OUTSIDE the core_explicit branch below on
+       purpose: a scale ceiling is a property of the system, not of which
+       core the owner pointed at it. Someone running a .sfc through their own
+       --core still wants the SNES ceiling. */
+    cfg.scale_ceiling = config_scale_ceiling_for_rom(cfg.rom_path);
 
     if (!cfg.core_explicit) {
         const char *want = config_core_for_rom(cfg.rom_path);
