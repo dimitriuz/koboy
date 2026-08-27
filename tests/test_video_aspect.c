@@ -82,6 +82,14 @@ TEST_MAIN({
     CHECK_EQ_INT(video_pixel_aspect(((uint32_t)606 << 16) / 748, 606, 748),
                  (int)KOBOY_ASPECT_ONE);                       /* Game & Watch */
     CHECK_EQ_INT(video_pixel_aspect(DAR(1.55556), 224, 144), (int)KOBOY_ASPECT_ONE);
+    /* THE GAME BOY ADVANCE. gpSP reports exactly 1.5 for a 240x160 frame and
+       240/160 IS 1.5, so this one needs no deadband and no substitution -- it
+       is the cleanest square-pixel case in the table. Asserted because the
+       claim "a GBA needs no aspect correction" is load-bearing for the
+       integer 4x its ceiling produces: an anisotropic par would drop the fit
+       a whole step, which is measured on this exact mechanism in
+       config_resolve_profile_par's comment. */
+    CHECK_EQ_INT(video_pixel_aspect(DAR(1.5), 240, 160), (int)KOBOY_ASPECT_ONE);
 
     /* THE DEADBAND, and the core it exists for. race reports 1.05 for a
        160x152 screen whose exact ratio is 1.0526 -- 0.25% off square. Without
