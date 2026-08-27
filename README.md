@@ -25,7 +25,8 @@ boards, on the e-ink screen you already own.
 **[More screenshots, grouped by system →](docs/SCREENSHOTS.md)**
 
 ---
-
+Most of the code was written by Claude, directed and reviewed by a professional software developer.
+---
 ## Systems
 
 | System | File extension | Emulator core | BIOS needed? |
