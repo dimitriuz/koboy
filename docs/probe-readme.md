@@ -54,6 +54,39 @@ The probe repeats the same caveat as `wfm_fast_ms_caveat=` right next to the
 number when this applies; `wfm_fast_submit_ms=` is unaffected and the more
 trustworthy figure on such a device.
 
+On the one device measured so far, `unreliable_wait_for=1` cost six of fifty
+sweep cells outright: they came back at almost exactly 5,000,000 us, which is
+the ioctl's own timeout and not a panel latency. **Discard any `*_block_us_*`
+value near 5000000 rather than averaging it in.** What survives is worth
+having -- the remaining cells fitted `fixed term + 15 to 22 ns/px` across a
+49x span in area, reproduced to 0.1% on a re-run, and the fixed terms landed
+on plausible whole numbers of ~11.8 ms panel frames. See Appendix E of the
+design spec.
+
+### `sustain_*` -- how fast the panel will ACCEPT work
+
+Alongside the blocking sweep, the probe submits updates to one region back to
+back with no wait at all and reports `sustain_<wfm>_<solid|checker>_<WxH>_`
+`period_us`, `submit_us` and `fill_us`. This exists because a pacing constant
+must not depend on the ioctl above.
+
+**Read `period_us` together with `fill_us` or not at all.** The loop period is
+`max(panel period, fill + submit)`, so a cell whose fill cost approaches its
+period is measuring the probe process rather than the panel.
+
+**On the reference device it measures the driver, not the panel, and that is
+itself the finding.** The theory was that the EPDC's descriptor pool would
+fill and submission would then block at the panel's rate. It never blocked: a
+new full-rect update was accepted every 6-13 ms against a ~153 ms completion.
+**There is no back-pressure below the application on this hardware** -- the
+driver takes work it cannot do and returns success. If a new device's
+`submit_us` rises to meet its blocking figure, that device DOES throttle, and
+that is worth a row in `TESTED.md` on its own.
+
+`solid` flips the region black/white (100% of pixels transitioning, the worst
+case); `checker` phase-shifts an 8 px checkerboard (about 50%, closer to what
+a dithered scroll asks for).
+
 ### `--takeover`
 
 ```sh
