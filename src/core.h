@@ -120,8 +120,10 @@ double   core_fps(const koboy_core *c);
 
 /* Quarter turns counter-clockwise the core has asked for, 0..3. Per GAME,
    not per core: FBNeo answers 3 for Galaga and 0 for Donkey Kong Jr. out of
-   the same .so, and core_unload_rom clears it so the next ROM through a
-   reused handle starts from none. The one caller that needs it is main.c,
+   the same .so, and core_unload_rom clears it so a ROM loaded through a
+   handle that has already had one starts from none. main.c no longer does
+   that -- every game gets a core opened for its own extension -- but the
+   clear is what makes the API safe for a caller that would. The one caller that needs it is main.c,
    which hands it to video_set_rotation -- video.c is where the turn actually
    happens. */
 unsigned core_rotation(const koboy_core *c);
@@ -143,8 +145,15 @@ unsigned core_rotation(const koboy_core *c);
 bool core_geometry_changed(koboy_core *c);
 
 /* Unloads the current game but keeps the shared object open and initialised,
-   so another ROM can be loaded through the same handle. dlclose/dlopen cycling
-   of a C++ core mid-session is avoidable, so it is avoided. */
+   so another ROM can be loaded through the same handle.
+
+   main.c does NOT use it that way any more, and the reason is worth the two
+   lines: sharing one handle across games meant sharing everything ELSE
+   derived from the first ROM's extension too -- the layout, the buttons, the
+   ceiling, the .srm path -- and a Mega Drive ROM reaching the Game Boy
+   Advance core through it killed a device. A switch closes the core and
+   opens the one the new extension asks for. core_close calls this on the way
+   out, which is the only path that reaches it today. */
 bool core_unload_rom(koboy_core *c);
 
 /* retro_reset. */

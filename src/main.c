@@ -943,39 +943,79 @@ int main(int argc, char **argv)
     const koboy_input_state *ui_scr = ui_script_n > 0 ? ui_script : NULL;
     int *ui_scr_i = ui_script_n > 0 ? &script_i : NULL;
 
-    /* Captured before the loop below can change `mode`: only a run that
-       actually went through a UI screen painted over the faceplate, and only
-       such a run needs it redrawn afterward. The --rom/rom= fast path skips
-       this whole loop (mode is already MODE_PLAY) and must not pay for a
-       redraw of chrome nothing has touched. */
-    bool used_startup_ui = (mode == MODE_MAIN);
+    /* ------------------------------------------------------- the session loop
+       ONE GAME IS ONE SESSION: pick a ROM, derive everything from it, open a
+       core, play, tear all of it down. Two different things send execution
+       round again, and it is the same trip for both.
 
-    /* Where the load lands when it fails, and the reason this is a loop at
-       all. A ROM chosen from RECENT or the browser that does not load is an
-       ORDINARY condition -- the file was deleted between the scan and the
-       tap, an SD card is not mounted, a partial copy is short, a core is
-       missing, the core simply refuses it -- and it used to end the process.
-       On the device that is indistinguishable from a crash: koboy vanishes
-       and Nickel comes back, with whatever the user was doing gone. Reported
-       twice from the device, both times from RECENT.
+       A FAILED LOAD. A ROM chosen from RECENT or the browser that does not
+       load is an ORDINARY condition -- the file was deleted between the scan
+       and the tap, an SD card is not mounted, a partial copy is short, a core
+       is missing, the core simply refuses it -- and it used to end the
+       process. On the device that is indistinguishable from a crash: koboy
+       vanishes and Nickel comes back, with whatever the user was doing gone.
+       Reported twice from the device, both times from RECENT.
 
-       So a failed load goes BACK TO THE MAIN MENU rather than out. Back to
-       the main menu specifically, and not to the exact list the ROM came
-       from: this is the loop's own top, so it costs no new state and no new
-       mode, both lists are one tap away, and the RECENT list in particular
-       must be rebuilt from disk anyway (recent_load/prune below) rather than
-       resumed. Do not add a mode for this.
+       A MID-SESSION SWITCH. MENU -> CHOOSE ROM used to call load_rom_into on
+       the LIVE core -- the one opened at startup for the FIRST ROM's
+       extension -- and that killed a device: a Mega Drive .md handed to gpSP,
+       which executed it as ARM code and took SIGSEGV ("bad jump 8000000", no
+       second "koboy: core" line in the log because no second core was ever
+       opened). Everything derived from the extension was equally stale, not
+       just the core: layout, extra buttons, scale ceiling, the save binding.
+       The comment that used to sit above that call reasoned only about
+       geometry and dated from when koboy was one core per session; fifteen
+       systems made it wrong and nobody revisited it. So CHOOSE ROM now ends
+       the session and comes back here, where all of that is derived from
+       scratch.
 
-       The whole per-ROM setup is inside the loop because ALL of it depends on
-       which ROM was chosen: the faceplate, the button complement, the scale
-       ceiling and the core itself are all derived from the extension, so a
-       second trip round must redo them or the second ROM would be dressed as
-       the first.
+       UNCONDITIONALLY, with no same-core fast path. Switching games is not a
+       hot operation -- it is a human tapping through three screens -- and
+       "reload into the live core when the extension happens to match" is a
+       second code path that only the rarest case exercises, which is exactly
+       how the bug above survived. Reopening the same .so for a second Game
+       Boy ROM costs one dlopen.
+
+       Back to the MAIN MENU, not to the exact list the ROM came from: this
+       is the loop's own top, so it costs no new state and no new mode, both
+       lists are one tap away, and the RECENT list in particular must be
+       rebuilt from disk anyway (recent_load/prune below) rather than resumed.
+       Do not add a mode for this.
 
        A run that did NOT come through the startup UI (--rom, or rom= in the
        ini) still dies on a failed load -- see the branches below. There is no
        list to go back to, and "koboy --rom nonsense.gb" exiting 0 would be a
-       lie to whatever launched it. used_startup_ui is what tells them apart. */
+       lie to whatever launched it. used_startup_ui is what tells them apart.
+
+       ITS BODY IS DELIBERATELY NOT RE-INDENTED. Everything down to the
+       matching brace (marked "end of the session loop") is the same code at
+       the same indentation it has always had; re-indenting four hundred lines
+       to add one enclosing loop would bury the behaviour change in a diff
+       nobody can read. */
+
+    /* THE RUN'S counters, not the session's: they live out here so a run that
+       plays three games reports one total rather than three summaries, which
+       is what `presented=` has always meant and what the smoke tests grep
+       for. `stats` is cumulative for the same reason it always was across a
+       mid-session switch -- nothing reset it before either. */
+    koboy_stats stats;
+    stats_reset(&stats);
+    unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
+    unsigned long rects_emitted = 0;
+    uint64_t last_sram_us = 0, last_cleanup_us = 0;
+    /* --frames N is a budget for the RUN. Each session gets its own pacer
+       (a new core reports its own frame rate), and pacer_init zeroes
+       p->frames, so a switch would otherwise hand the second game a fresh
+       budget of N. The pacer keeps counting this session; frames_done holds
+       what the finished ones spent. */
+    unsigned long frames_done = 0;
+    /* Whether anything has been PLAYED yet, which is what decides how a
+       "nothing chosen" exit behaves: at startup there is no run to report on
+       and koboy exits straight out (0, or 4 for a script that selected
+       nothing); once a game has run, the same choice has to fall through to
+       the run's summary instead of throwing it away. */
+    bool any_game_ran = false;
+
     char err[512];
     koboy_core *core = NULL;
     /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
@@ -986,12 +1026,16 @@ int main(int argc, char **argv)
        Spell out every field so both toolchains agree it is zeroed. */
     koboy_sram_binding sb = {{0}, NULL, 0, false};
 
-    /* ITS BODY IS DELIBERATELY NOT RE-INDENTED. Everything down to the
-       matching brace (marked "end of the retry loop") is the same code at the
-       same indentation it has always had; re-indenting two hundred lines to
-       add one enclosing loop would bury a five-line behaviour change in a
-       diff nobody can read. */
     for (;;) {
+
+    /* Captured before the picker below can change `mode`: only a session that
+       actually went through a UI screen painted over the faceplate, and only
+       such a session needs it redrawn afterward. The --rom/rom= fast path
+       skips the picker entirely (mode is already MODE_PLAY) and must not pay
+       for a redraw of chrome nothing has touched. Re-evaluated every session,
+       because the SECOND game always comes from the UI even when the first
+       one came from the command line. */
+    bool used_startup_ui = (mode == MODE_MAIN);
 
     while (mode == MODE_MAIN) {
         koboy_input *ui_in = input_create(&cfg, &prof);
@@ -1036,11 +1080,22 @@ int main(int argc, char **argv)
             if (br == BROWSE_ERR_DIR || br == BROWSE_ERR_EMPTY) {
                 /* Two distinct messages, deliberately: a wrong rom_dir and an
                    empty one are different mistakes, and this is the only
-                   diagnostic a user with no terminal gets. */
-                if (br == BROWSE_ERR_DIR)
-                    fatal("cannot read rom directory\n%s", cfg.rom_dir);
-                else
-                    fatal("no .gb, .gbc or .mgw files in\n%s", cfg.rom_dir);
+                   diagnostic a user with no terminal gets.
+
+                   Terminal only on the FIRST session. Once a game has run,
+                   an unreadable or empty rom_dir is a dead end in one list,
+                   not a reason to end the run -- RECENT is still there, and
+                   this is exactly what the mid-session picker did before it
+                   was folded into this one. notify()/fatal() picks the
+                   wording to match which of those two it is. */
+                const char *why = (br == BROWSE_ERR_DIR)
+                    ? "cannot read rom directory\n%s"
+                    : "no .gb, .gbc or .mgw files in\n%s";
+                if (any_game_ran) {
+                    notify(why, cfg.rom_dir);
+                    continue;                     /* back to the MAIN MENU */
+                }
+                fatal(why, cfg.rom_dir);
                 free(panel); pf->shutdown(pf->ctx); return 2;
             }
             if (br != BROWSE_PICKED) {
@@ -1050,6 +1105,7 @@ int main(int argc, char **argv)
                    interactively (only reachable via a signal/should_quit;
                    the ".." row goes UP a level, it does not leave the
                    browser) still exits 0. */
+                if (any_game_ran) goto session_end;
                 if (ui_script_n > 0) {
                     fatal("ui script selected nothing");
                     free(panel); pf->shutdown(pf->ctx); return 4;
@@ -1065,6 +1121,12 @@ int main(int argc, char **argv)
                verbs ran out before landing on anything). Every one of these
                is a deliberate or forced end with nothing to resume to. */
             input_destroy(ui_in);
+            /* A session already played: this is QUIT (or a signal) closing a
+               run that has numbers to report, so it joins the ordinary end
+               of the loop instead of throwing the summary away. That is what
+               the mid-session picker's `mode = MODE_QUIT` did, and koboy.log
+               would otherwise lose the only record of the session. */
+            if (any_game_ran) goto session_end;
             if (ui_script_n > 0) {
                 fatal("ui script selected nothing");
                 free(panel); pf->shutdown(pf->ctx); return 4;
@@ -1101,13 +1163,16 @@ int main(int argc, char **argv)
        explicit --core cannot make a Game Boy faceplate right for a Game &
        Watch unit whose buttons are drawn into its own artwork.
 
-       It has to happen BEFORE the config_resolve_profile call further down
-       (that is what reads it) and it is deliberately NOT re-derived at the
-       mid-session MENU -> CHOOSE ROM reload: that path reuses the SAME core
-       handle without re-picking one, so switching systems mid-session already
-       cannot work (gambatte would be handed a .mgw and reject it, and koboy
-       quits with the message). Re-deriving the layout there would dress up a
-       path that fails one step later as if it were supported. */
+       It has to happen BEFORE the config_resolve_profile call further down,
+       which is what reads it. It is re-derived on EVERY session, including a
+       mid-session switch, and the comment that used to stand here said the
+       opposite: that CHOOSE ROM reused one core handle, so switching systems
+       could not work anyway and re-deriving the layout would dress up a path
+       that failed one step later. That was true when koboy was one core per
+       session and it went on being read as true after fifteen systems made
+       it false -- the switch did not fail one step later, it handed a Mega
+       Drive ROM to gpSP and the device took SIGSEGV. Which is why the switch
+       now comes back through this loop, and why this line runs for it. */
     cfg.layout_mode = config_layout_for_rom(cfg.rom_path);
     /* And the button complement, from the same extension and for the same
        reasons -- see config.h. Must come before config_resolve_profile too:
@@ -1197,40 +1262,22 @@ int main(int argc, char **argv)
         continue;
     }
 
-    break;
-    }   /* end of the retry loop opened before the MAIN MENU */
-
-    /* Recorded HERE, once, for both entry points, and only now: "played"
-       means the game actually started. Recording at pick time (where this
-       used to live, twice) put a ROM that failed to load at the top of the
-       RECENT list -- the wall the user just hit, promoted to row 0 of the
-       screen they have to get past to try anything else. A row that fails is
-       left in the list, deliberately: see the note above the retry loop. */
-    if (used_startup_ui) {
-        koboy_recent rc;
-        recent_load(&rc, recents_file);
-        recent_touch(&rc, cfg.rom_path);
-        recent_save(&rc, recents_file);
-    }
-
-    if (used_startup_ui) {
-        /* Whichever screen led here (RECENT or ALL GAMES) painted over the
-           faceplate. Below the load rather than above it, since the load can
-           now send the user back to the menu: a faceplate drawn for a game
-           that never starts is a full-panel flash on the way to an error
-           message. */
-        redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
-    }
-
     /* --------------------------------------------- re-fit for real geometry */
-    /* `prof` above is still the Game-Boy-shaped placeholder. Re-resolve it
-       against what the just-loaded ROM's core actually reports, and only
-       redraw the faceplate (an extra full-panel refresh, so worth avoiding
-       when nothing changed) when that answer differs from the placeholder --
-       which for the Game Boy it never does, since base and max are both
-       always 160x144 and the placeholder above was seeded with the same
-       numbers. This is what keeps `bash tests/smoke_host.sh` and the video
-       goldens byte-identical for the one core wired up today. */
+    /* `prof` is still the shape of the PREVIOUS game -- the Game-Boy-shaped
+       placeholder on the first session, the outgoing game's real profile on
+       any later one. Re-resolve it against what the just-loaded ROM's core
+       actually reports, and only redraw the faceplate (an extra full-panel
+       refresh, so worth avoiding when nothing changed) when that answer
+       differs -- which for a second Game Boy ROM it never does, since base
+       and max are both always 160x144. This is what keeps
+       `bash tests/smoke_host.sh` and the video goldens byte-identical for the
+       one core wired up today.
+
+       Comparing against the OUTGOING game rather than against the placeholder
+       is not a shortcut: two ROMs of the same system need no re-fit and no
+       repaint, and two of different systems differ in geometry or in
+       layout_mode, which is the last term of the condition below. */
+    bool chrome_stale = used_startup_ui;
     {
         int rbw, rbh, rmw, rmh;
         /* The LAYOUT is part of what makes the placeholder profile stale, not
@@ -1250,11 +1297,30 @@ int main(int argc, char **argv)
             koboy_profile real_prof;
             if (!config_resolve_profile_par(&real_prof, &cfg, pw, ph,
                                             rbw, rbh, rmw, rmh, rpar)) {
-                fatal("panel %dx%d is too small for this core's %dx%d game rect",
-                     pw, ph, rmw, rmh);
+                /* A PER-ROM FAILURE, handled like every other one. This can
+                   only be discovered after the core is open and the ROM is
+                   loaded -- it is the core's own max geometry that does not
+                   fit -- so it lands here rather than beside the other
+                   refusals, but to the user it is the same event: this game
+                   did not start. Ending the run for it would be the same
+                   defect the loop exists to close, one screen later.
+
+                   snprintf'd first because load_failed_recoverable takes a
+                   ready-made reason, and this is the one caller whose reason
+                   is composed here rather than by core.c. */
+                char gerr[512];
+                snprintf(gerr, sizeof gerr,
+                         "panel %dx%d is too small for this core's %dx%d game "
+                         "rect. rom %.200s", pw, ph, rmw, rmh, cfg.rom_path);
                 core_close(core);
-                free(panel);
-                pf->shutdown(pf->ctx); return 1;
+                core = NULL;
+                sb.mem = NULL; sb.len = 0; sb.writeback = false;
+                if (!load_failed_recoverable(used_startup_ui, cfg.rom_path, gerr)) {
+                    free(panel);
+                    pf->shutdown(pf->ctx); return 1;
+                }
+                mode = MODE_MAIN;
+                continue;
             }
             prof = real_prof;
             prof_par = rpar;
@@ -1262,12 +1328,47 @@ int main(int argc, char **argv)
                 "game %dx%d at (%d,%d)\n", rbw, rbh, rmw, rmh,
                 layout_name(prof.layout_mode),
                 prof.game_w, prof.game_h, prof.game_x, prof.game_y);
-            /* The rect chrome/calibration/the menu were drawn against just
-               changed shape or position -- put the faceplate back before any
-               game pixel lands on the panel. */
-            redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+            chrome_stale = true;
         }
     }
+
+    /* ONE repaint, not two. The rect chrome was drawn against may have just
+       changed shape or position, and a UI screen may have painted over it --
+       both wanted the faceplate back, and doing them separately meant a
+       system switch drew the OUTGOING game's faceplate for one full-panel
+       refresh on its way to drawing the incoming one's. On e-ink that is a
+       visible flash of the wrong console. */
+    if (chrome_stale)
+        redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
+
+    /* Recorded HERE, once, for both entry points, and only now: "played"
+       means the game actually started -- it survived the load AND the re-fit
+       above, which is the last thing that can refuse it. Recording at pick
+       time (where this used to live, twice) put a ROM that failed at the top
+       of the RECENT list -- the wall the user just hit, promoted to row 0 of
+       the screen they have to get past to try anything else. A row that fails
+       is left in the list, deliberately: see the note above the session
+       loop. */
+    if (used_startup_ui) {
+        koboy_recent rc;
+        recent_load(&rc, recents_file);
+        recent_touch(&rc, cfg.rom_path);
+        recent_save(&rc, recents_file);
+    }
+    /* SECOND AND LATER SESSIONS ONLY -- any_game_ran is still describing the
+       PREVIOUS one here, which is exactly what makes this the switch line.
+       Without it koboy.log reads as one continuous run and the moment a
+       different game took over is invisible; with fifteen systems that was
+       also the only way to see which core a switch actually opened. It is
+       printed after the load AND the re-fit, so the line means the new game
+       started, not merely that it was picked -- tests/smoke_host.sh leans on
+       exactly that. */
+    if (any_game_ran) say("koboy: switched to %s\n", cfg.rom_path);
+
+    /* From here to the teardown at the bottom of the loop, this session owns
+       a loaded ROM: any later "nothing chosen" ends the RUN through its
+       summary rather than exiting out from under it. */
+    any_game_ran = true;
 
     /* ------------------------------------------------------- video, input */
     /* Logged, not merely applied. This is the setting that changes the most
@@ -1373,13 +1474,13 @@ int main(int argc, char **argv)
        only place the clamp inside pacer_set_divisor is observable. */
     say("koboy: present_divisor %d\n", pace.divisor);
 
-    koboy_stats stats;
-    stats_reset(&stats);
-
-    unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
-    unsigned long rects_emitted = 0;
-    uint64_t last_sram_us = pf->now_us(pf->ctx);
-    uint64_t last_cleanup_us = last_sram_us;
+    /* Re-anchored per session, not reset: both are wall-clock marks for
+       "how long since the last flush / cleanup", and a session that starts
+       after a minute in the menus must not immediately believe both are
+       overdue. The COUNTERS they gate live outside the loop, with the rest of
+       the run's numbers. */
+    last_sram_us = pf->now_us(pf->ctx);
+    last_cleanup_us = last_sram_us;
 
     /* mode != MODE_QUIT joins g_stop and should_quit() as a third way out: the
        in-game menu sets it (QUIT, or CHOOSE ROM leaving nothing loaded) from
@@ -1387,8 +1488,12 @@ int main(int argc, char **argv)
        flag is the signal handler's, set from outside any call frame, and
        reusing it for a menu-driven exit would make the final status line call
        a chosen QUIT "stopped by signal". */
-    while (mode != MODE_QUIT && !g_stop && !pf->should_quit(pf->ctx)) {
-        if (frame_limit && pace.frames >= frame_limit) break;
+    while (mode != MODE_QUIT && mode != MODE_MAIN &&
+           !g_stop && !pf->should_quit(pf->ctx)) {
+        /* frames_done + pace.frames, not pace.frames: --frames N is a budget
+           for the RUN, and each session gets a fresh pacer (see frames_done's
+           declaration). */
+        if (frame_limit && frames_done + pace.frames >= frame_limit) break;
 
         /* Poll EVERY core iteration (60Hz), not once per presented frame.
            Polling only on presentation would drop short presses and add up to
@@ -1530,181 +1635,25 @@ int main(int argc, char **argv)
             } else if (act == MENU_QUIT) {
                 mode = MODE_QUIT;
             } else if (act == MENU_CHOOSE_ROM) {
-                /* Flush BEFORE unload: retro_unload_game takes the buffer. */
-                if (sb.mem && sb.len && sb.writeback)
-                    sram_save(sb.path, sb.mem, sb.len);
-                core_unload_rom(core);
-                /* Cleared, not left stale: retro_unload_game takes the buffer,
-                   so sb.mem is dangling until a new load re-fetches it. If the
-                   picker below is cancelled or the next load fails, mode goes
-                   to MODE_QUIT and this run's final flush (after the loop)
-                   must see mem==NULL rather than dereference freed memory. */
-                sb.mem = NULL;
-                sb.len = 0;
+                /* ALL of it is torn down and rebuilt: this ends the session
+                   and the session loop picks the next ROM, opens a core for
+                   ITS extension, and derives the faceplate, the buttons, the
+                   ceiling and the save binding from it.
 
-                /* Points at the MAIN MENU, not straight at the browser --
-                   task 5's decision: this is the ONLY way a mid-session
-                   switch can reach RECENT, so "recently played" stays useful
-                   past the first pick of the session, not just at startup.
+                   What used to be here was a hundred lines of second picker
+                   that reloaded into the LIVE core, and it killed a device: a
+                   Mega Drive .md handed to gpSP faulted executing it as ARM
+                   code. The core was never the only stale thing -- it was
+                   simply the one that crashed. See the session loop's own
+                   comment.
 
-                   SCRIPTED, since the `menu` verb: the comment here used to
-                   say these screens could never be, because MODE_MENU had no
-                   --ui-script hook. It has one now -- run_menu one frame up
-                   is handed the same cursor -- and passing NULL below meant
-                   the script reached CHOOSE ROM and then died against a
-                   screen with nothing driving it. Everything from the menu
-                   down is one flat sequence of taps, exactly as it is at
-                   startup (run_list's script_i comment). */
-                bool picked = false;
-                while (!picked && !g_stop && !pf->should_quit(pf->ctx)) {
-                    int choice = run_main_menu(pf, in, panel, panel_stride,
-                                               pw, ph, ui_scr, ui_scr_i,
-                                               ui_script_n);
-                    if (choice == MAIN_RECENT) {
-                        koboy_recent rc;
-                        recent_load(&rc, recents_file);
-                        recent_prune_missing(&rc);
-                        int ri = run_recent_picker(pf, in, panel, panel_stride,
-                                                   pw, ph, &rc, ui_scr,
-                                                   ui_scr_i, ui_script_n);
-                        if (ri >= 0) {
-                            snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s",
-                                    recent_path(&rc, ri));
-                            picked = true;
-                        }
-                        /* else: BACK -- loop shows MAIN MENU again. */
-                    } else if (choice == MAIN_ALL_GAMES) {
-                        int br = run_browser(pf, in, panel, panel_stride, pw, ph,
-                                             cfg.rom_dir, cfg.rom_path,
-                                             sizeof cfg.rom_path,
-                                             ui_scr, ui_scr_i, ui_script_n);
-                        if (br == BROWSE_ERR_DIR) {
-                            /* Distinct from the empty case, matching the
-                               startup browser's two messages: romlist.h
-                               documents why they must stay distinguishable --
-                               "your rom_dir is wrong" and "you have no ROMs"
-                               are different diagnoses to a user with no
-                               terminal, and this is the only diagnostic they
-                               get. notify, not fatal: both of these ALREADY
-                               fell through to the MAIN MENU rather than
-                               ending the run, and only the name said
-                               otherwise. */
-                            notify("cannot read rom directory\n%s", cfg.rom_dir);
-                        } else if (br == BROWSE_ERR_EMPTY) {
-                            notify("no .gb, .gbc or .mgw files in\n%s", cfg.rom_dir);
-                        } else if (br == BROWSE_PICKED) {
-                            picked = true;
-                        }
-                        /* BROWSE_NONE: nothing chosen from ALL GAMES either
-                           -- loop back to MAIN MENU, same as BACK from
-                           RECENT above. */
-                    } else {
-                        /* MAIN_QUIT, or the while loop's own g_stop/
-                           should_quit -- either way there is nothing left to
-                           resume (the running game was already flushed and
-                           unloaded above), so this ends the session. */
-                        break;
-                    }
-                    if (!picked) continue;
-
-                    /* THE LOAD IS INSIDE THE PICKER LOOP, which is the whole
-                       of this path's half of the fix. It used to sit after
-                       the loop and set MODE_QUIT on failure -- and unlike the
-                       startup path, where the argument for quitting was at
-                       least "there is nowhere to go back to", here the MAIN
-                       MENU is literally the top of the loop this is written
-                       in. The previous game is gone (flushed and unloaded
-                       above, so CHOOSE ROM could have the core to itself), so
-                       there is no resuming it -- but choosing a DIFFERENT
-                       game is exactly what the user came here to do, and a
-                       stale RECENT row taking the whole session down is the
-                       reported bug, one screen deeper.
-
-                       One thing this path genuinely cannot do is switch
-                       SYSTEMS: it reuses the same core handle rather than
-                       re-picking one from the extension (see the layout
-                       comment at startup). So handing gambatte a .gba fails
-                       here, and now it fails by saying so and offering the
-                       list again instead of ending the session.
-
-                       This mid-session load deliberately does NOT re-query
-                       core_get_geometry, and that is not the gap it looks
-                       like. core_load_rom clears geom_dirty (core.c), the new
-                       ROM's first retro_run re-announces via
-                       SET_GEOMETRY/SET_SYSTEM_AV_INFO, and the per-frame
-                       core_geometry_changed() poll below re-fits prof, the
-                       faceplate and the video buffer. MEASURED, not assumed:
-                       three .mgw titles loaded back-to-back into ONE
-                       gw-libretro instance each re-announced (Parachute
-                       658x395, Mario Bros. 973x532, Donkey Kong Circus
-                       498x771 -- 2 env calls per load, every load). An
-                       earlier version of this comment named a multi-title
-                       Game & Watch core as the case that would need work
-                       here; that is exactly the case the poll already
-                       handles, so the warning pointed at the wrong thing.
-
-                       The residual gap is narrower and nothing in scope hits
-                       it: a core that varies geometry per ROM AND reports it
-                       only from retro_get_system_av_info at load time, never
-                       via either environment command. gambatte is fixed
-                       160x144, so it cannot. Such a core would need this path
-                       to redo the video_create/redraw_chrome dance the
-                       startup path does, or frames past the allocated max
-                       would be silently dropped by the bounds guard. */
-                    char lerr[512];
-                    if (!load_rom_into(core, &cfg, &sb, lerr, sizeof lerr)) {
-                        /* Always recoverable here, and not by judgement: the
-                           MAIN MENU is the next statement. The return value
-                           is discarded because it cannot be false. */
-                        (void)load_failed_recoverable(true, cfg.rom_path, lerr);
-                        /* sb is untouched by a failed load, so mem/len are
-                           still the NULL/0 set before the picker -- the final
-                           flush after the loop must not see a dangling
-                           pointer from the game that was unloaded. */
-                        picked = false;
-                        continue;
-                    }
-
-                    /* Logged, and it was not before: a mid-session switch
-                       left NOTHING in koboy.log, so the one question a
-                       device with no terminal cannot otherwise answer --
-                       which game is actually running now -- had no answer
-                       after the first one. Printed after the load, not at
-                       the pick, so the line means the game started;
-                       tests/smoke_host.sh uses exactly that distinction. */
-                    say("koboy: switched to %s\n", cfg.rom_path);
-
-                    /* Recorded only now, for the same reason as at startup:
-                       "played" means the game started, so a row that fails
-                       is not promoted to the top of the list the user has to
-                       walk past to try again. */
-                    {
-                        koboy_recent rc;
-                        recent_load(&rc, recents_file);
-                        recent_touch(&rc, cfg.rom_path);
-                        recent_save(&rc, recents_file);
-                    }
-
-                    if (sb.mem && sb.len &&
-                        !sram_load(sb.path, sb.mem, sb.len) &&
-                        access(sb.path, F_OK) == 0) {
-                        sb.writeback = false;
-                        notify("Save file unreadable.\nStarting fresh.\n"
-                               "Saving is OFF this run.");
-                    }
-                }
-                /* No "return to the game" option when nothing was picked:
-                   the running game was already flushed and unloaded above so
-                   CHOOSE ROM could have the core to itself, and by the time
-                   the flow above ends without a pick there is nothing left to
-                   resume. Quitting is the only coherent option: the
-                   alternative is a black or frozen screen with no
-                   explanation, which this project's own constraint calls
-                   "indistinguishable from a crash". A failed LOAD no longer
-                   arrives here at all -- it goes back round the picker -- so
-                   this is now only QUIT, backing all the way out, or a
-                   signal. */
-                if (!picked) mode = MODE_QUIT;
+                   No teardown here either. The flush-before-unload ordering
+                   that used to live in this branch is now the loop's single
+                   teardown, which every way out of a session goes through --
+                   QUIT, a signal, the frame limit and this. One copy cannot
+                   disagree with itself. */
+                mode = MODE_MAIN;
+                break;
             }
 
             /* Whatever happened, the panel is now showing a menu. */
@@ -2037,7 +1986,38 @@ sram_check:
         }
     }
 
+    /* ------------------------------------------------------ session teardown
+       EVERY way out of a session arrives here -- QUIT, a signal, should_quit,
+       the frame limit, and MENU -> CHOOSE ROM -- so there is exactly one copy
+       of this ordering and nothing can disagree with it.
+
+       THE ORDER IS THE WHOLE POINT, and two of the three steps are load-
+       bearing:
+
+         - The SRAM flush comes BEFORE core_close, because retro_unload_game
+           takes the buffer with it: sb.mem belongs to the core's cartridge
+           and is freed by the close. Flushing after would write freed memory
+           to the user's save file, or crash.
+         - sb is cleared right after, so a session that ends without ever
+           loading (a failed load coming round again) cannot leave a dangling
+           pointer for the NEXT trip's flush to find.
+         - video and input are built from `prof`, which the next session
+           re-resolves for its own core. Reusing them across a system switch
+           is how a Mega Drive frame would land in a buffer sized for a Game
+           Boy; destroying them here is what makes the rebuild above
+           unconditional rather than something to remember. */
     if (sb.mem && sb.len && sb.writeback) sram_save(sb.path, sb.mem, sb.len);
+    core_close(core);
+    core = NULL;
+    sb.mem = NULL; sb.len = 0; sb.writeback = false;
+    video_destroy(vid);
+    input_destroy(in);
+    frames_done += pace.frames;
+
+    if (mode != MODE_MAIN) break;
+    }   /* end of the session loop */
+
+session_end:
     say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
         "%lu large-area full refreshes, %lu rects emitted\n",
         g_stop ? "stopped by signal" : "stopped", presented, cleanups,
@@ -2060,9 +2040,9 @@ sram_check:
 #endif
     }
 
-    core_close(core);
-    video_destroy(vid);
-    input_destroy(in);
+    /* The core, the video pipeline and the input state were released by the
+       session teardown above -- every path to this label goes through it, or
+       (the "nothing chosen" gotos) never had them. */
     free(panel);
     pf->shutdown(pf->ctx);
     free(pf);

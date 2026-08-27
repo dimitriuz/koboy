@@ -511,11 +511,16 @@ bool core_unload_rom(koboy_core *c)
     /* Cleared with the game, not left stale: retro_unload_game takes the
        buffer this length described, and the next cartridge's is its own. */
     c->sram_len = 0;
-    /* Same reasoning, and it is not hypothetical: MENU -> CHOOSE ROM reuses
-       one open core handle for the next game, and FinalBurn Neo asks for a
-       rotation PER GAME. Leaving Galaga's quarter turn behind would present
-       the next board sideways -- and Donkey Kong Jr., which asks for none,
-       never sends a SET_ROTATION to correct it. */
+    /* Same reasoning: FinalBurn Neo asks for a rotation PER GAME, so leaving
+       Galaga's quarter turn behind would present the next board sideways --
+       and Donkey Kong Jr., which asks for none, never sends a SET_ROTATION to
+       correct it. This USED to be reachable through a live handle, because
+       MENU -> CHOOSE ROM loaded the next game into the core it already had.
+       It no longer does (that reuse is what handed a Mega Drive ROM to gpSP
+       and killed a device), so today the only caller is core_close and the
+       clear is belt and braces -- kept, because it is the unload's job to
+       leave nothing of this game behind, and a future caller that reloads
+       through one handle must not have to rediscover this. */
     c->rot = 0;
     return true;
 }

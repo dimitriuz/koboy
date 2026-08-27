@@ -1581,3 +1581,122 @@ grep -qa "BAD.sfc" "$sd/recent.dat" && {
     rm -rf "$rd" "$sd" "$s5"; exit 1; }
 rm -rf "$rd" "$sd" "$s5"
 echo "ok: MENU -> CHOOSE ROM survives a rom that cannot load"
+
+# ----------------------- MENU -> CHOOSE ROM ACROSS SYSTEMS, which is a crash
+# REPORTED FROM THE DEVICE: playing a GBA game, MENU -> CHOOSE ROM, picked a
+# Mega Drive game, koboy died to Nickel. The log had two "switched to" lines
+# and only ONE "koboy: core" line -- the .md was handed to gpSP, which
+# executed Mega Drive data as ARM code:
+#
+#     bad jump 8000000 (8000000)
+#     Segmentation fault
+#
+# The mid-session path reloaded into the core opened at STARTUP for the FIRST
+# ROM's extension. Everything else derived from the extension was equally
+# stale: the faceplate, the button complement, the scale ceiling and the
+# .srm binding. A switch now ends the session and re-enters the setup loop,
+# so all of it is derived again.
+#
+# THE ASSERTION IS THAT THE CORE CHANGED, not that the process lived. A koboy
+# that kept gpSP and happened not to crash on some other file would pass a
+# liveness check, and that is exactly the run this bug hid behind for a day.
+#
+# Same stand-in-core harness as the "core chosen by extension" block far
+# above -- a copy of the binary in its own directory with .so files named
+# what the resolver will ask for -- because the choice is only observable
+# end to end.
+d_sw="$(mktemp -d)"
+cp build/koboy        "$d_sw/koboy"
+cp build/stub_core.so "$d_sw/gambatte_libretro.so"
+cp build/stub_core.so "$d_sw/genesis_plus_gx_libretro.so"
+mkdir -p "$d_sw/roms" "$d_sw/save"
+printf '\0' > "$d_sw/roms/AAA.gb"
+head -c 32768 /dev/zero > "$d_sw/roms/ZZZ.md"
+sw_script="$(mktemp)"
+#   menu        -- open the in-game MENU on the Game Boy game
+#   tap 200 424 -- MENU row 5, CHOOSE ROM (row_h=64, centre 8+64+r*64+32)
+#   tap 200 168 -- MAIN MENU row 1, ALL GAMES
+#   tap 200 168 -- browser row 1, ZZZ.md (row 0 is AAA.gb; alphabetical)
+printf 'menu\ntap 200 424\ntap 200 168\ntap 200 168\n' > "$sw_script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d_sw/koboy" --rom "$d_sw/roms/AAA.gb" \
+        --rom-dir "$d_sw/roms" --save-dir "$d_sw/save" --ui-script "$sw_script" \
+        --panel 1264x1680 --frames 60 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: switching systems mid-session exited $rc (139 = the reported crash)"
+    echo "$out" | tail -20; rm -rf "$d_sw" "$sw_script"; exit 1; }
+echo "$out" | grep -q "switched to $d_sw/roms/ZZZ.md" || {
+    echo "FAIL: the run never switched to the .md"
+    echo "      (a tap that missed CHOOSE ROM leaves the game running and exits 0)"
+    echo "$out"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+# THE ONE THAT MATTERS. Two core lines, naming two different .so files. The
+# device's log had one, and that single missing line is the whole bug.
+ncore=$(echo "$out" | grep -c "^koboy: core /")
+[ "$ncore" -eq 2 ] || {
+    echo "FAIL: $ncore core lines, wanted 2 -- the second game did not get its own core"
+    echo "$out" | grep "koboy: core"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d_sw/gambatte_libretro.so" || {
+    echo "FAIL: the .gb did not open gambatte"
+    echo "$out" | grep "koboy: core"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d_sw/genesis_plus_gx_libretro.so" || {
+    echo "FAIL: the .md did not open the Mega Drive core -- THIS IS THE CRASH"
+    echo "$out" | grep "koboy: core"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+# ...and the core was not the only stale thing. The faceplate follows the
+# extension (DMG for the Game Boy, the LCD strip for the Mega Drive) and the
+# game rect is re-resolved for the new system.
+#
+# What is NOT asserted here, and is not claimed to be: that the video
+# pipeline and the input state were rebuilt. Both are now locals of the
+# session loop -- created after the re-fit, destroyed at the loop's bottom,
+# referenced nowhere else -- so there is no variable that could carry one
+# across a switch, and a mutant that reuses the video anyway produces
+# identical output on this harness (both stub cores report 160x144, so only
+# the LAYOUT differs and nothing gets dropped). Making it observable would
+# need two stub cores with different geometry in one process, which this
+# harness cannot express; asserting it by construction is the honest option.
+echo "$out" | grep -q "faceplate DMG" && echo "$out" | grep -q "faceplate LCD" || {
+    echo "FAIL: the faceplate did not follow the system across the switch"
+    echo "$out" | grep -i faceplate; rm -rf "$d_sw" "$sw_script"; exit 1; }
+echo "$out" | grep -q "LCD layout, game 480x432" || {
+    echo "FAIL: the game rect was not re-resolved for the second system"
+    echo "$out" | grep -i geometry; rm -rf "$d_sw" "$sw_script"; exit 1; }
+# ...and neither was the SAVE BINDING. Each game's SRAM must land in its own
+# .srm: a stale binding writes the Mega Drive's memory into AAA.srm and
+# ZZZ.srm never appears at all, which is a silently corrupted save rather
+# than a crash -- the half of this bug nobody would have reported.
+[ -f "$d_sw/save/AAA.srm" ] || {
+    echo "FAIL: the first game's save was not written"
+    ls -la "$d_sw/save"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+[ -f "$d_sw/save/ZZZ.srm" ] || {
+    echo "FAIL: the second game's save went somewhere else -- the .srm binding is stale"
+    ls -la "$d_sw/save"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+echo "$out" | grep -q '^presented=' || {
+    echo "FAIL: the switched-to game never reached the emulator loop"
+    echo "$out"; rm -rf "$d_sw" "$sw_script"; exit 1; }
+echo "ok: MENU -> CHOOSE ROM across systems opens the second system's core"
+
+# ...AND THE SAME QUESTION ASKED OF THE STARTUP RECENT LIST, because that is
+# where the owner will meet this next: the run above just put the .md into
+# their recent.dat, so their next launch offers it as row 0 of RECENT.
+#
+# The startup path derives the core from cfg.rom_path AFTER the pick, so it
+# was never capable of the mid-session bug -- but "probably fine" is what the
+# mid-session comment said too, so this asserts it instead. The list is the
+# one the run above wrote; row 0 is the .md because it was played last.
+sw_script2="$(mktemp)"
+printf 'tap 200 104\ntap 200 104\n' > "$sw_script2"   # MAIN MENU RECENT, row 0
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d_sw/koboy" \
+        --rom-dir "$d_sw/roms" --save-dir "$d_sw/save" --ui-script "$sw_script2" \
+        --panel 1264x1680 --frames 5 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: starting the .md from RECENT exited $rc"
+    echo "$out" | tail -20; rm -rf "$d_sw" "$sw_script" "$sw_script2"; exit 1; }
+echo "$out" | grep -q "chose $d_sw/roms/ZZZ.md (recent)" || {
+    echo "FAIL: RECENT row 0 was not the .md the switch just recorded"
+    echo "$out"; rm -rf "$d_sw" "$sw_script" "$sw_script2"; exit 1; }
+echo "$out" | grep -qx "koboy: core $d_sw/genesis_plus_gx_libretro.so" || {
+    echo "FAIL: a .md started from RECENT did not open the Mega Drive core"
+    echo "$out" | grep "koboy: core"; rm -rf "$d_sw" "$sw_script" "$sw_script2"; exit 1; }
+rm -rf "$d_sw" "$sw_script" "$sw_script2"
+echo "ok: a .md started from the startup RECENT list gets its own core too"
