@@ -735,7 +735,7 @@ that drives the core directly, and a harness running koboy's own
 | `retro_serialize_size` | non-zero on all 213 playable boards: 6 KB (Pooyan) to **145 MB** (DoDonPachi DaiFukkatsu) |
 | BIOS required | **no**, for the pre-1990 boards. Later hardware wants a BIOS ZIP beside the games in `roms/`, not in the koboy directory |
 | ARM closure | `libpthread`, `libm`, `libc`, `ld-linux-armhf` |
-| ARM size, stripped | **41 MB** -- ten times the rest of koboy, which is why it ships separately |
+| ARM size, stripped | **41 MB** -- more than twice the other thirteen cores put together. It shipped in its own archive until it was measured compressed: it deflates 67% to 13.6 MB, so it is in the main package now and deleting the `.so` is how an owner without a romset reclaims the space |
 | `timing.fps` | 60 on 150 boards, 59.x on 38, 58.x on 12, 55.x on 14, 54.x on 5, 50 on 2, **30 on 2** (Tapper, Popeye) |
 
 **THE MONITOR WAS ON ITS SIDE, and koboy had to learn to turn the picture.**

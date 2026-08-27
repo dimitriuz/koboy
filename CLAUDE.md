@@ -8,13 +8,17 @@ PokeMini (.min), beetle-wswan (.ws/.wsc), RACE (.ngp/.ngc), stella2014
 snes9x2005 (.sfc/.smc), beetle-pce-fast (.pce), FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
 panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
-**Arcade ships as its own archive.** `dist/fbneo_libretro.so` is 41 MB, ten
-times the whole rest of the project, so `make dist` deliberately does NOT
-carry it and `make fbneo-dist` builds `dist/koboy-fbneo-0.1.0.zip` separately.
-`tests/test_dist.sh` asserts the main package stays clean of it. Arcade is
-also the ONLY system whose core and content are version-locked: the romset
-must match FBNeo v1.0.0.03 (revision ae41c16e, 2025-07-24), which
-`scripts/build-fbneo-core.sh` pins by SHA and explains at length.
+**ONE ARCHIVE, and this reversed.** Arcade used to ship separately behind
+`make fbneo-dist`, on the grounds that 41 MB against the other cores' 18 was a
+tenfold blowup. Measured compressed, the core deflates 67% to 13.6 MB and the
+whole package is 18.6 MB, so the split cost more than it saved and the target
+is GONE (`core-fbneo` still rebuilds just that core). `tests/test_dist.sh`
+asserts the core IS in the package, with real bytes, under a 32 MB cap.
+Deleting `.adds/koboy/fbneo_libretro.so` is how an owner without a romset
+reclaims the space, and both generated READMEs say so by filename. Arcade is
+still the ONLY system whose core and content are version-locked: the romset
+must match FBNeo v1.0.0.03 (revision ae41c16e, 2025-07-24), pinned by SHA in
+`scripts/pins.txt` and explained at length in `scripts/build-fbneo-core.sh`.
 
 **Two of the fourteen systems need a BIOS, and it is the owner's to supply.**
 ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
@@ -45,8 +49,8 @@ bash scripts/verify-core.sh  # shipped dependency closure
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
 make kobo        # cross-compile koboy-arm + koboy-probe-arm  (PATH needed!)
 make dist        # -> dist/koboy-0.1.0.zip, everything under .adds/koboy/
-make fbneo-dist  # -> dist/koboy-fbneo-0.1.0.zip, the arcade core ALONE (41 MB)
 make probe-dist  # just the probe, without the emulator or the core
+core-fbneo       # rebuild the arcade core alone (it ships in `dist` now)
 ```
 
 `make kobo` needs the Linaro toolchain on `PATH` and it is **not** there by
@@ -69,6 +73,13 @@ default. See `docs/cross-compiling.md`.
   anchored whole-name comparison since Task 14 closed follow-up #10).
 - **glibc 2.19.** The device has no newer symbol. This is why the toolchain is
   pinned to Linaro 4.9-2014.09.
+- **Every upstream is PINNED to a commit in `scripts/pins.txt`**, and that is
+  the only place a revision is written down. The build scripts fetch through
+  `koboy_fetch_pinned` (`scripts/pins.sh`); none of them may `git clone`, and
+  CI asserts both halves of that. The pins are the builds TESTED.md's numbers
+  were measured against, so **moving one invalidates that file's rows for that
+  system** -- say so in TESTED.md when you do it. A pin that cannot be fetched
+  stops the build; do NOT "fix" that by cloning master.
 - **Never `#include <linux/input.h>` in portable code.** The project carries its
   own `koboy_ev {type,code,value}` mirror and its own keycode constants so the
   host build compiles anywhere.
@@ -294,6 +305,12 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
 | `docs/probe-readme.md` | Profiling a device nobody has tried. |
+| `README.md` | The PUBLIC readme, for someone who owns a Kobo and has never built anything. Not reference material -- if you need the core/extension table, this file has it. |
+| `BUILD.md` | Building from source for a stranger: host, toolchain, cores, packaging. Folds in `docs/cross-compiling.md` rather than duplicating it. |
+| `INTERNALS.md` | The architecture and the measured decisions, for someone reading the source. "What the hardware overruled" below, expanded for an audience that was not in the room. |
+| `LICENSES.md` | koboy is GPL-3 (`LICENSE`). Per-core terms, with pinned commits. **Three cores restrict commercial use** -- Genesis Plus GX, FBNeo, and snes9x2005, whose clause is 160 lines below an MIT grant. |
+| `scripts/pins.txt` | The upstream commit of every shipped dependency. |
+| `.github/workflows/` | `ci.yml` on push (host only, no toolchain); `release.yml` on a `v*` tag (cores as a matrix, cached per pinned SHA). |
 
 ## What the hardware overruled — do not re-derive these
 

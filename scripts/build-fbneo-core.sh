@@ -40,18 +40,31 @@
 # missing, so the subset would have to be written from scratch here and kept
 # in step with upstream by hand. The two things a subset buys are build time
 # and file size; the first is not a problem (a full build is 100 seconds wall
-# on a 16-thread host, 20 CPU-minutes) and the second is answered by shipping
-# the core in its own archive -- see `make fbneo-dist`. So: full build, every
-# board FBNeo has, and the boards outside this task's pre-1990 scope are a
-# bonus that costs nothing rather than a goal.
+# on a 16-thread host, 20 CPU-minutes) and the second turned out not to be a
+# problem either -- see the size note below. So: full build, every board FBNeo
+# has, and the boards outside this task's pre-1990 scope are a bonus that
+# costs nothing rather than a goal.
 #
-# THE CORE IS ~60 MB AND DOES NOT GO IN THE MAIN PACKAGE. dist/koboy-0.1.0.zip
-# is 4 MB with ten cores in it; this one core is more than ten times that on
-# its own, and most owners of a Kobo running koboy do not have an arcade
-# romset. `make fbneo-dist` builds dist/koboy-fbneo-$(VERSION).zip, which
-# unpacks into the same .adds/koboy/ and is installed beside the main archive
-# by anyone who wants arcade. tests/test_dist.sh asserts the main package
-# still does not contain it.
+# THE CORE IS 41 MB AND IT DOES GO IN THE MAIN PACKAGE -- which is a REVERSAL,
+# because for most of this project's life it did not. It shipped in its own
+# archive behind a `make fbneo-dist` target that no longer exists, on the
+# grounds that 41 MB against the other cores' 18 was a tenfold blowup on a
+# 4 MB download.
+#
+# What changed is that somebody measured the number that actually decides a
+# download. This core DEFLATES 67%, to 13.6 MB, because one arcade driver
+# table is much like the next -- so the whole package is 18.6 MB rather than
+# the 45+ the uncompressed figure implies. At that size a second archive, a
+# second README and a `.zip` row in the browser that failed to load until the
+# user found the other download all cost more than they saved.
+#
+# The size is now the OWNER'S choice instead of the packager's: deleting
+# .adds/koboy/fbneo_libretro.so reclaims 41 MB on the card and costs arcade
+# support and nothing else. The generated roms/README.txt and README-fbneo.txt
+# both say so by filename. tests/test_dist.sh asserts the core IS in the
+# package, that it has real bytes in it, and that the package stays under a
+# 32 MB cap -- which exists so the NEXT large core is a decision somebody
+# makes rather than a download that quietly doubles.
 #
 # gnu++98, WHICH IS WHY THIS CORE IS BUILDABLE HERE AT ALL. FBNeo's Makefile
 # pins -std=gnu++98 itself (Makefile.common), so unlike `libretro/stella` --
