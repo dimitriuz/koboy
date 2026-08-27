@@ -999,3 +999,102 @@ Section 8 listed "no touchscreen found" among the fatal paths. It is instead a
 warning: a device with working hardware buttons is usable, and refusing to start
 would be worse than running degraded. `dlopen` failure and an unreadable ROM do
 remain fatal, and render on the panel.
+
+---
+
+## Appendix E — The panel's refresh cost, measured without the wait ioctl (2026-08-27)
+
+Kobo Libra 2, same device and firmware. Taken to answer one question that had
+never had an answer: **how long does an update of a given area actually take
+to settle**, which is the constant area-aware present pacing needs.
+
+### Why a new instrument was needed
+
+Every timing in Appendix A and B that could answer it is a *blocking*
+measurement through `MXCFB_WAIT_FOR_UPDATE_COMPLETE`, and Appendix B records
+that this device reports `unreliable_wait_for=1` — that exact ioctl. This
+session confirmed it directly: two of the twenty-five sweep cells returned
+almost exactly 5,000,000 µs, which is the wait's own timeout and not a panel
+latency (A2 at 800x720 and 160x144 in run 1; four more cells in run 2).
+
+So `koboy-probe` gained a **sustained** section that never waits: submit
+updates to one region back to back and time the interval between iterations,
+on the theory that the EPDC's descriptor pool would fill and submission would
+then block at the panel's rate.
+
+**That theory is wrong, and the negative result is the most useful thing this
+session measured.** The driver never blocked. It accepted a new full-rect
+update every 6–13 ms — `submit_us` medians of 3.2–8.8 ms at 800x720 and
+1120x1008, with the loop's own framebuffer fill accounting for the rest — while
+the same region needs ~153 ms to complete. **There is no back-pressure anywhere
+below koboy.** The driver takes work it cannot do and says nothing, which is
+precisely why over-driving the panel was invisible from inside the process and
+why the fix has to live in koboy's own pacing.
+
+### The numbers that did survive
+
+The blocking sweep's *non-timeout* cells are internally consistent and
+reproduce, so they are usable with the timeouts discarded. Least-squares
+affine fit over the five region sizes (23,040 → 1,128,960 px, a 49x span):
+
+| waveform | fixed term | area term | at 800x720 (576,000 px) |
+|---|---|---|---|
+| **DU4** | 15.1 ms | 14.97 ns/px | **24.1 ms** |
+| A2 | 96.4 ms | 17.17 ns/px | 106.3 ms |
+| **DU** | 144.4 ms | 15.76 ns/px | **153.5 ms** |
+| GC16 | 357.7 ms | 22.50 ns/px | 370.6 ms |
+
+Three things make this more than a table of numbers:
+
+1. **The area term is the same for every waveform** (15–22 ns/px). That is the
+   controller's per-pixel processing, and it is small: over a 49x area span DU
+   moves only 145.1 → 162.3 ms. **Refresh duration on this panel is ~94%
+   fixed.** Appendix A's "DU4 scales with area (~19 ms fixed + area term)" is
+   reproduced almost exactly at 15.1 ms + area, eighteen months of sessions
+   apart and on a different instrument.
+2. **The fixed term is the waveform's, and lands on plausible panel-frame
+   counts.** At an ~11.8 ms panel frame: DU4 ≈ 1.3 frames, A2 ≈ 8, DU ≈ 12,
+   GC16 ≈ 30. Nothing forced that; it fell out of the fit.
+3. **It reproduces.** A second run thirty seconds later gave 145.05 → 145.15,
+   148.51 → 148.52, 153.47 → 153.52 ms. Appendix B's warning about a 2.2x
+   spread stands *between instruments*; within this one the figures are stable
+   to 0.1%.
+
+### AUTO is DU, on the content koboy now sends
+
+AUTO measured 145.2 / 153.0 / 162.5 ms at 160x144 / 800x720 / 1120x1008 —
+matching DU to within 0.5 ms at all three. The sweep's fill is a solid
+black/white flip, i.e. exactly the two-valued content `force_dither` produces.
+**So on 1-bit content the EPDC's AUTO picks DU.**
+
+That closes two open ends at once. `docs/FOLLOWUPS.md` #97 asked for DU's first
+timing number on any panel: it is 144.4 ms fixed, and FBInk's ~260 ms header
+guess is high by a factor of 1.8 — the folklore was wrong again, but in the
+opposite direction this time, since DU is still slower than A2 rather than
+faster. And #96(a) asked the owner to judge `1-BIT / AUTO` against
+`1-BIT / DU`; they reported the two indistinguishable, which this explains
+rather than merely corroborates. **The MOTION ladder's third rung selects the
+waveform its second rung was already getting.**
+
+It also prices the 1-bit fix. Four-level content could use DU4 at 24.1 ms.
+Two-level content gets clean transitions — the smearing fix the owner
+confirmed — and pays 153.5 ms for them, **6.4x**. The scroll flashing is that
+bill arriving.
+
+### Cross-check against the panel doing the real job
+
+The owner reported, by eye and independently of any of this, that
+`present_divisor = 4` (67 ms between presents) visibly flashes on a scroll and
+`present_divisor = 8` (134 ms) "flashes much less". A full-rect settle of
+153 ms sits just above that bracket, which is the exact shape of *"8 helped a
+lot and did not finish the job"*. The synthetic measurement and the hand
+judgement agree.
+
+### What this does not say
+
+The sweep fills a region with a solid flip: 100% of pixels transitioning, the
+worst case. The probe also measures a phase-shifted 8 px checkerboard (~50% of
+pixels changing) but only through the sustained path, which — per the negative
+result above — measures submission and not completion. **How much cheaper a
+half-transitioning region is has not been measured**, and the pacing model
+assumes it is not cheaper at all.

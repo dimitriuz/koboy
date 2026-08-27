@@ -1067,14 +1067,84 @@ The cost of that manual fix is 7.5 fps EVERYWHERE --- menus, static screens,
 and the Game & Watch titles that never scroll at all. That is what
 area-aware pacing exists to avoid.
 
-**Still unknown:** DU has never been TIMED on any panel (`FOLLOWUPS` #96);
-"identical to AUTO" and "arrives too rarely to play against" are different
-findings and this result does not separate them. `koboy-probe --coexist` measures it with
-Nickel up.
+~~**Still unknown:** DU has never been TIMED on any panel~~ --- **MEASURED
+2026-08-27, and it explains the "indistinguishable" verdict rather than merely
+corroborating it: on 1-bit content AUTO *is* DU.** See the section below.
 
 **The Game Boy is the case with most to lose** and has not been judged: its
 four shades already ARE the panel's four levels, so it is the one system where
 4-level content asks the panel for nothing it cannot do.
+
+### The panel's refresh cost, measured at last --- 2026-08-27
+
+`koboy-probe --coexist` on the Libra 2, Nickel up, run twice thirty seconds
+apart. This is the first time this project has had a settle number for
+anything other than DU4, and it is what area-aware present pacing is built on.
+Full method, caveats and the negative result in Appendix E of
+`docs/superpowers/specs/2026-08-24-koboy-design.md`.
+
+Affine fit over five region sizes from 160x144 to 1120x1008 --- a 49x span in
+area:
+
+| waveform | fixed | per pixel | at the shipped 800x720 game rect |
+|---|---|---|---|
+| **DU4** | 15.1 ms | 15.0 ns | **24.1 ms** |
+| A2 | 96.4 ms | 17.2 ns | 106.3 ms |
+| **DU** | 144.4 ms | 15.8 ns | **153.5 ms** |
+| GC16 | 357.7 ms | 22.5 ns | 370.6 ms |
+| AUTO (on 1-bit content) | --- | --- | **153.0 ms**, i.e. DU |
+
+Four findings, in order of how much they change:
+
+1. **Refresh duration is ~94% FIXED in area.** DU moves only 145.1 -> 162.3 ms
+   across a 49x area span. The per-pixel term is the same for every waveform
+   (15-22 ns), because it is the controller's pixel processing rather than
+   anything about the waveform. Dirty rectangles still pay --- the area term is
+   real and a smaller rect leaves less of the picture in flight --- but a small
+   update is not a *fast* update, which is the opposite of what the design
+   assumed.
+2. **AUTO is DU on the content koboy now sends.** Identical to within 0.5 ms at
+   all three region sizes where AUTO gave a clean reading. So the MOTION
+   ladder's `1-BIT / DU` rung selects the waveform `1-BIT / AUTO` was already
+   getting --- exactly why the owner found the two indistinguishable, and
+   `docs/FOLLOWUPS.md` #97 closed.
+3. **It prices the 1-bit fix.** Four-level content could use DU4 at 24.1 ms.
+   Two-level content gets clean transitions and pays 153.5 ms, a factor of
+   **6.4**. The scroll flashing was that bill arriving.
+4. **There is no back-pressure below koboy.** The probe submitted a new
+   full-rect update every 6-13 ms without ever blocking, against a 153 ms
+   completion. The driver takes work it cannot do and says nothing, so
+   over-driving the panel is invisible from inside the process.
+
+**The synthetic number agrees with the hand judgement.** The owner's bracket
+--- divisor 4 (67 ms) visibly flashes, divisor 8 (134 ms) "flashes much less"
+--- puts a full-rect settle above 134 ms. The probe says 153 ms, which is the
+exact shape of "8 helped a lot and did not finish the job".
+
+Reproducibility, same parameters thirty seconds apart: 145.05 -> 145.15,
+148.51 -> 148.52, 153.47 -> 153.52 ms. Appendix B's 2.2x spread warning stands
+BETWEEN instruments; within this one the figures are stable to 0.1%. Six of
+fifty cells returned literal 5-second `MXCFB_WAIT_FOR_UPDATE_COMPLETE`
+timeouts and are discarded --- `unreliable_wait_for=1` on this device, exactly
+as Appendix B warned.
+
+### Area-aware present pacing --- SHIPPED, NOT YET JUDGED ON THE PANEL
+
+`settle_base_ms = 0`, `settle_full_ms = 150`: every presented frame is charged
+`base + full * dirty/whole` and the next present is held until it elapses.
+Everything about it is verified on the host --- the model, the hold, the
+clamps, and an end-to-end pair of runs spending the same 100 ms as a flat
+charge (205 frames held) and as an area charge (6 frames held).
+
+**ON THE DEVICE: not yet run.** The build cross-compiles and passes
+`verify-core.sh`; nothing of the pacing change has executed on the panel.
+
+**What no host can check is whether the flashing is gone.** That is the
+owner's, playing a scroller. Expect scrolling to present at about 6.6 fps
+instead of 7.4 and to look choppier and cleaner; expect everything that is not
+a large-area change --- menus, static screens, Game & Watch --- to be exactly
+as responsive as before, which is what separates this from `present_divisor
+= 8`.
 
 ### Second title, an action game (Darkwing Duck, MBC1)
 

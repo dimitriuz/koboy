@@ -57,7 +57,7 @@
    game rect under the waveform AUTO picks for 1-bit content takes 153.5 ms.
    The fit across five region sizes spanning 49x in area is 144.4 ms +
    15.8 ns/px, reproduced to 0.1% on a second run. See config/koboy.ini for
-   the table and Appendix D of the v1 design spec for the method.
+   the table and Appendix E of the v1 design spec for the method.
 
    SO WHY IS THE BASE 0 WHEN THE PANEL'S FIXED TERM IS 144 MS? Because this
    model does not predict how long an update takes -- it decides when starting

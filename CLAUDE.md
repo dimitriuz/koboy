@@ -36,7 +36,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 26 binaries, 5946 checks. Runs on x86_64.
+make test        # host suite: 26 binaries, 6002 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -133,6 +133,17 @@ src/safefile.c        temp-file/fsync/rename write + all-or-nothing read,
                       discipline; used by both now
 src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
+src/pacing.c          when the next frame reaches the panel. TWO gates, ANDed:
+                      present_divisor as a minimum GAP between presents (a
+                      gap and not `frames % divisor`, so a settle hold that
+                      expires off-lattice does not forfeit the rest of the
+                      stride), and an area-scaled settle HOLD that stops koboy
+                      starting a full-area update the panel has not finished.
+                      The gate advances in pacer_tick, NOT in pacer_presented:
+                      main.c takes an early exit on an unchanged frame, and a
+                      gate waiting on the presentation would run video_submit
+                      -- the 17 ms bottleneck -- every core frame on a static
+                      screen
 
 -- multi-system: koboy is no longer Game-Boy-only ------------------------
 Thirteen cores ship for FOURTEEN systems -- Genesis Plus GX answers for three
@@ -278,7 +289,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 76 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. #47 is CLOSED: `--ui-script` now has a `menu` verb and `MODE_MENU` is driven end to end, which makes #76 (save states, still never run on hardware) newly cheap. |
+| `docs/FOLLOWUPS.md` | 79 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. #47 and #97 are CLOSED (`--ui-script` gained a `menu` verb; DU has a timing number at last), and #98-#100 are what the area-pacing work left open. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -395,6 +406,41 @@ spec's appendices are the record; the short version:
   and centred at x=632 in BOTH -- same size, same place, only the detail
   changes. With `pixel_aspect = false` it jumps between 512x486 and 704x486
   every scene change. Verified by rendering both sides and looking.
+- **The panel's refresh duration is ~94% FIXED, not area-scaled, and the
+  fixed term belongs to the WAVEFORM.** Measured 2026-08-27 with
+  `koboy-probe --coexist` across five region sizes spanning 49x in area:
+  DU4 15.1 ms + 15.0 ns/px, A2 96.4 ms + 17.2, DU 144.4 ms + 15.8, GC16
+  357.7 ms + 22.5 -- so at the shipped 800x720 rect, 24.1 / 106.3 / 153.5 /
+  370.6 ms. The per-pixel term is the same for every waveform (it is the
+  controller's pixel processing) and it is small. This does NOT contradict
+  "refresh cost scales with area" below: dirty rects still pay, because the
+  area term is real and because a smaller rect leaves less of the picture in
+  flight. It does mean a small update is not a *fast* update. Reproduced to
+  0.1% on a second run; Appendix E has the method and why the wait ioctl had
+  to be avoided (`unreliable_wait_for=1` returned literal 5-second timeouts in
+  six of fifty cells).
+- **On 1-bit content, AUTO *is* DU** -- measured identical to within 0.5 ms at
+  three region sizes. So the MOTION ladder's `1-BIT / DU` rung selects the
+  waveform `1-BIT / AUTO` was already getting, which is why the owner found
+  them indistinguishable on the panel. It also prices the 1-bit fix: clean
+  two-level transitions cost 153.5 ms where four-level DU4 cost 24.1 ms, a
+  factor of 6.4. `docs/FOLLOWUPS.md` #97 (closed) and #98.
+- **Nothing below koboy applies back-pressure.** The probe submitted a new
+  full-rect update every 6-13 ms, without ever blocking, against a 153 ms
+  completion. The EPDC driver accepts work it cannot do and says nothing, so
+  over-driving the panel is invisible from inside the process -- which is why
+  `present_divisor` alone could ask for fifteen full-area updates a second and
+  nothing anywhere complained. Pacing has to be koboy's job.
+- **Presentation is paced by AREA, not by frame count.** `present_divisor`
+  alone paced a two-tile sprite move and a whole-screen scroll identically.
+  `settle_base_ms` / `settle_full_ms` charge each presented frame
+  `base + full * dirty/whole` and hold the next present until it elapses;
+  the divisor remains a ceiling. Note `settle_base_ms` ships at **0** although
+  the measured fixed term is 144 ms, and that is deliberate: the model decides
+  when the next update does VISIBLE harm, not how long the last one takes, and
+  charging 144 ms to everything pins the device to 6.5 fps on static screens
+  for no benefit anyone has reported seeing. See `src/koboy.h` and
+  `docs/FOLLOWUPS.md` #100.
 - **Four-level content is what smears; 1-bit content does not.** The panel's
   fast waveforms are TWO-LEVEL --- DU drives a changed pixel to black or
   white. Asking one for an intermediate grey at partial-refresh speed lands

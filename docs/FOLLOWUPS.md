@@ -1819,7 +1819,7 @@ subsumes it: under `force_dither` the sky is already only black and white
 cells, so its exact level stops deciding whether transitions are completable
 and starts deciding only how light the pattern reads.
 
-### 97. `waveform_fast = du` has no timing number on any panel
+### 97. `waveform_fast = du` has no timing number on any panel -- CLOSED
 
 Appendix A's waveform sweep (DU4 15.0 ms non-blocking, A2 135.8 ms blocking,
 GL16 310.8 ms) predates DU being an option, so the one waveform koboy can now
@@ -1834,3 +1834,74 @@ number costs one probe run with Nickel up. Do that before concluding anything
 from a play session: if DU turns out to cost 250 ms a refresh, a better-looking
 frame will arrive too rarely to play against, and that is a different verdict
 from "it does not help".
+
+**CLOSED 2026-08-27** by the area-pacing task's probe run. DU on the Libra 2 is
+**144.4 ms fixed + 15.8 ns/px**, i.e. **153.5 ms** at the shipped 800x720 game
+rect. FBInk's ~260 ms header guess is high by a factor of 1.8 -- so the
+folklore was wrong again, but not in the direction that would have made DU
+attractive: it is still slower than A2 (96.4 ms fixed) and 6.4x slower than
+DU4 (15.1 ms). The full table, the method, and why the wait ioctl had to be
+avoided are in Appendix E of `docs/superpowers/specs/2026-08-24-koboy-design.md`.
+
+The verdict the entry asked for is neither "it helps" nor "it does not help".
+**AUTO measured identical to DU to within 0.5 ms at three region sizes on
+1-bit content, so on the content koboy now sends, AUTO ALREADY IS DU.** The
+MOTION ladder's third rung selects the waveform its second rung was getting,
+which is exactly why the owner found the two indistinguishable (#96a). At
+153 ms a frame the answer to "does it arrive too rarely to play against" is
+"about 6.5 fps at best on full-area content", which is what the area-aware
+pacer now paces to deliberately instead of over-driving past.
+
+### 98. `waveform_fast = du` is now a rung that selects nothing new
+
+Follows directly from #97. `MENU -> MOTION` cycles `4 GREYS / AUTO` ->
+`1-BIT / AUTO` -> `1-BIT / DU`, and the last two are measurably the same
+waveform on the content the first of them produces. The owner judged them
+indistinguishable by eye before any of this was measured.
+
+Not removed in the area-pacing task because that task had no mandate to change
+the MOTION ladder and the 1-bit fix it guards is the one thing on this panel
+nobody wants to disturb. But the rung costs a menu press and a config key to
+express a difference that does not exist, and the ladder would read better as
+two rungs. The counter-argument is a real one: AUTO's choice is the driver's
+and could differ on a panel nobody has measured, so `du` is the only way to
+pin it. If it stays, its ini comment should say that is what it is for.
+
+### 99. Half-transitioning content has never been timed
+
+Appendix E's waveform table is measured with a solid black/white flip -- 100%
+of pixels transitioning, the worst case. Real content is not that: koboy's own
+dirty diff measured Galaga at 67% and Galaxian at 86% of the game rect per
+frame, and a dithered scroll changes about half its pixels rather than all of
+them.
+
+The probe DOES draw a phase-shifted checkerboard, but only through the
+sustained path -- which the same session proved measures submission and not
+completion, because the EPDC never applies back-pressure. So the checkerboard
+numbers say nothing about settle time and the area-pacing model assumes a
+half-transitioning region costs exactly what a fully-transitioning one does.
+
+If it is materially cheaper, `settle_full_ms` is over-charging real content and
+scrolling is choppier than it needs to be. Timing it needs a completion signal
+this device's `unreliable_wait_for=1` makes untrustworthy, so the honest way in
+is probably the same one that produced the sanity bracket: change the constant,
+play, and look.
+
+### 100. The settle model under-throttles mid-size updates by construction
+
+Appendix E measured refresh duration as ~94% FIXED in area (DU: 145.1 ms at
+160x144, 162.3 ms at 1120x1008). The pacing model is LINEAR in area, charging
+`settle_full_ms * dirty/whole`. Those two do not agree in the middle: a
+half-screen change is charged 75 ms and really takes about 149 ms.
+
+That is deliberate and the reasoning is in `src/koboy.h` -- charging the true
+fixed term to every update pins the device to 6.5 fps on static screens too,
+which is no better than `present_divisor = 8` and loses the responsiveness the
+owner currently has. But it means the fix is strongest exactly where the
+complaint was (full-area scrolls) and weakest in between.
+
+The lever is `settle_base_ms`, which ships at 0 and can go to 145. Nobody has
+looked at a half-screen scene change on the panel with it raised. If the owner
+reports flashing on scene transitions rather than on scrolls, that is this
+entry.
+
