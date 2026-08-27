@@ -236,20 +236,33 @@ static void recompute_lcd(koboy_input *in, uint16_t b)
         if (in->pad_active && s == in->pad_slot) continue; /* steering, not a button */
         int x = in->st.touch[s].x, y = in->st.touch[s].y;
 
-        /* The diamond. X on top and B on the bottom is not decoration: the
-           core's own overlay (START with no cursor active) draws a SNES pad
-           and labels the TOP button NORTHEAST, which is Mickey Mouse's `x`
-           binding. A user reading that overlay has to find the same button
-           here. */
+        /* The face buttons. WHERE they are is per system (chrome.h's
+           koboy_lcd_face) and WHICH BIT each reports is not: c.x_cx is always
+           the disc that sends KOBOY_BTN_X, whether that is the diamond's top
+           or the six-button grid's top-middle, so these four lines are
+           unchanged by the arrangement.
+
+           The two shoulder bits are the ones that MOVE: discs in the grid
+           (the Mega Drive's X and Z, which the console puts on its face) and
+           pills in the lower band under the diamond. Tested from the same
+           struct chrome.c drew from, so a drawn control and its live zone
+           cannot disagree about which of the two it is -- and the unused
+           form is inert twice over, since chrome_lcd_layout zeroes the pills
+           under ROWS6 and in_rect_xywh cannot match a zero-width rect. */
         uint16_t hit = 0;
         if (in_circle(x, y, c.x_cx, c.x_cy, c.face_r)) hit |= KOBOY_BTN_X;
         if (in_circle(x, y, c.y_cx, c.y_cy, c.face_r)) hit |= KOBOY_BTN_Y;
         if (in_circle(x, y, c.a_cx, c.a_cy, c.face_r)) hit |= KOBOY_BTN_A;
         if (in_circle(x, y, c.b_cx, c.b_cy, c.face_r)) hit |= KOBOY_BTN_B;
-        if (in_rect_xywh(x, y, &c.l1))     hit |= KOBOY_BTN_L1;
+        if (c.face_n == 6) {
+            if (in_circle(x, y, c.l1_cx, c.l1_cy, c.face_r)) hit |= KOBOY_BTN_L1;
+            if (in_circle(x, y, c.r1_cx, c.r1_cy, c.face_r)) hit |= KOBOY_BTN_R1;
+        } else {
+            if (in_rect_xywh(x, y, &c.l1)) hit |= KOBOY_BTN_L1;
+            if (in_rect_xywh(x, y, &c.r1)) hit |= KOBOY_BTN_R1;
+        }
         if (in_rect_xywh(x, y, &c.select)) hit |= KOBOY_BTN_SELECT;
         if (in_rect_xywh(x, y, &c.start))  hit |= KOBOY_BTN_START;
-        if (in_rect_xywh(x, y, &c.r1))     hit |= KOBOY_BTN_R1;
         if (hit) { b |= hit; continue; }        /* a drawn control wins the touch */
 
         /* Otherwise it may be a pointer press. Written as one condition

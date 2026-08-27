@@ -249,6 +249,14 @@ typedef struct {
        Guarded on this flag rather than on the layout, because "LCD" stopped
        meaning "Game & Watch". */
     bool     rect_from_max;
+    /* KOBOY_LAYOUT_LCD only: koboy_lcd_face, copied out of the config's
+       layout by config_resolve_profile. It rides in the profile because
+       chrome_lcd_layout takes ONLY a profile -- it is the one definition of
+       the strip's geometry that chrome.c draws from, input.c hit-tests from
+       and config.c reserves the rect clear of, and giving it a second
+       parameter would mean four call sites agreeing to pass the same value.
+       Zero is DIAMOND, so a hand-built profile draws what it always drew. */
+    int      lcd_face;
     bool     has_hw_buttons;
     uint32_t wfm_fast, wfm_gray, wfm_full;
 } koboy_profile;
@@ -289,10 +297,12 @@ typedef struct {
    changing this number. */
 #define KOBOY_MAX_EXTRA_BTNS 2
 
-/* WHAT THE LCD STRIP'S CONTROLS SAY, per system -- the labels only, never the
-   bits. Which bit a disc reports is fixed by the strip's own geometry
-   (chrome_lcd_layout, input.c's recompute_lcd) and is the SAME for every
-   system; what changes is the name the console prints on that button.
+/* WHAT THE LCD STRIP'S CONTROLS SAY AND WHERE THEY SIT, per system -- never
+   which bit they report. Which bit each control reports is fixed by the
+   strip's own geometry (chrome_lcd_layout, input.c's recompute_lcd) and is
+   the SAME for every system and every arrangement; what changes is the name
+   the console prints on that button, and how the console lays them out under
+   a thumb.
 
    This exists because the strip stopped being a Game & Watch's alone. It was
    built labelled X/Y/A/B/L1/R1 -- RETROPAD names -- and that is right for a
@@ -319,11 +329,41 @@ typedef struct {
    This file's convention is that a term which cannot vary is removed and
    replaced by the reason. SELECT does vary -- it is the Mega Drive's MODE --
    so it has one. */
+
+/* HOW THE STRIP ARRANGES ITS FACE BUTTONS, and it is per system for exactly
+   the reason the labels are: someone who has held the real pad already knows
+   where its buttons are, and an arrangement that disagrees makes them learn
+   an arbitrary map instead.
+
+   DIAMOND is four discs -- X top, Y left, A right, B bottom -- and it is
+   right for two of the three systems here for two different reasons. Game &
+   Watch: gw-libretro's own overlay DRAWS a SNES pad in that arrangement, so
+   it is what a player consulting the overlay is looking for. SNES: its real
+   pad IS that diamond.
+
+   ROWS6 is two rows of three, which is the six-button Mega Drive pad:
+
+       X  Y  Z        JOYPAD_L  JOYPAD_X  JOYPAD_R
+       A  B  C        JOYPAD_Y  JOYPAD_B  JOYPAD_A
+
+   That console has no shoulders at all, so in this arrangement the two
+   shoulder BITS are discs in the grid rather than pills, and the lower band
+   carries MODE and START alone. Drawing a shoulder pill for a bit that
+   already has a disc would be two controls under one name -- the same defect
+   as a mislabelled one. */
+typedef enum { KOBOY_LCD_FACE_DIAMOND = 0, KOBOY_LCD_FACE_ROWS6 } koboy_lcd_face;
+
 typedef struct {
-    char x[8], y[8], a[8], b[8];   /* the diamond: top, left, right, bottom */
-    char l1[8], r1[8];             /* the two shoulder pills */
+    /* koboy_lcd_face, held as an int for the same reason dpad_mode is: this
+       struct is memset to zero by its owners, and DIAMOND being the zero is
+       what makes an untouched layout draw the strip it always drew. */
+    int  face;
+    char x[8], y[8], a[8], b[8];   /* by the RETROPAD bit each disc reports */
+    char l1[8], r1[8];             /* the shoulder bits: pills under DIAMOND,
+                                      the grid's top-left and top-right discs
+                                      under ROWS6 */
     char select[8];
-} koboy_lcd_labels;
+} koboy_lcd_pad;
 
 /* Control geometry in permille of the panel, so one layout fits every device.
 
@@ -339,8 +379,8 @@ typedef struct {
     /* Used by the LCD faceplate only, and carried HERE rather than in a
        parallel struct because chrome_render and input.c are both already
        handed a koboy_layout and neither knows which faceplate it is about to
-       draw. The DMG branch ignores it; see koboy_lcd_labels. */
-    koboy_lcd_labels lcd;
+       draw. The DMG branch ignores it; see koboy_lcd_pad. */
+    koboy_lcd_pad lcd;
     int start_cx, start_cy, start_w, start_h;
     int select_cx, select_cy, select_w, select_h;
     int menu_cx, menu_cy, menu_w, menu_h;

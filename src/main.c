@@ -1029,7 +1029,7 @@ int main(int argc, char **argv)
        the ROM's extension decides. Order does not matter to the resolver --
        labels have no geometry -- but keeping the three together is what stops
        a fourth being added somewhere else. */
-    config_lcd_labels_for_rom(&cfg.layout, cfg.rom_path);
+    config_lcd_pad_for_rom(&cfg.layout, cfg.rom_path);
     /* Which geometry the LCD rect is sized from. MUST come before
        config_resolve_profile, which is what reads it, and it is a fact about
        the system exactly like layout_mode above. */

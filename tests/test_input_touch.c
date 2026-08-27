@@ -876,7 +876,7 @@ TEST_MAIN({
      *
      * The geometry below is not under test -- the block above already pins
      * every zone. What is under test is the AGREEMENT between the label
-     * config_lcd_labels_for_rom writes and the bit input.c reports at that
+     * config_lcd_pad_for_rom writes and the bit input.c reports at that
      * control, against the core's own descriptor table. Those two live in
      * different files and nothing else compares them: a label table with two
      * fields transposed draws a perfectly sensible strip and silently swaps
@@ -890,6 +890,7 @@ TEST_MAIN({
         static const struct {
             const char *rom;
             int bw, bh, mw, mh;              /* the core's base and max */
+            int face_n;                      /* 4 = diamond, 6 = two rows */
             /* WHAT THE CONSOLE CALLS IT, paired with the koboy bit that
                control reports. Read off the cores: Genesis Plus GX's port-0
                descriptors for the Mega Drive (JOYPAD_Y -> A, JOYPAD_B -> B,
@@ -898,11 +899,11 @@ TEST_MAIN({
                SNES. */
             struct { const char *label; uint16_t bit; } want[7];
         } sys[] = {
-            { "/roms/MegaDrive/Streets of Rage 2 (USA).md", 293, 224, 348, 240,
+            { "/roms/MegaDrive/Streets of Rage 2 (USA).md", 293, 224, 348, 240, 6,
               { { "A", KOBOY_BTN_Y }, { "B", KOBOY_BTN_B }, { "C", KOBOY_BTN_A },
                 { "X", KOBOY_BTN_L1 }, { "Y", KOBOY_BTN_X }, { "Z", KOBOY_BTN_R1 },
                 { "MODE", KOBOY_BTN_SELECT } } },
-            { "/roms/SNES/Star Fox (USA) (Rev 2).sfc", 299, 224, 299, 224,
+            { "/roms/SNES/Star Fox (USA) (Rev 2).sfc", 299, 224, 299, 224, 4,
               { { "A", KOBOY_BTN_A }, { "B", KOBOY_BTN_B }, { "X", KOBOY_BTN_X },
                 { "Y", KOBOY_BTN_Y }, { "L", KOBOY_BTN_L1 }, { "R", KOBOY_BTN_R1 },
                 { "SELECT", KOBOY_BTN_SELECT } } },
@@ -912,7 +913,7 @@ TEST_MAIN({
             koboy_config cc; config_defaults(&cc);
             cc.layout_mode       = config_layout_for_rom(sys[si].rom);
             cc.lcd_rect_from_max = config_lcd_rect_from_max_for_rom(sys[si].rom);
-            config_lcd_labels_for_rom(&cc.layout, sys[si].rom);
+            config_lcd_pad_for_rom(&cc.layout, sys[si].rom);
             CHECK_EQ_INT(cc.layout_mode, KOBOY_LAYOUT_LCD);
 
             koboy_profile cp;
@@ -926,18 +927,30 @@ TEST_MAIN({
             chrome_lcd_controls cl;
             memset(&cl, 0, sizeof cl);
             chrome_lcd_layout(&cp, &cl);
+            CHECK_EQ_INT(cl.face_n, sys[si].face_n);
 
             /* Every control the strip labels, as (where it is, what it says).
                The label is read out of the resolved config rather than
                written here twice, so this asserts the SHIPPED table and not a
-               copy of it. */
+               copy of it.
+
+               THE TWO SHOULDER BITS MOVE with the arrangement -- discs in the
+               Mega Drive's six-button grid, pills in the lower band under the
+               diamond -- and the probe follows chrome_lcd_layout's answer
+               rather than assuming one. Taking the pill centres
+               unconditionally is not a hypothetical mistake: it is what this
+               test did first, and both Mega Drive rows then reported 0
+               because a zero-sized rect has no centre to tap. */
+            const bool grid = (cl.face_n == 6);
             struct { int x, y; const char *says; } ctl[7] = {
                 { cl.x_cx, cl.x_cy, cc.layout.lcd.x },
                 { cl.y_cx, cl.y_cy, cc.layout.lcd.y },
                 { cl.a_cx, cl.a_cy, cc.layout.lcd.a },
                 { cl.b_cx, cl.b_cy, cc.layout.lcd.b },
-                { cl.l1.x + cl.l1.w / 2, cl.l1.y + cl.l1.h / 2, cc.layout.lcd.l1 },
-                { cl.r1.x + cl.r1.w / 2, cl.r1.y + cl.r1.h / 2, cc.layout.lcd.r1 },
+                { grid ? cl.l1_cx : cl.l1.x + cl.l1.w / 2,
+                  grid ? cl.l1_cy : cl.l1.y + cl.l1.h / 2, cc.layout.lcd.l1 },
+                { grid ? cl.r1_cx : cl.r1.x + cl.r1.w / 2,
+                  grid ? cl.r1_cy : cl.r1.y + cl.r1.h / 2, cc.layout.lcd.r1 },
                 { cl.select.x + cl.select.w / 2, cl.select.y + cl.select.h / 2,
                   cc.layout.lcd.select },
             };
@@ -965,6 +978,47 @@ TEST_MAIN({
                             sys[si].rom, name, got, name,
                             (unsigned)sys[si].want[w].bit);
                 CHECK_EQ_INT(got, sys[si].want[w].bit);
+            }
+
+            /* THE GAPS BETWEEN CONTROLS PRESS NOTHING. Without this, every
+               check above is satisfied by a hit test that returns each
+               control's bit for a whole quadrant of the strip -- and the
+               six-button grid is where that matters, because its discs are
+               close enough together (a 0.2 * face_r gap) that a zone tested
+               from the wrong radius would swallow its neighbour. Probed
+               exactly between each horizontally adjacent pair. */
+            if (grid) {
+                const int mid_top = (cl.l1_cx + cl.x_cx) / 2;
+                const int mid_bot = (cl.y_cx + cl.b_cx) / 2;
+                CHECK_EQ_INT(touch_probe(ci, mid_top, cl.l1_cy), 0);
+                CHECK_EQ_INT(touch_probe(ci, (cl.x_cx + cl.r1_cx) / 2, cl.x_cy), 0);
+                CHECK_EQ_INT(touch_probe(ci, mid_bot, cl.y_cy), 0);
+                CHECK_EQ_INT(touch_probe(ci, (cl.b_cx + cl.a_cx) / 2, cl.b_cy), 0);
+                /* And between the two ROWS. */
+                CHECK_EQ_INT(touch_probe(ci, cl.x_cx, (cl.x_cy + cl.b_cy) / 2), 0);
+                /* THE SHOULDER PILLS ARE NOT LIVE. They are zero-sized here,
+                   and a zero-sized rect must not become a zone at the panel
+                   origin -- in_rect_xywh is the same class of trap in_circle
+                   was for the DMG extra discs. Probed at (0,0), which is a
+                   coordinate a real finger can produce. */
+                CHECK_EQ_INT(touch_probe(ci, 0, 0) & (KOBOY_BTN_L1 | KOBOY_BTN_R1), 0);
+                /* ...and where those pills sit in the OTHER arrangement is
+                   bare strip here. Taken from a Game & Watch layout on the
+                   same panel, so it is a real pill position and not an empty
+                   rect compared with itself. */
+                koboy_config gc; config_defaults(&gc);
+                gc.layout_mode = KOBOY_LAYOUT_LCD;
+                gc.lcd_rect_from_max = true;
+                koboy_profile gp;
+                CHECK(config_resolve_profile(&gp, &gc, 1264, 1680, 654, 396, 654, 396));
+                chrome_lcd_controls gk;
+                memset(&gk, 0, sizeof gk);
+                chrome_lcd_layout(&gp, &gk);
+                CHECK(gk.l1.w > 0);
+                CHECK_EQ_INT(touch_probe(ci, gk.l1.x + gk.l1.w / 2,
+                                             gk.l1.y + gk.l1.h / 2) & KOBOY_BTN_L1, 0);
+                CHECK_EQ_INT(touch_probe(ci, gk.r1.x + gk.r1.w / 2,
+                                             gk.r1.y + gk.r1.h / 2) & KOBOY_BTN_R1, 0);
             }
 
             /* MENU IS STILL REACHABLE, and it is the only way back to the ROM

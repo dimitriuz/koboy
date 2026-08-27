@@ -257,14 +257,16 @@ int config_layout_for_rom(const char *rom_path);
    this layout. */
 bool config_lcd_rect_from_max_for_rom(const char *rom_path);
 
-/* Fills `l->lcd` -- what the LCD strip's discs and pills SAY on this ROM's
-   system -- from the extension, the same way the core, the layout mode and
-   the extra discs are. Clears every field first, so a config reused across a
-   MENU -> CHOOSE ROM reload cannot keep the last system's labels; an empty
-   field means "use the retropad's own name", which is what chrome.c draws.
-   See koboy_lcd_labels in koboy.h for the contract and why a Mega Drive
-   cannot be allowed to print the retropad's names. */
-void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path);
+/* Fills `l->lcd` -- what the LCD strip's controls SAY on this ROM's system,
+   and how they are ARRANGED -- from the extension, the same way the core, the
+   layout mode and the extra discs are. Clears every field first, so a config
+   reused across a MENU -> CHOOSE ROM reload cannot keep the last system's
+   pad; the cleared state is the retropad's own names in the four-button
+   diamond, which is what chrome.c draws for a Game & Watch. See
+   koboy_lcd_pad in koboy.h for the contract, why a Mega Drive cannot be
+   allowed to print the retropad's names, and why it cannot be allowed to
+   wear the retropad's shape either. */
+void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path);
 
 /* Fill or clear the DMG faceplate's EXTRA discs for this ROM -- see
    koboy_extra_btn in koboy.h. A third function rather than more return values

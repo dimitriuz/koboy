@@ -456,15 +456,17 @@ bool config_lcd_rect_from_max_for_rom(const char *rom_path)
     return ends_with_ext(rom_path, ".mgw");
 }
 
-/* WHAT THE LCD STRIP'S CONTROLS SAY. The contract, and why empty means "the
-   retropad's own name", is on koboy_lcd_labels in koboy.h.
+/* WHAT THE LCD STRIP'S CONTROLS SAY AND HOW THEY ARE ARRANGED -- the whole
+   per-system description of the pad this layout presents. The contract, why
+   empty means "the retropad's own name", and what the two arrangements are,
+   are all on koboy_lcd_pad in koboy.h.
 
    Cleared on every call for the same reason config_extra_buttons_for_rom
    clears its discs: this runs once per ROM load into a config that outlives
    one game (MENU -> CHOOSE ROM reuses it), so "set them for a Mega Drive"
    without "clear them for everything else" would leave a strip saying C on
    the next Game & Watch. */
-void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path)
+void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path)
 {
     if (!l) return;
     memset(&l->lcd, 0, sizeof l->lcd);
@@ -493,6 +495,16 @@ void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path)
        the DMG faceplate X and Z did not exist at all -- that shortfall is
        what moved this system here.
 
+       AND THE ARRANGEMENT IS THE CONSOLE'S OWN, not the strip's default
+       diamond: KOBOY_LCD_FACE_ROWS6 puts X Y Z above A B C, which is what is
+       moulded on the pad. That is the same principle as the labels applied to
+       POSITION -- somebody who has held a Genesis pad knows where C is, and a
+       diamond would make them learn an arbitrary map to find it. It also
+       gives X and Z real face discs rather than shoulder pills, which is
+       right twice over: the console has no shoulders, and the strip's lower
+       band then carries MODE and START alone instead of naming two controls
+       for one bit.
+
        SELECT SAYS MODE. A Mega Drive has no Select; JOYPAD_SELECT is the
        pad's Mode button, and holding it at power-on is how a six-button pad
        pretends to be a three-button one for the titles that mis-detect it.
@@ -510,6 +522,7 @@ void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path)
        three-button title simply reads nothing from X/Y/Z, which is what it
        does on real hardware too. */
     if (ends_with_ext(rom_path, ".md")) {
+        l->lcd.face = KOBOY_LCD_FACE_ROWS6;
         snprintf(l->lcd.x, sizeof l->lcd.x, "%s", "Y");
         snprintf(l->lcd.y, sizeof l->lcd.y, "%s", "A");
         snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "C");
@@ -537,6 +550,10 @@ void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path)
        in one place, and a test can assert that a .sfc really was recognised
        here -- an empty field is indistinguishable from "no case matched". */
     if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc")) {
+        /* The DIAMOND is left as the zero rather than named, and that is the
+           one place in this function where the default is also the right
+           answer for a stated reason: a SNES pad IS this diamond -- X top, Y
+           left, A right, B bottom -- so there is nothing to override. */
         snprintf(l->lcd.x, sizeof l->lcd.x, "%s", "X");
         snprintf(l->lcd.y, sizeof l->lcd.y, "%s", "Y");
         snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "A");
@@ -742,7 +759,7 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
        Both shortfalls are gone in the LCD strip and neither could have been
        fixed here. The core mappings themselves did not move -- they are read
        off the same descriptor tables and now live in
-       config_lcd_labels_for_rom, which is what turns them into the labels the
+       config_lcd_pad_for_rom, which is what turns them into the labels the
        strip prints. Recorded as an empty case rather than deleted, because
        "this system needs no disc" and "somebody forgot this system" look
        identical at a glance, and because a future reader who moves either
@@ -1201,26 +1218,31 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
            the fit's own rounding; taking both from the cap rather than
            scaling gw down and re-deriving gh keeps the ratio exact.
 
-           UNCONDITIONAL, unlike the DMG branch's version, and the asymmetry
-           is deliberate and was MEASURED rather than reasoned about. Down
-           there an explicit `scale =` overrides the ceiling, but the margin
-           loop below is a second limiter that no setting can switch off --
-           on the verified 1264x1680 panel it is what actually takes a .sfc
-           from 4 to 3, ceiling or no ceiling. THIS branch has no such
-           backstop: the fractional fit always fills the panel width. So
-           honouring scale_explicit here would not "let the owner override a
-           default", it would delete the only protection SNES has -- and it
-           would do it on every real device, because the shipped
-           config/koboy.ini sets `scale = 5` (for the Game Boy, measured), so
-           scale_explicit is TRUE for everybody in practice. Checked on the
-           device: with that ini a .sfc resolves to 897x672 here and would
-           have resolved to 1264x946, 2.1x the area, with the cap gated.
-           There is nothing for an explicit scale to override in this branch
-           anyway -- the fit has no integer step to take, and c->scale is
-           unread here. */
-        if (c->scale_ceiling > 0) {
-            int cap_w = rect_w * c->scale_ceiling;
-            int cap_h = rect_h * c->scale_ceiling;
+           AN EXPLICIT `scale =` REPLACES IT rather than switching it off, and
+           that is the one place this branch reads c->scale at all. The DMG
+           rule is "the owner's number wins over the measured default", and
+           the honest translation of a scale into a fractional fit is a cap of
+           N times the source -- not "no cap", which would make `scale = 2`
+           produce a BIGGER picture than the ceiling did. `scale = 0` is the
+           ini's own word for auto and falls through to the ceiling, which is
+           why the > 0 test is here and not folded into scale_explicit.
+
+           WORTH KNOWING BEFORE TOUCHING THIS: the shipped config/koboy.ini
+           says `scale = 5`, and that does NOT count as explicit -- 5 is
+           KOBOY_SCALE_LEGACY_DEFAULT and config_load treats a file naming
+           exactly it as "never edited". So on a real device the ceiling is
+           what runs, and it has to be: this branch's fit is fractional and
+           full-width, with no margin loop underneath it to catch an oversized
+           rect the way the DMG branch has. Measured on the verified panel:
+           a .sfc is 897x672 with the cap and 1264x946 -- 1.98x the area --
+           without it, which is most of the way back to the 67% the ceiling
+           was added to prevent. */
+        int cap = 0;
+        if (c->scale_explicit && c->scale > 0) cap = c->scale;
+        else if (c->scale_ceiling > 0)         cap = c->scale_ceiling;
+        if (cap > 0) {
+            int cap_w = rect_w * cap;
+            int cap_h = rect_h * cap;
             if (gw > cap_w) { gw = cap_w; gh = cap_h; }
         }
 
@@ -1234,6 +1256,9 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
         /* Carried into the profile because video.c decides from it and only
            has the profile -- see koboy_profile. */
         p->rect_from_max = c->lcd_rect_from_max;
+        /* And how the strip arranges its face buttons, for the same reason --
+           chrome_lcd_layout takes only a profile. See koboy_profile. */
+        p->lcd_face = c->layout.lcd.face;
         p->game_w  = gw;
         p->game_h  = gh;
         p->game_x  = (panel_w - gw) / 2;

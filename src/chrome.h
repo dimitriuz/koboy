@@ -79,33 +79,57 @@ int chrome_lcd_strip_h(int panel_h);
    deadzone/hysteresis decode), so the two layouts share one implementation
    and one set of quirks.
 
-   The four face buttons are a DIAMOND, and the arrangement is load-bearing
-   rather than decorative: the gw core's own overlay (START with no cursor
-   active) draws a SNES pad and labels the TOP button NORTHEAST, the BOTTOM
-   one SOUTHEAST. X is that top button, Y left, A right, B bottom -- so a
-   user reading the core's overlay can find the same button here. Rearranging
-   them into a row would break that correspondence silently. It is also,
-   literally, a SNES pad, which is why that system moved to this layout when
-   its L and R turned out not to fit the DMG faceplate.
+   THE FACE BUTTONS COME IN TWO ARRANGEMENTS, chosen per system by the
+   profile's `lcd_face` (koboy_lcd_face, koboy.h), because the arrangement is
+   load-bearing rather than decorative -- a player who has held the real pad
+   already knows where its buttons are.
+
+   DIAMOND: four discs, X top, Y left, A right, B bottom. Right for Game &
+   Watch because the gw core's own overlay (START with no cursor active)
+   DRAWS a SNES pad and labels the TOP button NORTHEAST, the BOTTOM one
+   SOUTHEAST, so a user reading that overlay finds the same button here;
+   right for SNES because its real pad IS that diamond. Rearranging either
+   into a row would break the correspondence silently.
+
+   ROWS6: six discs, two rows of three, which is the six-button Mega Drive
+   pad -- X Y Z above A B C. That system has no shoulders, so `l1` and `r1`
+   come back ZERO-SIZED in this arrangement and the lower band carries two
+   pills (MODE, START) instead of four: a shoulder pill for a bit that
+   already has a disc would be two controls with one name. `face_n` says
+   which arrangement was resolved, and every consumer switches on it rather
+   than re-deriving it.
 
    The FIELD NAMES here are the retropad's, and they stay the retropad's:
-   they say which BIT each disc reports, which is one thing for every system.
-   What each disc SAYS is a separate table (koboy_lcd_labels in koboy.h),
-   because JOYPAD_A is the SNES's A and the Mega Drive's C.
+   they say which BIT each disc reports, which is one thing for every system
+   and every arrangement. What each disc SAYS is a separate table
+   (koboy_lcd_pad in koboy.h), because JOYPAD_A is the SNES's A and the Mega
+   Drive's C.
 
-   `face_r` is every disc's radius and `face_off` the centre-to-centre
-   distance out to each one. face_off > face_r * sqrt(2) by construction (it
-   is face_r * 8/5), which is what keeps two ADJACENT discs from merging into
-   one blob -- their centres are face_off * sqrt(2) apart. */
+   `face_r` is every disc's radius in both arrangements. `face_off` is the
+   DIAMOND's centre-to-centre distance out to each disc; `face_pitch` is
+   ROWS6's centre-to-centre step between neighbours. Only one of the two is
+   meaningful at a time and both are always filled, because a stale field is
+   easier to read than a union.
+
+   Both spacings are proved rather than clamped. face_off > face_r * sqrt(2)
+   by construction (it is face_r * 8/5), so two ADJACENT diamond discs cannot
+   merge -- their centres are face_off * sqrt(2) apart. face_pitch is
+   face_r * 11/5, so a grid neighbour's centre is 2.2 * face_r away and the
+   discs keep a 0.2 * face_r gap; the diagonal neighbours are 3.11 * face_r
+   apart. */
 typedef struct {
     koboy_rect strip;                   /* the whole bottom strip */
     int dpad_cx, dpad_cy, dpad_r;
-    int face_r, face_off;
-    int x_cx, x_cy;                     /* NORTHEAST on the core's overlay */
-    int y_cx, y_cy;
-    int a_cx, a_cy;
-    int b_cx, b_cy;                     /* SOUTHEAST on the core's overlay */
-    koboy_rect l1, select, start, r1;   /* the lower band, left to right */
+    int face_n;                         /* 4 = DIAMOND, 6 = ROWS6 */
+    int face_r, face_off, face_pitch;
+    int x_cx, x_cy;                     /* diamond: NORTHEAST. rows6: top mid */
+    int y_cx, y_cy;                     /* diamond: west.      rows6: low left */
+    int a_cx, a_cy;                     /* diamond: east.      rows6: low right */
+    int b_cx, b_cy;                     /* diamond: SOUTHEAST. rows6: low mid  */
+    int l1_cx, l1_cy;                   /* rows6 only: top left  (zero otherwise) */
+    int r1_cx, r1_cy;                   /* rows6 only: top right (zero otherwise) */
+    koboy_rect l1, select, start, r1;   /* the lower band, left to right.
+                                           l1/r1 are zero-sized under ROWS6 */
     koboy_rect menu;
     int bat_cx, bat_cy, bat_r;
 } chrome_lcd_controls;

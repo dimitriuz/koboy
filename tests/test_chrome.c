@@ -1603,12 +1603,12 @@ TEST_MAIN({
         koboy_config gwc; config_defaults(&gwc);
         gwc.layout_mode = KOBOY_LAYOUT_LCD;
         gwc.lcd_rect_from_max = true;
-        config_lcd_labels_for_rom(&gwc.layout, "/roms/Donkey Kong.mgw");
+        config_lcd_pad_for_rom(&gwc.layout, "/roms/Donkey Kong.mgw");
 
         koboy_config snc = gwc;
-        config_lcd_labels_for_rom(&snc.layout, "/roms/Star Fox (USA) (Rev 2).sfc");
+        config_lcd_pad_for_rom(&snc.layout, "/roms/Star Fox (USA) (Rev 2).sfc");
         koboy_config mdc = gwc;
-        config_lcd_labels_for_rom(&mdc.layout, "/roms/Streets of Rage 2 (USA).md");
+        config_lcd_pad_for_rom(&mdc.layout, "/roms/Streets of Rage 2 (USA).md");
 
         koboy_profile lp2;
         CHECK(config_resolve_profile(&lp2, &gwc, 1264, 1680, 654, 396, 654, 396));
@@ -1644,7 +1644,7 @@ TEST_MAIN({
             { { ct.select.x, ct.select.y, ct.select.w, ct.select.h }, 6,
               "select pill", "SELECT", "SELECT", "MODE" },
             /* START is in the table with the same string three times on
-               purpose: koboy_lcd_labels has no field for it, and this row is
+               purpose: koboy_lcd_pad has no field for it, and this row is
                what says that is a decision rather than a dropped case. */
             { { ct.start.x, ct.start.y, ct.start.w, ct.start.h }, 6,
               "start pill", "START", "START", "START" },
@@ -1721,6 +1721,245 @@ TEST_MAIN({
                         diff_outside);
             CHECK_EQ_INT(diff_outside, 0);
             CHECK(diff_total > 0);      /* ...and something DID change */
+        }
+    }
+
+    /* ============ THE SIX-BUTTON MEGA DRIVE ARRANGEMENT (KOBOY_LCD_FACE_ROWS6)
+     *
+     * The strip's diamond is right for Game & Watch (the gw core's overlay
+     * draws one) and for SNES (its real pad is one). It is wrong for a Mega
+     * Drive, whose pad is two rows of three:
+     *
+     *     X  Y  Z
+     *     A  B  C
+     *
+     * Somebody who has held that pad knows where C is; a diamond makes them
+     * learn an arbitrary map instead. So this is the labelling argument
+     * applied to POSITION, and it is asserted the same way -- by reading the
+     * LABEL off the shipped table and checking where THAT ends up, never by
+     * checking where a retropad bit ends up. A version of this that asserted
+     * `l1_cx < x_cx` would pass with every label transposed.
+     *
+     * Swept over all four supported panels, because the grid is the widest
+     * thing this strip has ever had to seat and the narrowest panel is where
+     * it would collide with MENU or run off the edge.
+     */
+    {
+        static const struct { int w, h; const char *name; } pn[] = {
+            { 1072, 1448, "Clara"  }, { 1264, 1680, "Libra2" },
+            { 1404, 1872, "Elipsa" }, { 1440, 1920, "Sage"   },
+        };
+        for (size_t i = 0; i < sizeof pn / sizeof pn[0]; i++) {
+            const int W = pn[i].w, H = pn[i].h;
+
+            koboy_config mc; config_defaults(&mc);
+            mc.layout_mode       = config_layout_for_rom("Sonic.md");
+            mc.lcd_rect_from_max = config_lcd_rect_from_max_for_rom("Sonic.md");
+            config_lcd_pad_for_rom(&mc.layout, "Sonic.md");
+            CHECK_EQ_INT(mc.layout_mode, KOBOY_LAYOUT_LCD);
+
+            koboy_profile mp;
+            CHECK(config_resolve_profile(&mp, &mc, W, H, 293, 224, 348, 240));
+            CHECK_EQ_INT(mp.lcd_face, KOBOY_LCD_FACE_ROWS6);
+
+            chrome_lcd_controls mk;
+            memset(&mk, 0, sizeof mk);
+            chrome_lcd_layout(&mp, &mk);
+            CHECK_EQ_INT(mk.face_n, 6);
+
+            /* Where each CONSOLE button ended up, found by its label. */
+            struct { const char *label; int cx, cy; } disc[6] = {
+                { mc.layout.lcd.l1, mk.l1_cx, mk.l1_cy },
+                { mc.layout.lcd.x,  mk.x_cx,  mk.x_cy  },
+                { mc.layout.lcd.r1, mk.r1_cx, mk.r1_cy },
+                { mc.layout.lcd.y,  mk.y_cx,  mk.y_cy  },
+                { mc.layout.lcd.b,  mk.b_cx,  mk.b_cy  },
+                { mc.layout.lcd.a,  mk.a_cx,  mk.a_cy  },
+            };
+            int cx[6], cy[6];
+            static const char *want[6] = { "X", "Y", "Z", "A", "B", "C" };
+            for (int k = 0; k < 6; k++) {
+                int found = -1;
+                for (int j = 0; j < 6; j++)
+                    if (disc[j].label && strcmp(disc[j].label, want[k]) == 0) { found = j; break; }
+                if (found < 0)
+                    fprintf(stderr, "  %s: no face disc says \"%s\"\n",
+                            pn[i].name, want[k]);
+                CHECK(found >= 0);
+                if (found < 0) { cx[k] = 0; cy[k] = 0; continue; }
+                cx[k] = disc[found].cx; cy[k] = disc[found].cy;
+            }
+            /* X Y Z LEFT TO RIGHT ON ONE ROW, A B C LEFT TO RIGHT BELOW IT,
+               and each of the three columns aligned. That is the whole shape
+               of a Genesis pad, stated as the relations rather than as
+               coordinates so it holds on every panel. */
+            CHECK(cx[0] < cx[1]); CHECK(cx[1] < cx[2]);        /* X Y Z */
+            CHECK(cx[3] < cx[4]); CHECK(cx[4] < cx[5]);        /* A B C */
+            CHECK_EQ_INT(cy[0], cy[1]); CHECK_EQ_INT(cy[1], cy[2]);
+            CHECK_EQ_INT(cy[3], cy[4]); CHECK_EQ_INT(cy[4], cy[5]);
+            CHECK(cy[0] < cy[3]);                              /* top row is on top */
+            CHECK_EQ_INT(cx[0], cx[3]); CHECK_EQ_INT(cx[1], cx[4]);
+            CHECK_EQ_INT(cx[2], cx[5]);                        /* columns line up */
+
+            /* HITTABLE, and that is the part the coordinator asked to be
+               shown rather than asserted vaguely. The radius is the SAME as
+               the diamond's -- a grid that fitted only by shrinking the discs
+               would be a worse answer than a diamond, and this is what says
+               it did not. */
+            {
+                koboy_config dc; config_defaults(&dc);
+                dc.layout_mode = KOBOY_LAYOUT_LCD;
+                dc.lcd_rect_from_max = true;
+                koboy_profile dp;
+                CHECK(config_resolve_profile(&dp, &dc, W, H, 654, 396, 654, 396));
+                chrome_lcd_controls dk;
+                memset(&dk, 0, sizeof dk);
+                chrome_lcd_layout(&dp, &dk);
+                CHECK_EQ_INT(dk.face_n, 4);
+                CHECK_EQ_INT(mk.face_r, dk.face_r);
+            }
+
+            /* NO TWO DISCS TOUCH, on any panel: centres more than 2r apart.
+               O(n^2) over six, which is cheaper than reasoning about which
+               pairs are adjacent. */
+            for (int j = 0; j < 6; j++)
+                for (int k = j + 1; k < 6; k++) {
+                    long dx = cx[j] - cx[k], dy = cy[j] - cy[k];
+                    if (dx * dx + dy * dy <= (long)(2 * mk.face_r) * (2 * mk.face_r))
+                        fprintf(stderr, "  %s: face discs %d and %d overlap\n",
+                                pn[i].name, j, k);
+                    CHECK(dx * dx + dy * dy > (long)(2 * mk.face_r) * (2 * mk.face_r));
+                }
+
+            /* INSIDE THE PANEL, INSIDE THE STRIP, AND CLEAR OF MENU. The grid
+               is wider than the diamond it replaces, so the two things it
+               could run into are the right panel edge and the centre column
+               MENU sits in -- and MENU is the only way back to the browser. */
+            for (int k = 0; k < 6; k++) {
+                CHECK(cx[k] - mk.face_r >= 0);
+                CHECK(cx[k] + mk.face_r <= W - 1);
+                CHECK(cy[k] - mk.face_r >= mk.strip.y);
+                CHECK(cy[k] + mk.face_r <= mk.strip.y + mk.strip.h - 1);
+                if (cx[k] - mk.face_r <= mk.menu.x + mk.menu.w)
+                    fprintf(stderr, "  %s: face disc %d reaches x=%d, MENU ends at %d\n",
+                            pn[i].name, k, cx[k] - mk.face_r, mk.menu.x + mk.menu.w);
+                CHECK(cx[k] - mk.face_r > mk.menu.x + mk.menu.w);
+                /* ...and clear of the d-pad, the other thumb's control. */
+                CHECK(cx[k] - mk.face_r > mk.dpad_cx + mk.dpad_r);
+            }
+            CHECK(mk.menu.w >= 16 && mk.menu.h >= 16);
+
+            /* THE SHOULDER PILLS ARE GONE, not merely undrawn: a Mega Drive
+               has no shoulders, and their bits now have discs. Two controls
+               under one name is the same defect as a mislabelled one. */
+            CHECK_EQ_INT(mk.l1.w, 0); CHECK_EQ_INT(mk.l1.h, 0);
+            CHECK_EQ_INT(mk.r1.w, 0); CHECK_EQ_INT(mk.r1.h, 0);
+            /* ...and the two that remain are still there, still hittable, and
+               still inside the strip. */
+            CHECK(mk.select.w > 16 && mk.select.h > 16);
+            CHECK(mk.start.w  > 16 && mk.start.h  > 16);
+            CHECK(mk.select.x + mk.select.w <= mk.start.x);
+            CHECK(mk.start.x + mk.start.w <= W);
+        }
+
+        /* AND IT ALL REACHES THE PANEL. Everything above is geometry; this is
+           the render, on the one verified panel. Each disc must carry its
+           console label, the two absent pills must leave NOTHING drawn where
+           they used to be, and -- found by rendering the strip and looking at
+           it, which no numeric check caught -- the wordmark must still be
+           there, because it used to be positioned off the L1 pill. */
+        koboy_config mc; config_defaults(&mc);
+        mc.layout_mode = config_layout_for_rom("Sonic.md");
+        config_lcd_pad_for_rom(&mc.layout, "Sonic.md");
+        koboy_profile mp;
+        CHECK(config_resolve_profile(&mp, &mc, 1264, 1680, 293, 224, 348, 240));
+        chrome_lcd_controls mk;
+        memset(&mk, 0, sizeof mk);
+        chrome_lcd_layout(&mp, &mk);
+
+        memset(fb, 0x7F, (size_t)1264 * 1680);
+        chrome_render(fb, 1264, &mp, &mc.layout);
+
+        int fr2 = mk.face_r * 7 / 10;
+        struct { int cx, cy; const char *says; } lab[6] = {
+            { mk.l1_cx, mk.l1_cy, mc.layout.lcd.l1 },
+            { mk.x_cx,  mk.x_cy,  mc.layout.lcd.x  },
+            { mk.r1_cx, mk.r1_cy, mc.layout.lcd.r1 },
+            { mk.y_cx,  mk.y_cy,  mc.layout.lcd.y  },
+            { mk.b_cx,  mk.b_cy,  mc.layout.lcd.b  },
+            { mk.a_cx,  mk.a_cy,  mc.layout.lcd.a  },
+        };
+        for (int k = 0; k < 6; k++) {
+            int bx = lab[k].cx - fr2, by = lab[k].cy - fr2, side = 2 * fr2;
+            int fill_v = fb[(by + side - 4) * 1264 + bx + 3];
+            int glyph = 0;
+            for (int y = by + 3; y < by + side - 3; y++)
+                for (int x = bx + 3; x < bx + side - 3; x++)
+                    if (fb[y * 1264 + x] != fill_v) glyph++;
+            int expect = label_glyph_px(lab[k].says, side, side);
+            CHECK(expect > 20);
+            if (glyph != expect)
+                fprintf(stderr, "  MD disc %d says %d px, \"%s\" is %d\n",
+                        k, glyph, lab[k].says, expect);
+            CHECK_EQ_INT(glyph, expect);
+        }
+
+        /* EXACTLY TWO PILLS ARE DRAWN, and it is asserted as "the pill row
+           outside MODE and START is bare case" rather than as "the old L1
+           rect is empty" -- because MODE and START are re-spread across the
+           whole band and DO cover where L1 and R1 used to be. Checking the
+           old rects would have passed against a strip that drew four.
+
+           The scan starts right of the battery lamp (which shares this band)
+           and runs to the right margin, which is exactly the span the pill
+           row is laid out into. */
+        {
+            int case_v = fb[(mk.strip.y + 4) * 1264 + 4];
+            int px0 = mk.bat_cx + mk.bat_r + KOBOY_CHROME_MARGIN;
+            int stray = 0;
+            for (int y = mk.start.y; y < mk.start.y + mk.start.h; y++)
+                for (int x = px0; x < 1264; x++) {
+                    /* One pixel of slack each side: draw_pill's 2 px frame
+                       is drawn OUTWARD from the rect (chrome.c's frame()
+                       steps x - i), so a pill's ink reaches one column past
+                       its own bounds. Measured, not assumed -- the first
+                       version of this check reported exactly four stray
+                       columns, one on each side of each pill. */
+                    bool in_pill =
+                        (x >= mk.select.x - 1 && x <= mk.select.x + mk.select.w) ||
+                        (x >= mk.start.x  - 1 && x <= mk.start.x  + mk.start.w);
+                    if (!in_pill && fb[y * 1264 + x] != case_v) stray++;
+                }
+            if (stray)
+                fprintf(stderr, "  %d px of pill drawn outside MODE/START\n", stray);
+            CHECK_EQ_INT(stray, 0);
+            /* The control, so this is not measuring an empty band: the two
+               pills that ARE there are filled. */
+            int filled = 0;
+            for (int y = mk.select.y; y < mk.select.y + mk.select.h; y++)
+                for (int x = mk.select.x; x < mk.select.x + mk.select.w; x++)
+                    if (fb[y * 1264 + x] != case_v) filled++;
+            CHECK(filled > mk.select.w * mk.select.h / 2);
+        }
+
+        /* THE WORDMARK SURVIVED. It is anchored to the pill row, and the row
+           lost two of its four pills -- anchoring it to L1 (which is what the
+           code did) put it at y = -8 and it vanished on every Mega Drive.
+           Counted as ink in the band between MENU and the pills. */
+        {
+            /* The band is inset 4 px from MENU above and the pills below, and
+               that inset is why this check works at all: draw_pill's 2 px
+               frame is drawn OUTWARD, so the row immediately under MENU is
+               278 px of its own ink and an un-inset scan reported "the
+               wordmark is there" with the wordmark deleted. (Mutant, caught
+               only after the inset went in.) */
+            int case_v = fb[(mk.strip.y + 4) * 1264 + 4];
+            int ink = 0;
+            for (int y = mk.menu.y + mk.menu.h + 4; y < mk.start.y - 4; y++)
+                for (int x = mk.menu.x; x < mk.menu.x + mk.menu.w; x++)
+                    if (fb[y * 1264 + x] != case_v) ink++;
+            if (ink < 50) fprintf(stderr, "  the wordmark is gone: %d px\n", ink);
+            CHECK(ink >= 50);
         }
     }
 

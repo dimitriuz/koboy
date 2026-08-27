@@ -7,6 +7,7 @@
 #include "config.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <unistd.h>
 
 TEST_MAIN({
     koboy_config c;
@@ -403,20 +404,67 @@ TEST_MAIN({
            so a panel-independent claim is what is checked. */
         CHECK(up.game_w * up.game_h > sp.game_w * sp.game_h * 19 / 10);
 
-        /* AND AN EXPLICIT `scale =` DOES NOT DISARM IT, which is where this
-           very change nearly shipped a regression. The DMG branch lets an
-           explicit scale override the ceiling, because down there the margin
-           loop is a second limiter no setting can switch off. This branch has
-           no backstop at all -- and the SHIPPED config/koboy.ini sets
-           `scale = 5`, so scale_explicit is true on every real device. A cap
-           gated on it would have been off everywhere it mattered. */
-        koboy_config ec = sc;
-        ec.scale_explicit = true;
-        ec.scale = 5;
-        koboy_profile ep;
-        CHECK(config_resolve_profile(&ep, &ec, 1264, 1680, 299, 224, 299, 224));
-        CHECK_EQ_INT(ep.game_w, 897);
-        CHECK_EQ_INT(ep.game_h, 672);
+        /* AN EXPLICIT `scale =` REPLACES THE CEILING RATHER THAN DELETING IT.
+           The DMG rule is that the owner's number beats a measured default,
+           and in a fractional fit the honest translation of "scale 2" is a
+           cap of 2x the source. Deleting the cap instead would make a SMALLER
+           explicit scale produce a BIGGER picture, which is the mutant this
+           pair catches: 2 must give less than the ceiling's 3, and 5 must
+           give more. */
+        {
+            koboy_config ec = sc;
+            ec.scale_explicit = true;
+            ec.scale = 2;
+            koboy_profile ep;
+            CHECK(config_resolve_profile(&ep, &ec, 1264, 1680, 299, 224, 299, 224));
+            CHECK_EQ_INT(ep.game_w, 299 * 2);
+            CHECK_EQ_INT(ep.game_h, 224 * 2);
+            CHECK(ep.game_w < sp.game_w);
+
+            /* 5 is bigger than the panel allows, and the cap only ever
+               SHRINKS -- it is a ceiling on the fit, not a replacement for
+               it -- so this lands on the full fractional fit. Asserted as
+               that, and as strictly more than the ceiling gave, which is the
+               half that says the explicit number was honoured at all. */
+            ec.scale = 5;
+            CHECK(config_resolve_profile(&ep, &ec, 1264, 1680, 299, 224, 299, 224));
+            CHECK_EQ_INT(ep.game_w, 1264);
+            CHECK(ep.game_w > sp.game_w);
+
+            /* `scale = 0` is the ini's own word for auto-fit, and it must
+               reach the ceiling rather than being read as "cap of zero" (no
+               picture) or as "no cap" (the uncapped 1264x946 below). */
+            ec.scale = 0;
+            CHECK(config_resolve_profile(&ep, &ec, 1264, 1680, 299, 224, 299, 224));
+            CHECK_EQ_INT(ep.game_w, 897);
+            CHECK_EQ_INT(ep.game_h, 672);
+        }
+
+        /* AND THE SHIPPED INI'S OWN `scale = 5` LEAVES THE CEILING IN CHARGE,
+           because config_load does not count 5 as asking (it is
+           KOBOY_SCALE_LEGACY_DEFAULT -- a file naming exactly it is
+           indistinguishable from one nobody edited). Asserted through
+           config_load and a real file rather than by setting the struct field,
+           because the claim is about what the SHIPPED ini does on a device:
+           the whole cap would be dead weight if this were not true. */
+        {
+            char path[] = "/tmp/koboy_t1_scaleXXXXXX";
+            int fd = mkstemp(path);
+            CHECK(fd >= 0);
+            const char *body = "scale = 5\n";
+            CHECK(write(fd, body, strlen(body)) == (ssize_t)strlen(body));
+            close(fd);
+            koboy_config lc2; config_defaults(&lc2);
+            CHECK(config_load(&lc2, path));
+            CHECK(!lc2.scale_explicit);
+            lc2.layout_mode = KOBOY_LAYOUT_LCD;
+            lc2.scale_ceiling = 3;
+            koboy_profile lp3;
+            CHECK(config_resolve_profile(&lp3, &lc2, 1264, 1680, 299, 224, 299, 224));
+            CHECK_EQ_INT(lp3.game_w, 897);
+            CHECK_EQ_INT(lp3.game_h, 672);
+            unlink(path);
+        }
 
         /* A system with no ceiling is untouched by any of this -- the Mega
            Drive fits fractionally to the panel width, which is the point of
@@ -444,7 +492,7 @@ TEST_MAIN({
            JOYPAD_Y its A, JOYPAD_X its Y, JOYPAD_L its X, JOYPAD_R its Z and
            JOYPAD_SELECT its MODE; only JOYPAD_B is B. A disc drawn "A" over
            JOYPAD_A is a lie a player acts on. */
-        config_lcd_labels_for_rom(&l, "/roms/Streets of Rage 2 (USA).md");
+        config_lcd_pad_for_rom(&l, "/roms/Streets of Rage 2 (USA).md");
         CHECK(strcmp(l.lcd.x, "Y") == 0);          /* diamond top    */
         CHECK(strcmp(l.lcd.y, "A") == 0);          /* diamond left   */
         CHECK(strcmp(l.lcd.a, "C") == 0);          /* diamond right  */
@@ -466,7 +514,7 @@ TEST_MAIN({
         /* THE SNES, where the retropad IS the pad and only the shoulders are
            renamed: the console calls them L and R, and the "1" in the
            retropad's L1/R1 says there is a second pair to look for. */
-        config_lcd_labels_for_rom(&l, "/roms/Star Fox (USA) (Rev 2).sfc");
+        config_lcd_pad_for_rom(&l, "/roms/Star Fox (USA) (Rev 2).sfc");
         CHECK(strcmp(l.lcd.x, "X") == 0);
         CHECK(strcmp(l.lcd.y, "Y") == 0);
         CHECK(strcmp(l.lcd.a, "A") == 0);
@@ -478,7 +526,7 @@ TEST_MAIN({
            and must get the same table, byte for byte. */
         {
             koboy_layout l2 = lc.layout;
-            config_lcd_labels_for_rom(&l2, "/roms/Super Metroid.smc");
+            config_lcd_pad_for_rom(&l2, "/roms/Super Metroid.smc");
             CHECK(memcmp(&l2.lcd, &l.lcd, sizeof l.lcd) == 0);
         }
 
@@ -487,18 +535,18 @@ TEST_MAIN({
            it has to find the same button here. Asserted after a .sfc, so this
            is also the clear-on-every-call contract: without the memset the
            strip would keep saying L and R on the next Game & Watch. */
-        config_lcd_labels_for_rom(&l, "/roms/Donkey Kong.mgw");
-        koboy_lcd_labels zero;
+        config_lcd_pad_for_rom(&l, "/roms/Donkey Kong.mgw");
+        koboy_lcd_pad zero;
         memset(&zero, 0, sizeof zero);
         CHECK(memcmp(&l.lcd, &zero, sizeof zero) == 0);
         /* And so does everything that never reaches this layout, so a system
            moved here later starts from the retropad rather than from whatever
            the last ROM left behind. */
-        config_lcd_labels_for_rom(&l, "/roms/Star Fox.sfc");
-        config_lcd_labels_for_rom(&l, "/roms/Metroid.nes");
+        config_lcd_pad_for_rom(&l, "/roms/Star Fox.sfc");
+        config_lcd_pad_for_rom(&l, "/roms/Metroid.nes");
         CHECK(memcmp(&l.lcd, &zero, sizeof zero) == 0);
-        config_lcd_labels_for_rom(&l, "/roms/Star Fox.sfc");
-        config_lcd_labels_for_rom(&l, NULL);
+        config_lcd_pad_for_rom(&l, "/roms/Star Fox.sfc");
+        config_lcd_pad_for_rom(&l, NULL);
         CHECK(memcmp(&l.lcd, &zero, sizeof zero) == 0);
         /* config_defaults leaves it empty too. */
         CHECK(memcmp(&lc.layout.lcd, &zero, sizeof zero) == 0);

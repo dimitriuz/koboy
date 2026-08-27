@@ -97,20 +97,48 @@ void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *o)
     o->dpad_cx = W * 16 / 100;
     o->dpad_cy = sy + upper_h / 2;
 
-    o->face_r   = upper_h * 19 / 100;
-    o->face_off = o->face_r * 8 / 5;    /* > face_r * sqrt(2): see chrome.h */
+    o->face_r     = upper_h * 19 / 100;
+    o->face_off   = o->face_r * 8 / 5;   /* > face_r * sqrt(2): see chrome.h */
+    o->face_pitch = o->face_r * 11 / 5;  /* > 2 * face_r:       see chrome.h */
     int fcx = W - W * 16 / 100;         /* mirrored, not a second constant */
     int fcy = o->dpad_cy;
-    o->x_cx = fcx;                  o->x_cy = fcy - o->face_off;   /* NORTHEAST */
-    o->y_cx = fcx - o->face_off;    o->y_cy = fcy;
-    o->a_cx = fcx + o->face_off;    o->a_cy = fcy;
-    o->b_cx = fcx;                  o->b_cy = fcy + o->face_off;   /* SOUTHEAST */
+    o->face_n = (p->lcd_face == KOBOY_LCD_FACE_ROWS6) ? 6 : 4;
+
+    /* How far left of fcx the cluster actually reaches, which is what the
+       centre column has to clear. The two arrangements differ: the diamond
+       puts one disc at face_off, the grid a whole column at face_pitch. */
+    int face_reach;
+    if (o->face_n == 6) {
+        /* TWO ROWS OF THREE, in the six-button Mega Drive's own arrangement:
+               X  Y  Z      JOYPAD_L  JOYPAD_X  JOYPAD_R
+               A  B  C      JOYPAD_Y  JOYPAD_B  JOYPAD_A
+           The field names are the retropad bits (chrome.h), so the assignment
+           below IS that table -- read it as "the disc that reports JOYPAD_L
+           sits top-left". */
+        int step = o->face_pitch;
+        int row  = step / 2;
+        o->l1_cx = fcx - step; o->l1_cy = fcy - row;
+        o->x_cx  = fcx;        o->x_cy  = fcy - row;
+        o->r1_cx = fcx + step; o->r1_cy = fcy - row;
+        o->y_cx  = fcx - step; o->y_cy  = fcy + row;
+        o->b_cx  = fcx;        o->b_cy  = fcy + row;
+        o->a_cx  = fcx + step; o->a_cy  = fcy + row;
+        face_reach = step + o->face_r;
+    } else {
+        o->x_cx = fcx;                  o->x_cy = fcy - o->face_off;   /* NORTHEAST */
+        o->y_cx = fcx - o->face_off;    o->y_cy = fcy;
+        o->a_cx = fcx + o->face_off;    o->a_cy = fcy;
+        o->b_cx = fcx;                  o->b_cy = fcy + o->face_off;   /* SOUTHEAST */
+        face_reach = o->face_off + o->face_r;
+    }
 
     /* The centre column is whatever the two thumb clusters leave. Derived
        from their real extents, not from a fixed fraction of the panel, so it
-       cannot overlap them on a panel geometry nobody has measured. */
+       cannot overlap them on a panel geometry nobody has measured -- and so
+       that the wider ROWS6 cluster narrows the column instead of colliding
+       with MENU. */
     int col_l = o->dpad_cx + o->dpad_r + KOBOY_CHROME_MARGIN;
-    int col_r = fcx - (o->face_r + o->face_off) - KOBOY_CHROME_MARGIN;
+    int col_r = fcx - face_reach - KOBOY_CHROME_MARGIN;
     int col_cx = (col_l + col_r) / 2;
     int col_w  = col_r - col_l;
 
@@ -138,7 +166,13 @@ void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *o)
 
     int px0  = o->bat_cx + o->bat_r + KOBOY_CHROME_MARGIN;
     int px1  = W - 2 * KOBOY_CHROME_MARGIN;
-    int cell = (px1 - px0) / 4;
+    /* FOUR PILLS, OR TWO. Under ROWS6 the shoulder bits already have discs in
+       the face grid, and a Mega Drive has no shoulders to begin with -- two
+       controls under one name is the labelling bug this layout exists to
+       avoid, wearing a different hat. So that arrangement carries MODE and
+       START alone, spread across the same band. */
+    const int np = (o->face_n == 6) ? 2 : 4;
+    int cell = (px1 - px0) / np;
     if (cell < 8) cell = 8;             /* LIVE GUARD: see menu.w above */
     int pcy  = ly + lower_h / 2;
     int ph   = lower_h * 56 / 100;
@@ -148,14 +182,27 @@ void chrome_lcd_layout(const koboy_profile *p, chrome_lcd_controls *o)
        even grid, so the row is evenly spaced whatever the widths are. */
     int wide  = cell - W * 2 / 100;  if (wide  < 8) wide  = 8;
     int small = cell * 60 / 100;     if (small < 8) small = 8;
-    const int ws[4] = { small, wide, wide, small };
-    koboy_rect *slot[4] = { &o->l1, &o->select, &o->start, &o->r1 };
-    for (int i = 0; i < 4; i++) {
+    const int ws4[4] = { small, wide, wide, small };
+    koboy_rect *slot4[4] = { &o->l1, &o->select, &o->start, &o->r1 };
+    const int ws2[2] = { wide, wide };
+    koboy_rect *slot2[2] = { &o->select, &o->start };
+    const int *ws = (np == 2) ? ws2 : ws4;
+    koboy_rect **slot = (np == 2) ? slot2 : slot4;
+    for (int i = 0; i < np; i++) {
         int cx = px0 + cell * i + cell / 2;
         slot[i]->w = ws[i];
         slot[i]->h = ph;
         slot[i]->x = cx - ws[i] / 2;
         slot[i]->y = pcy - ph / 2;
+    }
+    /* Explicitly zeroed rather than left as the memset's zeros, so a reader
+       sees that "absent" is the intended state and not an unwritten field.
+       in_rect_xywh cannot match a zero-width rect and the draw path skips
+       them by face_n, so this is belt and braces on purpose: two independent
+       reasons an absent control is inert. */
+    if (np == 2) {
+        memset(&o->l1, 0, sizeof o->l1);
+        memset(&o->r1, 0, sizeof o->r1);
     }
 }
 
@@ -498,7 +545,7 @@ static void draw_pill(uint8_t *fb, int stride, int W, int H,
    stop.
 
    The name is the CALLER's, and which one it is depends on the loaded system
-   (koboy_lcd_labels). The default -- what an empty label table draws -- is
+   (koboy_lcd_pad). The default -- what an empty label table draws -- is
    the retropad's own X / Y / A / B, and not the DMG's own two: the gw core's
    overlay speaks retropad ("NORTHEAST" sits over the SNES pad's TOP button,
    which is X), and a label that disagreed with the overlay would send a user
@@ -549,7 +596,7 @@ static void draw_face_button(uint8_t *fb, int stride, int W, int H,
    Obeys the same contract as chrome_render: it must never write inside the
    game rect. Every element below is either in the bottom strip or clipped to
    the recess band, and the game rect is filled by nothing at all. */
-/* An empty label means "the retropad's own name" -- koboy_lcd_labels says
+/* An empty label means "the retropad's own name" -- koboy_lcd_pad says
    why, and it is what keeps a config that predates that struct (every unit
    test, and the placeholder profile main.c resolves before a ROM is chosen)
    drawing exactly the strip it drew before. Not a defensive clamp: this is
@@ -606,9 +653,10 @@ static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p,
 
     draw_dpad(fb, stride, W, H, c.dpad_cx, c.dpad_cy, c.dpad_r);
 
-    /* The diamond, in the arrangement the core's own overlay uses. Drawn in
-       the order X, Y, A, B purely so the source reads top, left, right,
-       bottom; they do not overlap (see chrome.h on face_off). */
+    /* The face buttons, in whichever arrangement this system uses. The two
+       shoulder bits are discs in the grid and pills in the lower band under
+       the diamond -- chrome_lcd_layout has already decided which, and this
+       reads its answer rather than asking the profile a second time. */
     draw_face_button(fb, stride, W, H, c.x_cx, c.x_cy, c.face_r,
                      lcd_label(l->lcd.x, "X"));
     draw_face_button(fb, stride, W, H, c.y_cx, c.y_cy, c.face_r,
@@ -617,11 +665,17 @@ static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p,
                      lcd_label(l->lcd.a, "A"));
     draw_face_button(fb, stride, W, H, c.b_cx, c.b_cy, c.face_r,
                      lcd_label(l->lcd.b, "B"));
-
-    draw_pill(fb, stride, W, H, &c.l1,     lcd_label(l->lcd.l1, "L1"));
+    if (c.face_n == 6) {
+        draw_face_button(fb, stride, W, H, c.l1_cx, c.l1_cy, c.face_r,
+                         lcd_label(l->lcd.l1, "L1"));
+        draw_face_button(fb, stride, W, H, c.r1_cx, c.r1_cy, c.face_r,
+                         lcd_label(l->lcd.r1, "R1"));
+    } else {
+        draw_pill(fb, stride, W, H, &c.l1, lcd_label(l->lcd.l1, "L1"));
+        draw_pill(fb, stride, W, H, &c.r1, lcd_label(l->lcd.r1, "R1"));
+    }
     draw_pill(fb, stride, W, H, &c.select, lcd_label(l->lcd.select, "SELECT"));
     draw_pill(fb, stride, W, H, &c.start,  "START");
-    draw_pill(fb, stride, W, H, &c.r1,     lcd_label(l->lcd.r1, "R1"));
     draw_pill(fb, stride, W, H, &c.menu,   "MENU");
 
     /* Wordmark, in the centre column under MENU -- the only decoration the
@@ -631,7 +685,13 @@ static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p,
        not crushed -- when there is none. It is decoration, so it is derived
        FROM the controls' geometry and never feeds back into it. */
     int deco_y0 = c.menu.y + c.menu.h + KOBOY_CHROME_MARGIN;
-    int deco_y1 = c.l1.y - KOBOY_CHROME_MARGIN;
+    /* Anchored to START, not to L1: the two pills share a row, and L1 is
+       ABSENT under ROWS6 (its bit is a disc in the grid there), so a
+       zero-sized l1 made this y = -8 and the wordmark silently disappeared
+       on every Mega Drive. Found by rendering the strip and looking at it,
+       which is the only thing that could have found it -- every numeric check
+       in the suite passed. START is drawn in both arrangements. */
+    int deco_y1 = c.start.y - KOBOY_CHROME_MARGIN;
     if (deco_y1 - deco_y0 > TEXT_GLYPH_H + 2) {
         int avail_h = deco_y1 - deco_y0;
         int word_px = 1;
