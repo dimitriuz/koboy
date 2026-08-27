@@ -1349,7 +1349,7 @@ only by `--ui-script`. A NickelMenu playtest with real touch input has still
 not happened.
 
 Device integrity held throughout: `/mnt/onboard/.kobo/version` byte-identical
-before and after (real serial `N4181B1025136` intact), FBInk still reporting
+before and after (the real serial intact), FBInk still reporting
 `deviceName='Libra 2'`, `devicePlatform='Mark 9'`, `hasEclipseWfm=1`, Nickel
 alive, no reboot needed. The device's own calibration is still reversed
 (`key_a = 194`, `key_b = 193`) and was carried forward from the v1 ini during

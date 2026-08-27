@@ -857,8 +857,8 @@ install are literally `.bin`.
 
 ### 55. NOTHING IN THIS BATCH HAS RUN ON A KOBO
 
-The device was off the LAN for the whole session (`ping 192.168.1.27`, no
-reply) and there is no `qemu-arm` on this host, so every number in
+The device was off the LAN for the whole session (it answered neither ICMP
+nor port 22) and there is no `qemu-arm` on this host, so every number in
 `TESTED.md`'s arcade table is an x86_64 measurement. The ARM core
 cross-builds, strips to 41 MB and passes `scripts/verify-core.sh`; that is
 the entire device-side evidence. Rotation in particular has never been seen

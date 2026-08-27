@@ -85,7 +85,7 @@ a process that did not inherit its environment rewrites
 `/mnt/onboard/.kobo/version`**, replacing the real serial with a placeholder:
 
 ```
-before  N4181B1025136,4.1.15,4.38.23684,...,00000000-...-000000000388
+before  <real-serial>,4.1.15,4.38.23684,...,00000000-...-000000000388
 after   11:22:33:44:55:66,4.1.15,4.38.23684,...,
 ```
 

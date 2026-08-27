@@ -74,3 +74,38 @@ roms/*.md
 # NOT *.sgx or *.chd: koboy does not list either (SuperGrafx needs a core this
 # project does not ship, PC Engine CD needs a BIOS it must not ship), so
 # neither can arrive here as content koboy put there.
+
+# ---------------------------------------------------------------- BIOS files
+# Two systems need a console boot ROM koboy does not and must not ship
+# (ColecoVision's colecovision.rom, Intellivision's exec.bin + grom.bin), and
+# `tests/test_dist.sh` already asserts none of them reaches the package. This
+# is the other half of that guard: it stops one reaching the REPOSITORY, which
+# no test can check after the fact.
+#
+# `*.rom` and `*.bin` are global rather than anchored to the roms directories,
+# unlike `.md` above, and the asymmetry is deliberate. `.md` had to be
+# anchored because this project's own Markdown files end that way; nothing in
+# this tree legitimately ends `.rom` or `.bin` -- every build output lives
+# under build/ or dist/, both ignored above -- so the global form costs
+# nothing and catches a BIOS dropped in the working directory during a test
+# run, which is exactly how they arrive.
+*.rom
+*.bin
+
+# ----------------------------------------------- save data the CORES write
+# Not ROMs, but not ours either: these are files a core creates beside the
+# content while a game runs, and five of them were committed by accident
+# before this rule existed (two Pokemon Mini `.eep`, three FinalBurn Neo
+# high-score files). `*.srm`, `*.sav`, `*.ngf` and `*.flash` are already
+# covered above; these are the rest of the set, one per core that does its
+# own persistence rather than going through sram.c.
+*.eep
+*.hi
+*.fs
+*.nv
+# koboy's own save states: state_path writes "<rom>.srm.stN", N in 1..3.
+*.st[0-9]
+# FinalBurn Neo's save directory, which the core mkdir's itself beside the
+# binary on every load. Anchored to the repository root so it cannot shadow
+# third_party/fbneo/ (already ignored above) or a future src/fbneo/.
+/fbneo/
