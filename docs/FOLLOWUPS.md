@@ -1908,7 +1908,31 @@ entry.
 
 ## The in-game SCREENSHOT (added 2026-08-27)
 
-### 101. Nothing about this has run on a Kobo
+### 101. ~~Nothing about this has run on a Kobo~~ -- PARTLY CLOSED 2026-08-27
+
+**Run on the device, and the cost question is answered.** Three scripted
+captures of Tetris against a control run of the same ROM without one, same
+build, same settings:
+
+| | `core` mean | `core` max | `submit` mean |
+|---|---|---|---|
+| with a capture | 4,493-4,499 us | 14,532-16,149 us | 15,968-16,337 us |
+| control, no capture | 4,468 us | 10,426 us | 16,341 us |
+
+So a capture costs **one frame about 6 ms longer than it would otherwise
+be**, and nothing else moves. Not 50 ms, not 2 seconds: it does NOT need
+moving off the main loop, which was the decision this measurement existed
+to make. The PNG decoded at 1264x1680 after transfer, so the writer works
+on-device as well as on the host.
+
+**Still open from this entry:** the plaque (below) -- its erase has not
+been watched on the panel, and residue there is a judgement no
+instrument in this project can make. The card half is proven by the write
+succeeding.
+
+Original text follows.
+
+### 101a. (original) Nothing about this has run on a Kobo
 
 The whole feature is host-verified: `tests/smoke_host.sh` arms a capture
 through `--ui-script`, runs frames, and decodes the PNG with python3's zlib.
