@@ -685,8 +685,18 @@ void video_fit_rect(const koboy_profile *p, int src_w, int src_h, uint32_t par,
            square aspect, so the shortcut is still what actually executes --
            but a layout branch that silently ignores the aspect is exactly the
            kind of thing that gets found by rendering a frame and looking at
-           it, two systems later. */
-        if (par == KOBOY_ASPECT_ONE && src_w == p->max_w && src_h == p->max_h) {
+           it, two systems later.
+
+           AND `rect_from_max`, which is that "two systems later" arriving:
+           SNES and Mega Drive share this layout now and their rect comes from
+           BASE, then possibly gets cut again by the per-system scale ceiling.
+           For them the premise above is false whatever the aspect is -- the
+           rect is not max's shape and is not max's size -- so a frame that
+           happened to arrive at exactly max geometry would be STRETCHED to
+           fill a rect it does not match. Guarded on the flag rather than on
+           the layout, because "LCD" no longer means "Game & Watch". */
+        if (p->rect_from_max &&
+            par == KOBOY_ASPECT_ONE && src_w == p->max_w && src_h == p->max_h) {
             dw = p->game_w; dh = p->game_h;
         } else {
             /* The frame's DISPLAYED shape, which is what an aspect-preserving
@@ -1015,18 +1025,29 @@ static bool video_pipeline_run(koboy_video *v, const void *src, int src_w, int s
        (video_fit_par keeps it so), so only one row in `scale` does per-pixel
        work and the rest are copies.
 
-       THE LCD LAYOUT IS EXCLUDED EXPLICITLY, not left to fall out of the
-       arithmetic, and it is not redundant: an LCD fit CAN land on an exact
-       integer multiple by coincidence, and the two scalers do not agree to
-       the pixel when it does. video_scale_gray_frac's step is floored, so at
-       a scale that is not a power of two it samples up to one source pixel
-       low at each boundary -- source column 0 gets one extra destination
-       column and one other column loses one. That is a property the Game &
-       Watch layout has always had and this change has no business altering;
-       the Game Boy has never had it and must not acquire it, which is what
-       the block path being unconditional for an exact DMG fit guarantees. */
+       THE GAME & WATCH FIT IS EXCLUDED EXPLICITLY, not left to fall out of
+       the arithmetic, and it is not redundant: its fractional fit CAN land on
+       an exact integer multiple by coincidence, and the two scalers do not
+       agree to the pixel when it does. video_scale_gray_frac's step is
+       floored, so at a scale that is not a power of two it samples up to one
+       source pixel low at each boundary -- source column 0 gets one extra
+       destination column and one other column loses one. That is a property
+       the Game & Watch layout has always had and this change has no business
+       altering; the Game Boy has never had it and must not acquire it, which
+       is what the block path being unconditional for an exact DMG fit
+       guarantees.
+
+       KEYED ON `rect_from_max`, NOT ON THE LAYOUT, and the distinction
+       arrived with SNES and Mega Drive: they are in the LCD layout too now,
+       but their rect comes from base and their exact-multiple fits are the
+       ordinary kind the block path is BETTER at. Excluding them along with
+       Game & Watch would hand two systems the one-pixel sampling skew for no
+       reason. As shipped neither reaches it anyway (both cores report a
+       non-square pixel aspect, so no fit is an exact multiple); with
+       `pixel_aspect = false` they do, and then they get the same scaler the
+       Game Boy gets. */
     const int fs = dh / src_h;
-    const bool block_ok = v->p.layout_mode != KOBOY_LAYOUT_LCD &&
+    const bool block_ok = !v->p.rect_from_max &&
                           fs >= 1 && dh == src_h * fs && dw == src_w * fs;
     if (block_ok) {
         video_scale_gray(dst, v->stride, v->gray,

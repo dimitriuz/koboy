@@ -232,6 +232,23 @@ typedef struct {
        scale/game_w/panel_w, which are resolved-once facts about this
        session's presentation rather than settings. */
     int      layout_mode;
+    /* KOBOY_LAYOUT_LCD only: the reserved rect was fitted from max_w x max_h
+       rather than from base_w x base_h. Resolved from the config's
+       lcd_rect_from_max, which is set from the ROM's extension, and it
+       travels in the profile for the same reason layout_mode does -- video.c
+       needs it and only has the profile.
+
+       It is NOT a duplicate of "layout_mode == LCD" and the difference is
+       load-bearing. video_fit_rect has a shortcut that hands a frame the
+       WHOLE reserved rect when it arrives at exactly max geometry, on the
+       premise that the rect was fitted from that geometry and so has its
+       aspect. That premise is true for Game & Watch and false for the two
+       console systems that joined this layout -- their rect comes from base
+       and may then be cut again by the per-system scale ceiling -- so taking
+       the shortcut there would stretch a frame to a rect it does not match.
+       Guarded on this flag rather than on the layout, because "LCD" stopped
+       meaning "Game & Watch". */
+    bool     rect_from_max;
     bool     has_hw_buttons;
     uint32_t wfm_fast, wfm_gray, wfm_full;
 } koboy_profile;
@@ -272,6 +289,42 @@ typedef struct {
    changing this number. */
 #define KOBOY_MAX_EXTRA_BTNS 2
 
+/* WHAT THE LCD STRIP'S CONTROLS SAY, per system -- the labels only, never the
+   bits. Which bit a disc reports is fixed by the strip's own geometry
+   (chrome_lcd_layout, input.c's recompute_lcd) and is the SAME for every
+   system; what changes is the name the console prints on that button.
+
+   This exists because the strip stopped being a Game & Watch's alone. It was
+   built labelled X/Y/A/B/L1/R1 -- RETROPAD names -- and that is right for a
+   .mgw, because gw-libretro's own on-screen overlay speaks retropad and a
+   player reading it has to find the same button here. It is actively WRONG
+   for a Mega Drive: Genesis Plus GX maps JOYPAD_A to the console's **C**, so
+   a disc moulded "A" that produces C is worse than an unlabelled one -- it is
+   the same "a button that exists in the hardware and is unreachable" bug this
+   project has now met six times, wearing a label instead of missing one.
+
+   EMPTY MEANS THE RETROPAD NAME. chrome.c falls back to X/Y/A/B/L1/R1/SELECT
+   for any field left "" (config_lcd_labels_for_rom clears them for every
+   system that wants the retropad's own names, which is Game & Watch and
+   anything else that reaches this layout later). That keeps the field purely
+   additive: a config built by config_defaults alone -- which is every
+   existing test and the placeholder profile main.c resolves before a ROM is
+   chosen -- draws exactly the strip it drew before this struct existed, which
+   tests/golden/chrome_lcd_1264x1680.pgm is what actually proves.
+
+   NO `start`, and that is a deliberate omission rather than a forgotten
+   field: START is called START on all three systems that reach this layout
+   (a Game & Watch's TIME/GAME are per-title, a SNES's is Start, a Mega
+   Drive's is Start), so a field for it could only ever hold the fallback.
+   This file's convention is that a term which cannot vary is removed and
+   replaced by the reason. SELECT does vary -- it is the Mega Drive's MODE --
+   so it has one. */
+typedef struct {
+    char x[8], y[8], a[8], b[8];   /* the diamond: top, left, right, bottom */
+    char l1[8], r1[8];             /* the two shoulder pills */
+    char select[8];
+} koboy_lcd_labels;
+
 /* Control geometry in permille of the panel, so one layout fits every device.
 
    `extra` is filled from the ROM's extension by config_extra_buttons_for_rom,
@@ -283,6 +336,11 @@ typedef struct {
     int a_cx, a_cy, a_r;
     int b_cx, b_cy, b_r;
     koboy_extra_btn extra[KOBOY_MAX_EXTRA_BTNS];
+    /* Used by the LCD faceplate only, and carried HERE rather than in a
+       parallel struct because chrome_render and input.c are both already
+       handed a koboy_layout and neither knows which faceplate it is about to
+       draw. The DMG branch ignores it; see koboy_lcd_labels. */
+    koboy_lcd_labels lcd;
     int start_cx, start_cy, start_w, start_h;
     int select_cx, select_cy, select_w, select_h;
     int menu_cx, menu_cy, menu_w, menu_h;

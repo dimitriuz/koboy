@@ -278,11 +278,44 @@ TEST_MAIN({
         CHECK_EQ_INT(config_layout_for_rom("mickey.MgW"), KOBOY_LAYOUT_LCD);
         CHECK_EQ_INT(config_layout_for_rom("tetris.gb"), KOBOY_LAYOUT_DMG);
         CHECK_EQ_INT(config_layout_for_rom("zelda.gbc"), KOBOY_LAYOUT_DMG);
-        /* The two systems added after the LCD layout existed. Both are
-           d-pad + face buttons + START/SELECT machines with PHYSICAL buttons,
-           so both get the DMG faceplate -- .mgw stays the only extension that
-           earns LCD, and a layout picker that keyed off "not a Game Boy"
-           rather than off ".mgw" would fail exactly here. */
+        /* SNES AND MEGA DRIVE, the two systems whose pads outgrew the DMG
+           faceplate's two spare pockets: a SNES is A B X Y L R, a six-button
+           Mega Drive is A B C X Y Z, and the LCD strip is the only surface
+           koboy has that carries either. Case-insensitive because the
+           author's own SNES directory holds 47 files ending .smc and 11
+           ending .SMC side by side on FAT32. */
+        CHECK_EQ_INT(config_layout_for_rom("Star Fox.sfc"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("/r/SNES/STAR FOX.SFC"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("Super Metroid.smc"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("SUPER METROID.SMC"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("Sonic.md"), KOBOY_LAYOUT_LCD);
+        CHECK_EQ_INT(config_layout_for_rom("SONIC.MD"), KOBOY_LAYOUT_LCD);
+
+        /* THE THREE NEAR MISSES, and each is a real trap rather than a
+           formality.
+
+           .sms is a Master System, whose two-button pad fits the faceplate --
+           and it shares Genesis Plus GX with .md, so a layout picker written
+           against the CORE instead of the extension would move it too. .zip
+           is arcade, evaluated for this layout and rejected in
+           docs/FOLLOWUPS.md #74 (fractional scaling beats on arcade pixel
+           art, and FBNeo's square max would band a vertical board). .pce is
+           the system that looks most like it should move and least needs to:
+           I, II, RUN and Select are four controls and the faceplate has
+           four. */
+        CHECK_EQ_INT(config_layout_for_rom("Sonic.sms"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("galaga.zip"), KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(config_layout_for_rom("Bonk.pce"), KOBOY_LAYOUT_DMG);
+        /* ...and .sm, a strict prefix of both .sms and .smc, must match
+           NEITHER -- the same collision ends_with_ext is written to survive
+           and the reason .smc could not be a prefix test. */
+        CHECK_EQ_INT(config_layout_for_rom("weird.sm"), KOBOY_LAYOUT_DMG);
+
+        /* The systems added after the LCD layout existed and NOT moved to it.
+           All are d-pad + face buttons + START/SELECT machines whose whole
+           control set fits the DMG faceplate, and a layout picker that keyed
+           off "not a Game Boy" rather than off the extension would fail
+           exactly here. */
         CHECK_EQ_INT(config_layout_for_rom("metroid.nes"), KOBOY_LAYOUT_DMG);
         CHECK_EQ_INT(config_layout_for_rom("METROID.NES"), KOBOY_LAYOUT_DMG);
         CHECK_EQ_INT(config_layout_for_rom("tetris.min"), KOBOY_LAYOUT_DMG);
@@ -299,6 +332,176 @@ TEST_MAIN({
            before any ROM is chosen -- relies on. */
         koboy_config d0; config_defaults(&d0);
         CHECK_EQ_INT(d0.layout_mode, KOBOY_LAYOUT_DMG);
+        CHECK_EQ_INT(d0.lcd_rect_from_max, false);
+
+        /* WHICH GEOMETRY THE LCD RECT COMES FROM, which is now a per-system
+           question and not a property of the layout. Game & Watch is the only
+           true: gwlua alternates its frame several times a second and a rect
+           following that would repaint the panel at the same rate. The two
+           console systems take base, which is what lets the scale ceiling
+           bite (asserted below) and what keeps snes9x2005's square 512x512
+           max from putting a dead band under a 4:3 picture. */
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("mickey.mgw"), true);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("/a/MICKEY.MGW"), true);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("Star Fox.sfc"), false);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("Metroid.smc"), false);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("Sonic.md"), false);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom("tetris.gb"), false);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom(""), false);
+        CHECK_EQ_INT(config_lcd_rect_from_max_for_rom(NULL), false);
+    }
+
+    /* THE PER-SYSTEM SCALE CEILING SURVIVES THE MOVE TO THE LCD LAYOUT.
+     *
+     * This is the whole trap in moving SNES. The ceiling of 3 was added
+     * because sizing the rect from the frame a core really draws quadrupled
+     * SNES's picture and cost its heaviest titles measured device speed --
+     * Star Fox 93% -> 67%, Kirby Super Star 96% -> 78%. The LCD layout fits
+     * FRACTIONALLY and to the full panel width, so an uncapped .sfc would get
+     * 1264x1106 on the verified panel: 2.3x the area the ceiling holds it to,
+     * which is most of the way back to the cost the ceiling was added to
+     * avoid.
+     *
+     * Asserted as a PAIR at identical geometry with only the ceiling
+     * differing, which is the only shape that measures the ceiling rather
+     * than the arithmetic: a test that asserted 897x672 alone would pass
+     * against a resolver that had simply picked a smaller fit for some other
+     * reason.
+     *
+     * 299x224 is the SNES's rect on the device -- 256 source columns widened
+     * by snes9x2005's reported 4:3 display aspect (config_resolve_profile_par
+     * does the widening; it is passed pre-widened here so this stays a test
+     * of the cap). */
+    {
+        koboy_config sc; config_defaults(&sc);
+        sc.layout_mode = KOBOY_LAYOUT_LCD;
+        sc.lcd_rect_from_max = false;
+        sc.scale_ceiling = config_scale_ceiling_for_rom("Star Fox.sfc");
+        CHECK_EQ_INT(sc.scale_ceiling, 3);
+
+        koboy_profile sp;
+        CHECK(config_resolve_profile(&sp, &sc, 1264, 1680, 299, 224, 299, 224));
+        CHECK_EQ_INT(sp.game_w, 299 * 3);
+        CHECK_EQ_INT(sp.game_h, 224 * 3);
+        CHECK_EQ_INT(sp.game_w, 897);
+        CHECK_EQ_INT(sp.game_h, 672);
+        /* Centred in what is left above the strip, and CLEAR of it -- the
+           strip carries MENU, the only way back to the browser. */
+        int ctop = chrome_controls_top(KOBOY_LAYOUT_LCD, &sc.layout, 1264, 1680);
+        CHECK_EQ_INT(sp.game_x, (1264 - 897) / 2);
+        CHECK_EQ_INT(sp.game_y, (ctop - 672) / 2);
+        CHECK(sp.game_y + sp.game_h <= ctop);
+
+        /* The control: the SAME resolver, the SAME geometry, no ceiling. */
+        koboy_config uc = sc;
+        uc.scale_ceiling = 0;
+        koboy_profile up;
+        CHECK(config_resolve_profile(&up, &uc, 1264, 1680, 299, 224, 299, 224));
+        CHECK_EQ_INT(up.game_w, 1264);
+        CHECK_EQ_INT(up.game_h, 224 * 1264 / 299);
+        /* 1.98x, measured -- stated as "nearly twice" rather than a literal
+           so a panel-independent claim is what is checked. */
+        CHECK(up.game_w * up.game_h > sp.game_w * sp.game_h * 19 / 10);
+
+        /* AND AN EXPLICIT `scale =` DOES NOT DISARM IT, which is where this
+           very change nearly shipped a regression. The DMG branch lets an
+           explicit scale override the ceiling, because down there the margin
+           loop is a second limiter no setting can switch off. This branch has
+           no backstop at all -- and the SHIPPED config/koboy.ini sets
+           `scale = 5`, so scale_explicit is true on every real device. A cap
+           gated on it would have been off everywhere it mattered. */
+        koboy_config ec = sc;
+        ec.scale_explicit = true;
+        ec.scale = 5;
+        koboy_profile ep;
+        CHECK(config_resolve_profile(&ep, &ec, 1264, 1680, 299, 224, 299, 224));
+        CHECK_EQ_INT(ep.game_w, 897);
+        CHECK_EQ_INT(ep.game_h, 672);
+
+        /* A system with no ceiling is untouched by any of this -- the Mega
+           Drive fits fractionally to the panel width, which is the point of
+           the layout. Same call, same resolver, different system. */
+        koboy_config mc; config_defaults(&mc);
+        mc.layout_mode = KOBOY_LAYOUT_LCD;
+        CHECK_EQ_INT(config_scale_ceiling_for_rom("Sonic.md"), 0);
+        mc.scale_ceiling = config_scale_ceiling_for_rom("Sonic.md");
+        koboy_profile mp2;
+        CHECK(config_resolve_profile(&mp2, &mc, 1264, 1680, 293, 224, 348, 240));
+        CHECK_EQ_INT(mp2.game_w, 1264);
+    }
+
+    /* WHAT THE LCD STRIP'S CONTROLS SAY, per system. The bits do not change
+       -- the strip's geometry is one thing for all three systems -- so this
+       is entirely about the words, and the words are read off the cores'
+       descriptor tables. test_chrome.c asserts they reach the panel; this
+       asserts the table itself. */
+    {
+        koboy_layout l;
+        koboy_config lc; config_defaults(&lc); l = lc.layout;
+
+        /* THE MEGA DRIVE, where every one of these differs from the retropad
+           name the strip would otherwise print. JOYPAD_A is the console's C,
+           JOYPAD_Y its A, JOYPAD_X its Y, JOYPAD_L its X, JOYPAD_R its Z and
+           JOYPAD_SELECT its MODE; only JOYPAD_B is B. A disc drawn "A" over
+           JOYPAD_A is a lie a player acts on. */
+        config_lcd_labels_for_rom(&l, "/roms/Streets of Rage 2 (USA).md");
+        CHECK(strcmp(l.lcd.x, "Y") == 0);          /* diamond top    */
+        CHECK(strcmp(l.lcd.y, "A") == 0);          /* diamond left   */
+        CHECK(strcmp(l.lcd.a, "C") == 0);          /* diamond right  */
+        CHECK(strcmp(l.lcd.b, "B") == 0);          /* diamond bottom */
+        CHECK(strcmp(l.lcd.l1, "X") == 0);
+        CHECK(strcmp(l.lcd.r1, "Z") == 0);
+        CHECK(strcmp(l.lcd.select, "MODE") == 0);
+        /* All six of a six-button pad are present and DISTINCT. A table that
+           repeated a name would draw two discs the player cannot tell apart,
+           and this catches it without naming the pair. */
+        {
+            const char *six[6] = { l.lcd.x, l.lcd.y, l.lcd.a, l.lcd.b,
+                                   l.lcd.l1, l.lcd.r1 };
+            for (int i = 0; i < 6; i++)
+                for (int j = i + 1; j < 6; j++)
+                    CHECK(strcmp(six[i], six[j]) != 0);
+        }
+
+        /* THE SNES, where the retropad IS the pad and only the shoulders are
+           renamed: the console calls them L and R, and the "1" in the
+           retropad's L1/R1 says there is a second pair to look for. */
+        config_lcd_labels_for_rom(&l, "/roms/Star Fox (USA) (Rev 2).sfc");
+        CHECK(strcmp(l.lcd.x, "X") == 0);
+        CHECK(strcmp(l.lcd.y, "Y") == 0);
+        CHECK(strcmp(l.lcd.a, "A") == 0);
+        CHECK(strcmp(l.lcd.b, "B") == 0);
+        CHECK(strcmp(l.lcd.l1, "L") == 0);
+        CHECK(strcmp(l.lcd.r1, "R") == 0);
+        CHECK(strcmp(l.lcd.select, "SELECT") == 0);
+        /* .smc is the same cartridge behind a different dumping convention
+           and must get the same table, byte for byte. */
+        {
+            koboy_layout l2 = lc.layout;
+            config_lcd_labels_for_rom(&l2, "/roms/Super Metroid.smc");
+            CHECK(memcmp(&l2.lcd, &l.lcd, sizeof l.lcd) == 0);
+        }
+
+        /* GAME & WATCH KEEPS THE RETROPAD NAMES, encoded as an EMPTY table --
+           gw-libretro's own overlay speaks retropad, and a player consulting
+           it has to find the same button here. Asserted after a .sfc, so this
+           is also the clear-on-every-call contract: without the memset the
+           strip would keep saying L and R on the next Game & Watch. */
+        config_lcd_labels_for_rom(&l, "/roms/Donkey Kong.mgw");
+        koboy_lcd_labels zero;
+        memset(&zero, 0, sizeof zero);
+        CHECK(memcmp(&l.lcd, &zero, sizeof zero) == 0);
+        /* And so does everything that never reaches this layout, so a system
+           moved here later starts from the retropad rather than from whatever
+           the last ROM left behind. */
+        config_lcd_labels_for_rom(&l, "/roms/Star Fox.sfc");
+        config_lcd_labels_for_rom(&l, "/roms/Metroid.nes");
+        CHECK(memcmp(&l.lcd, &zero, sizeof zero) == 0);
+        config_lcd_labels_for_rom(&l, "/roms/Star Fox.sfc");
+        config_lcd_labels_for_rom(&l, NULL);
+        CHECK(memcmp(&l.lcd, &zero, sizeof zero) == 0);
+        /* config_defaults leaves it empty too. */
+        CHECK(memcmp(&lc.layout.lcd, &zero, sizeof zero) == 0);
     }
 
     /* The reserved rect in the LCD layout: full panel width, everything above
@@ -311,6 +514,12 @@ TEST_MAIN({
     {
         koboy_config lc; config_defaults(&lc);
         lc.layout_mode = KOBOY_LAYOUT_LCD;
+        /* GAME & WATCH, which is the only system that sizes this rect from
+           MAX -- see config_lcd_rect_from_max_for_rom. Set explicitly, because
+           config_defaults leaves it false and every geometry below is a .mgw
+           title's. The two console systems that share this layout take the
+           other branch and are asserted separately. */
+        lc.lcd_rect_from_max = true;
         koboy_profile lp;
 
         /* MEASURED geometries, from running the real gw-libretro core --
@@ -346,7 +555,10 @@ TEST_MAIN({
         /* base != max is carried through untouched, and the rect is sized off
            MAX -- the invariant that keeps a legitimately larger frame from
            spilling onto the strip. Only a base != max case can tell the two
-           apart, exactly as in the DMG sweep above. */
+           apart, exactly as in the DMG sweep above. This is Donkey Kong
+           zoomed to its LCD alone (305x191 of a 654x396 unit), which is the
+           real case: it happens several times a second, and the rect must not
+           move when it does. */
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 305, 191, 654, 396));
         CHECK_EQ_INT(lp.base_w, 305);
         CHECK_EQ_INT(lp.base_h, 191);
@@ -354,6 +566,26 @@ TEST_MAIN({
         CHECK_EQ_INT(lp.max_h, 396);
         CHECK_EQ_INT(lp.game_w, 1264);          /* from 654x396, not 305x191 */
         CHECK_EQ_INT(lp.game_h, 765);
+
+        /* AND THE OTHER SIDE OF THAT SWITCH, on the SAME geometry, so the
+           only thing that differs between the two answers is the flag. A
+           system that does NOT churn its base at video rate sizes the rect
+           from what the core is drawing NOW, and 305x191 is a taller aspect
+           than 654x396, so the height must come out DIFFERENT -- 791, not
+           765. Asserting the changed number rather than "it still resolves"
+           is what makes this fail if the flag is ignored; the previous
+           version of this block passed with only one behaviour implemented,
+           because the max-sized answer was also the only answer. */
+        {
+            koboy_config bc = lc;
+            bc.lcd_rect_from_max = false;
+            koboy_profile bp;
+            CHECK(config_resolve_profile(&bp, &bc, 1264, 1680, 305, 191, 654, 396));
+            CHECK_EQ_INT(bp.game_w, 1264);
+            CHECK_EQ_INT(bp.game_h, 191 * 1264 / 305);
+            CHECK_EQ_INT(bp.game_h, 791);
+            CHECK(bp.game_h != lp.game_h);
+        }
 
         static const struct { int w, h; const char *name; } panels[] = {
             { 1072, 1448, "Clara"  },
@@ -956,54 +1188,38 @@ TEST_MAIN({
         for (size_t i = 0; i < sizeof distinct / sizeof distinct[0]; i++)
             CHECK(strchr(config_core_for_rom(distinct[i]), '/') == NULL);
 
-        /* ---- the fourteen-system batch's control sets, and the two things
-           they are actually guarding.
+        /* ---- the fourteen-system batch's control sets.
 
-           THE MEGA DRIVE'S "A" IS NOT THE FACEPLATE'S "A". Genesis Plus GX
-           maps JOYPAD_B -> B, JOYPAD_A -> **C**, JOYPAD_Y -> **A** (read off
-           its port-0 descriptor table). The faceplate's A disc is JOYPAD_A,
-           so it is the console's C; the console's A has no home unless
-           extra[0] gives it one. Asserting the BIT and not just "two discs
-           exist" is the whole point: a version of this that put
-           KOBOY_BTN_A there would draw the same two discs, pass every count
-           and geometry check in test_chrome.c, and ship a Mega Drive with
-           two buttons wired to C and none to A. */
+           MEGA DRIVE AND SNES HAVE NO EXTRA DISCS ANY MORE, and asserting it
+           is the point rather than a formality. Both used to have two, and
+           both outgrew them: a SNES pad is A B X Y L R and a six-button Mega
+           Drive is A B C X Y Z, against two spare pockets. They are on the
+           LCD strip now (config_layout_for_rom), whose labels are asserted
+           further down. If either ever comes back here with discs, one of
+           two things has happened -- somebody re-added a partial control set,
+           or the layout switch was reverted -- and both should fail. */
         {
             koboy_layout l;
             koboy_config lc; config_defaults(&lc); l = lc.layout;
 
-            config_extra_buttons_for_rom(&l, "/roms/Streets of Rage 2 (USA).md");
+            /* Seeded with a system that DOES have discs first, so this also
+               proves the clear-on-every-call contract rather than merely
+               finding a struct that was already zero -- the failure mode
+               where an assertion's expected value is also the default. */
+            config_extra_buttons_for_rom(&l, "/roms/GunPey.ws");
             CHECK(l.extra[0].r > 0);
-            CHECK(l.extra[1].r > 0);
-            CHECK_EQ_INT((int)l.extra[0].bit, (int)KOBOY_BTN_Y);   /* hardware A */
-            CHECK_EQ_INT((int)l.extra[1].bit, (int)KOBOY_BTN_X);   /* hardware Y */
-            CHECK(strcmp(l.extra[0].label, "A") == 0);
-            CHECK(strcmp(l.extra[1].label, "Y") == 0);
-            /* And NOT the faceplate's own A bit, which is already spoken for
-               by the console's C. If these two ever compare equal, one of
-               the Mega Drive's buttons has become unreachable again. */
-            CHECK(l.extra[0].bit != KOBOY_BTN_A);
-            CHECK(l.extra[1].bit != KOBOY_BTN_A);
-            CHECK(l.extra[0].bit != l.extra[1].bit);
-
-            /* SNES: the retropad IS a SNES pad, so the four face buttons are
-               B, A, Y, X and the two spare discs go to Y and X rather than to
-               the shoulders. Y is the one that must not be lost -- it is run
-               on Mario and fire on Samus -- so the bit is asserted, not the
-               count. */
+            config_extra_buttons_for_rom(&l, "/roms/Streets of Rage 2 (USA).md");
+            CHECK_EQ_INT(l.extra[0].r, 0);
+            CHECK_EQ_INT(l.extra[1].r, 0);
+            CHECK_EQ_INT((int)l.extra[0].bit, 0);
+            config_extra_buttons_for_rom(&l, "/roms/GunPey.ws");
             config_extra_buttons_for_rom(&l, "/roms/Super Metroid.sfc");
-            CHECK_EQ_INT((int)l.extra[0].bit, (int)KOBOY_BTN_Y);
-            CHECK_EQ_INT((int)l.extra[1].bit, (int)KOBOY_BTN_X);
-            CHECK(strcmp(l.extra[0].label, "Y") == 0);
-            CHECK(strcmp(l.extra[1].label, "X") == 0);
-            /* .smc must get exactly the same pad as .sfc. They are one
-               system behind two dumping conventions, and a table that
-               handled only one of them would leave half the collection
-               without a Y button. */
-            koboy_layout l2 = lc.layout;
-            config_extra_buttons_for_rom(&l2, "/roms/Super Metroid.smc");
-            CHECK_EQ_INT((int)l2.extra[0].bit, (int)l.extra[0].bit);
-            CHECK_EQ_INT((int)l2.extra[1].bit, (int)l.extra[1].bit);
+            CHECK_EQ_INT(l.extra[0].r, 0);
+            CHECK_EQ_INT(l.extra[1].r, 0);
+            config_extra_buttons_for_rom(&l, "/roms/GunPey.ws");
+            config_extra_buttons_for_rom(&l, "/roms/Super Metroid.smc");
+            CHECK_EQ_INT(l.extra[0].r, 0);
+            CHECK_EQ_INT(l.extra[1].r, 0);
 
             /* PC ENGINE HAS NO EXTRA DISCS, and this is a deliberate empty
                case rather than a forgotten one -- the same shape as the

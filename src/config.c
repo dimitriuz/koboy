@@ -375,14 +375,37 @@ int config_layout_for_rom(const char *rom_path)
        ROM has been chosen, and it is also the layout every UI screen (MAIN
        MENU, RECENT, ALL GAMES) is drawn over.
 
-       .mgw is still the ONLY LCD extension, and none of the systems added
-       since is in that company: a NES pad, a Pokemon Mini, a WonderSwan, a
-       Neo Geo Pocket, an Atari 2600 joystick, a ColecoVision controller, an
-       Intellivision hand controller and a Master System / Game Gear pad are
-       all stick-or-pad plus physical buttons, not buttons drawn into the
-       artwork, which is exactly what the DMG faceplate already draws and
-       hit-tests. LCD exists because a Game & Watch unit draws its own
-       controls; none of these does.
+       THREE SYSTEMS NOW, and the two that joined .mgw did so for a reason
+       that has nothing to do with drawn-on artwork: THEIR PADS DO NOT FIT
+       THE DMG FACEPLATE. That faceplate carries A, B, START, SELECT, MENU
+       and at most two more discs (KOBOY_MAX_EXTRA_BTNS, and see
+       config_extra_buttons_for_rom for why two is the room there is, not a
+       number anyone chose). A SNES pad is A B X Y L R + Start/Select -- four
+       more than A and B, so L and R fell off. A six-button Mega Drive pad is
+       A B C X Y Z -- so X and Z fell off. Both shortfalls are recorded in
+       config_extra_buttons_for_rom's history; neither could be fixed on that
+       faceplate, because there is no seventh and eighth pocket on it.
+
+       The LCD strip has both. It was built for Game & Watch and it carries a
+       d-pad, a four-button DIAMOND, L1, R1, SELECT and START -- which is
+       EXACTLY a SNES pad, and a superset of a six-button Mega Drive's. So
+       these two systems move here rather than the strip's control set being
+       rebuilt on the DMG faceplate. What they give up is the faceplate's
+       moulded look and, for SNES, nothing else at all: the scale ceiling
+       still applies in this layout (config_resolve_profile_par), so the
+       picture is the same 897x672 it was on the DMG side.
+
+       ARCADE IS NOT HERE, and that was evaluated rather than skipped --
+       docs/FOLLOWUPS.md #74 has it in full. Two reasons: FBNeo's square
+       512x512 max would put ~135 px of permanent white band down each side of
+       a vertical board in this layout, and its DMG set (stick + four fire +
+       coin + start) already covers the pre-1990 scope the core was added for.
+
+       NONE OF THE REMAINING ELEVEN is in this company either: a NES pad, a
+       Pokemon Mini, a WonderSwan, a Neo Geo Pocket, an Atari 2600 joystick, a
+       ColecoVision controller, an Intellivision hand controller, a PC Engine
+       pad and a Master System / Game Gear pad all fit the DMG faceplate with
+       its two spare discs, and moving them would be churn.
 
        The Intellivision came CLOSEST to earning it and still does not.
        FreeIntv has an optional `freeintv_multiscreen_overlay` mode that
@@ -396,7 +419,142 @@ int config_layout_for_rom(const char *rom_path)
        keypad -- see the .int case in config_extra_buttons_for_rom. Paying
        12x for a second way to press the same keys is not a trade. */
     if (!rom_path || !*rom_path) return KOBOY_LAYOUT_DMG;
-    return ends_with_ext(rom_path, ".mgw") ? KOBOY_LAYOUT_LCD : KOBOY_LAYOUT_DMG;
+    if (ends_with_ext(rom_path, ".mgw")) return KOBOY_LAYOUT_LCD;
+    if (ends_with_ext(rom_path, ".sfc")) return KOBOY_LAYOUT_LCD;
+    if (ends_with_ext(rom_path, ".smc")) return KOBOY_LAYOUT_LCD;
+    if (ends_with_ext(rom_path, ".md"))  return KOBOY_LAYOUT_LCD;
+    return KOBOY_LAYOUT_DMG;
+}
+
+/* WHETHER THE LCD RECT IS SIZED FROM THE CORE'S MAX GEOMETRY, or from what it
+   is drawing right now. Meaningless outside KOBOY_LAYOUT_LCD -- the DMG
+   branch has taken base since ae03e76 and this is not asked there.
+
+   TRUE FOR GAME & WATCH ONLY, and the reason is a RATE, not a shape. A .mgw
+   title alternates between the whole unit and the LCD alone SEVERAL TIMES A
+   SECOND (Donkey Kong: 654x396 <-> 305x191). Sizing that rect from base would
+   resize the artwork, redraw the faceplate and repaint the whole panel at
+   that rate -- which is what the device log showed before the max-sized rect
+   went in, and it is why main.c's geometry check compares the resolved
+   presentation rather than the inputs.
+
+   FALSE FOR SNES AND MEGA DRIVE, and their base DOES move -- snes9x2005
+   drops into a 512-wide hi-res mode, Genesis Plus GX switches 256 <-> 320 --
+   but at SCENE boundaries, not at video rate, which is the same cost the DMG
+   layout has been paying for those two systems all along. What taking max
+   would cost them instead is not a cost anyone would accept: snes9x2005
+   declares a SQUARE 512x512 max for an interlaced mode almost nothing enters,
+   so a max-sized rect is a square recess around a 4:3 picture -- ~100 px of
+   permanent dead band under it -- and, worse, the per-system scale ceiling
+   would have nothing to bite on, because 3 x 512 is bigger than the panel.
+   The ceiling is measured, load-bearing and the reason SNES is playable
+   (see `ceiling` on g_core_by_ext); a rect sizing that disarmed it would put
+   Star Fox back at 67%. */
+bool config_lcd_rect_from_max_for_rom(const char *rom_path)
+{
+    if (!rom_path || !*rom_path) return false;
+    return ends_with_ext(rom_path, ".mgw");
+}
+
+/* WHAT THE LCD STRIP'S CONTROLS SAY. The contract, and why empty means "the
+   retropad's own name", is on koboy_lcd_labels in koboy.h.
+
+   Cleared on every call for the same reason config_extra_buttons_for_rom
+   clears its discs: this runs once per ROM load into a config that outlives
+   one game (MENU -> CHOOSE ROM reuses it), so "set them for a Mega Drive"
+   without "clear them for everything else" would leave a strip saying C on
+   the next Game & Watch. */
+void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path)
+{
+    if (!l) return;
+    memset(&l->lcd, 0, sizeof l->lcd);
+    if (!rom_path || !*rom_path) return;
+
+    /* THE MEGA DRIVE, and every one of these six is READ OFF THE CORE rather
+       than chosen. Genesis Plus GX's port-0 descriptor block
+       (libretro/libretro.c) says:
+
+         JOYPAD_B -> B     JOYPAD_Y -> A     JOYPAD_L -> X
+         JOYPAD_A -> C     JOYPAD_X -> Y     JOYPAD_R -> Z
+         JOYPAD_START -> Start   JOYPAD_SELECT -> Mode
+
+       The strip's diamond is TOP=JOYPAD_X, LEFT=JOYPAD_Y, RIGHT=JOYPAD_A,
+       BOTTOM=JOYPAD_B (chrome_lcd_layout, and input.c hit-tests the same
+       struct), so the labels below are that table transposed and nothing
+       more. Read them off the panel and the arrangement is A left, B bottom,
+       C right -- the hardware's own A-B-C arc -- with Y directly above B,
+       which is where a real six-button pad puts it.
+
+       X AND Z GO ON THE SHOULDER PILLS, and that is the one place this
+       differs from the moulded hardware, where they flank Y across the top
+       row. There is no third and fourth position in the diamond; the pills
+       are the only other pair the strip has, and a button in the wrong PLACE
+       is recoverable in a way that a button which does not exist is not. On
+       the DMG faceplate X and Z did not exist at all -- that shortfall is
+       what moved this system here.
+
+       SELECT SAYS MODE. A Mega Drive has no Select; JOYPAD_SELECT is the
+       pad's Mode button, and holding it at power-on is how a six-button pad
+       pretends to be a three-button one for the titles that mis-detect it.
+       A pill saying SELECT that produces Mode is the same class of lie as a
+       disc saying A that produces C.
+
+       ALL SIX ARE LIVE WITHOUT A CORE OPTION, checked in the core rather than
+       assumed: libretro.c:1039 sets config.input[].padtype to
+       DEVICE_PAD2B|DEVICE_PAD3B|DEVICE_PAD6B, which input.c's
+       SYSTEM_GAMEPAD case reads as "auto" and replaces with the pad the
+       ROM HEADER declares -- DEVICE_PAD6B iff the cartridge's I/O-support
+       field contains '6' (core/loadrom.c's peripheralinfo table, bit 1).
+       koboy answers no core options and never calls
+       retro_set_controller_port_device, so that auto-detect stands. A
+       three-button title simply reads nothing from X/Y/Z, which is what it
+       does on real hardware too. */
+    if (ends_with_ext(rom_path, ".md")) {
+        snprintf(l->lcd.x, sizeof l->lcd.x, "%s", "Y");
+        snprintf(l->lcd.y, sizeof l->lcd.y, "%s", "A");
+        snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "C");
+        snprintf(l->lcd.b, sizeof l->lcd.b, "%s", "B");
+        snprintf(l->lcd.l1, sizeof l->lcd.l1, "%s", "X");
+        snprintf(l->lcd.r1, sizeof l->lcd.r1, "%s", "Z");
+        snprintf(l->lcd.select, sizeof l->lcd.select, "%s", "MODE");
+        return;
+    }
+
+    /* THE SNES, where the labels are almost the retropad's own -- the
+       retropad was modelled on this pad, so snes9x2005's descriptors are the
+       identity map and the diamond is already in the hardware's arrangement:
+       X on top, Y left, A right, B bottom.
+
+       Only the shoulders are relabelled, and it is not cosmetic. The console
+       calls them L and R; "L1"/"R1" is a DualShock word that arrived through
+       the retropad, and on a pad with exactly one pair of shoulders the "1"
+       says there is a second pair to look for. Every SNES title's own control
+       screen says L and R.
+
+       THE FOUR FACE LABELS ARE SET EXPLICITLY rather than left to the
+       fallback, even though they come out identical. Two reasons: a reader
+       comparing this case with the Mega Drive's above can see the whole map
+       in one place, and a test can assert that a .sfc really was recognised
+       here -- an empty field is indistinguishable from "no case matched". */
+    if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc")) {
+        snprintf(l->lcd.x, sizeof l->lcd.x, "%s", "X");
+        snprintf(l->lcd.y, sizeof l->lcd.y, "%s", "Y");
+        snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "A");
+        snprintf(l->lcd.b, sizeof l->lcd.b, "%s", "B");
+        snprintf(l->lcd.l1, sizeof l->lcd.l1, "%s", "L");
+        snprintf(l->lcd.r1, sizeof l->lcd.r1, "%s", "R");
+        snprintf(l->lcd.select, sizeof l->lcd.select, "%s", "SELECT");
+        return;
+    }
+
+    /* GAME & WATCH KEEPS THE RETROPAD NAMES, and this is a deliberate empty
+       case rather than a forgotten one. gw-libretro's own overlay (START with
+       no cursor active) draws a SNES pad labelled in retropad names and the
+       per-title bindings are quoted in those names too -- Mickey Mouse uses
+       up/down/x/b for its four diagonals and l1/r1 for GAME A / GAME B. A
+       player reading that overlay has to find the same button on this strip,
+       so relabelling would break the one correspondence the labels exist to
+       keep. Left cleared above; chrome.c fills in X/Y/A/B/L1/R1/SELECT. */
 }
 
 void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
@@ -558,94 +716,37 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
         return;
     }
 
-    /* THE MEGA DRIVE IS THE FIFTH TIME THIS PROJECT HAS MET THE "a button
-       that exists in the hardware and is unreachable on koboy" BUG, and the
-       first time it was caught by reading the core BEFORE shipping rather
-       than by a title that would not start.
+    /* THE MEGA DRIVE AND THE SNES HAVE NO DISCS HERE ANY MORE, and this is a
+       deliberate empty case for two systems that used to have two each. They
+       do not reach this faceplate at all: config_layout_for_rom sends
+       .md/.sfc/.smc to KOBOY_LAYOUT_LCD, whose bottom strip carries a d-pad,
+       a four-button diamond, L1, R1, SELECT and START.
 
-       A three-button Mega Drive pad is A, B, C and START. That is one more
-       face button than the DMG faceplate has, and -- this is the part that
-       makes it a trap rather than a shortfall -- the one that falls off is
-       NOT the one the retropad naming suggests. Genesis Plus GX maps
-       (libretro/libretro.c, the port-0 descriptor block):
+       They moved because THE DISCS WERE NOT ENOUGH, which the history here is
+       worth keeping. This faceplate has exactly two spare pockets (see the
+       SLOT notes above -- that is room, not a policy), and:
 
-         JOYPAD_B      -> B          JOYPAD_X      -> Y
-         JOYPAD_A      -> C          JOYPAD_L      -> X
-         JOYPAD_Y      -> A          JOYPAD_R      -> Z
-         JOYPAD_START  -> Start      JOYPAD_SELECT -> Mode
+         SNES needs A B X Y L R. The two discs went to Y and X, because on
+         this console Y is the run-and-fire button (Mario runs on Y, Samus
+         shoots on Y, Link's item is Y) and a SNES without it is one where
+         the primary action of most of the library has no button. L and R
+         were unreachable: no hop in Mario Kart, no fierce in the fighters,
+         no aim-diagonal in Super Metroid.
 
-       So the faceplate's B disc is the Mega Drive's B and its A disc is the
-       Mega Drive's **C**. The hardware's **A** is on JOYPAD_Y, which the DMG
-       faceplate does not have. Without a disc for it, koboy would present a
-       console whose A button does not exist -- and it would LOOK fine,
-       because the faceplate has a disc moulded "A" that does something. That
-       is the ColecoVision failure in reverse and it is worse, because
-       nothing refuses to start: Sonic plays (A, B and C are all jump), and
-       then Streets of Rage has no special attack and Golden Axe has no
-       magic.
+         MEGA DRIVE needs A B C, or A B C X Y Z on a six-button pad. Genesis
+         Plus GX maps JOYPAD_B -> B, JOYPAD_A -> **C**, JOYPAD_Y -> **A**, so
+         the faceplate's own A disc is the console's C and the hardware's A
+         had to have extra[0] or it did not exist. That left one pocket for
+         three six-button keys; Y took it, X and Z were unreachable.
 
-       extra[0] is therefore JOYPAD_Y, labelled "A" after the hardware's own
-       moulding, and with it ALL THREE BUTTONS OF A 3-BUTTON PAD ARE
-       REACHABLE, which covers the overwhelming majority of the library.
-
-       extra[1] is JOYPAD_X, the six-button pad's "Y" -- the middle of its
-       top row. The six-button pad is X, Y, Z above A, B, C; two of those
-       three have nowhere to go and Y is the one chosen because it is the
-       middle-strength attack in the fighters that are most of what needs six
-       buttons at all. Labelled "Y" for the same reason the arcade discs are
-       labelled 3 and 4 rather than C and D: on this system the label a
-       player is looking for is the one printed on the real pad.
-
-       WHAT IS STILL UNREACHABLE, stated rather than discovered: X
-       (JOYPAD_L) and Z (JOYPAD_R). There is no seventh and eighth place on
-       this faceplate. Every title that needs them is a six-button fighter.
-       MODE (JOYPAD_SELECT) IS reachable -- it is the faceplate's SELECT
-       pill, whatever that pill's moulded label says -- and that matters more
-       than it sounds: holding Mode at power-on is how a real six-button pad
-       pretends to be a three-button one for the titles that mis-detect it.
-
-       The pad type is not forced here and does not need to be: the core
-       defaults to `DEVICE_PAD2B | DEVICE_PAD3B | DEVICE_PAD6B` (libretro.c),
-       i.e. auto-detect, and koboy answers no core options, so all six
-       buttons are live and the game decides. */
-    if (ends_with_ext(rom_path, ".md")) {
-        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "A" };
-        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "Y" };
-        return;
-    }
-
-    /* A SNES pad is the retropad -- literally, the retropad was modelled on
-       it -- so snes9x2005's descriptors are the identity map: B is B, A is
-       A, X is X, Y is Y, L is L, R is R, plus Start and Select. That makes
-       this the first system koboy runs where the control set is not merely
-       bigger than the faceplate but bigger by FOUR: eight buttons against
-       the faceplate's A, B, START, SELECT and two spare discs.
-
-       THE FOUR FACE BUTTONS WIN THE TWO SLOTS. extra[0] is Y and extra[1] is
-       X, so B/A/Y/X are all present and the shoulders are not. The trade is
-       not close: on this console Y is the run-and-fire button (Mario runs on
-       Y, Samus shoots on Y, Link's sword is B and item is Y), so a SNES
-       without Y is not a SNES with a missing extra -- it is one where the
-       primary action of most of the library has no button. L and R are
-       secondary almost everywhere: map, weapon cycle, page turn, camera
-       nudge.
-
-       WHAT IT COSTS, counted honestly rather than waved past. The titles
-       that genuinely want a shoulder are playable but reduced, not broken:
-       Super Metroid's L/R aim the diagonals (the d-pad diagonals still aim,
-       so it plays), Yoshi's Island cycles items on the shoulders, Zelda has
-       none. The ones that lose something they cannot get back are the ones
-       where a shoulder is a distinct move -- the fighters' fierce attacks,
-       Mario Kart's hop -- and there is no eighth place on this faceplate for
-       them. Recorded so this reads as a decision, not a gap somebody forgot.
-
-       Labelled "Y" and "X" after the pad's own moulding, which is also what
-       every SNES title's own control screen calls them. */
-    if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc")) {
-        l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "Y" };
-        l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "X" };
-        return;
-    }
+       Both shortfalls are gone in the LCD strip and neither could have been
+       fixed here. The core mappings themselves did not move -- they are read
+       off the same descriptor tables and now live in
+       config_lcd_labels_for_rom, which is what turns them into the labels the
+       strip prints. Recorded as an empty case rather than deleted, because
+       "this system needs no disc" and "somebody forgot this system" look
+       identical at a glance, and because a future reader who moves either
+       system back here will need the two paragraphs above. */
 
     /* An Atari 2600 joystick is four directions and ONE button, and the
        console adds Reset and Select. stella2014 binds fire to JOYPAD_B,
@@ -1017,11 +1118,19 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     /* WHICH GEOMETRY THE RECT IS SIZED FROM, and the two layouts answer
        differently on purpose.
 
-       LCD keeps MAX. Its fit is fractional, so a frame smaller than max costs
-       nothing but margin, and a Game & Watch title changes base several times
-       a second (654x396 <-> 305x191 on Donkey Kong): sizing that rect from
-       base would resize the artwork, redraw the strip and repaint the panel
-       at that rate. Nothing about the Game & Watch presentation changes here.
+       LCD ASKS THE SYSTEM -- `lcd_rect_from_max`, set from the ROM's
+       extension by config_lcd_rect_from_max_for_rom, which explains the split
+       in full. Game & Watch keeps MAX: its fit is fractional, so a frame
+       smaller than max costs nothing but margin, and a .mgw title changes
+       base several times a second (654x396 <-> 305x191 on Donkey Kong), so
+       sizing that rect from base would resize the artwork, redraw the strip
+       and repaint the panel at that rate. Nothing about the Game & Watch
+       presentation changes here. The two console systems that joined this
+       layout (SNES, Mega Drive) take BASE, exactly as they did on the DMG
+       side: their base moves at scene boundaries rather than at video rate,
+       snes9x2005's square 512x512 max would put a permanent dead band under
+       a 4:3 picture, and -- the part that matters most -- the per-system
+       scale ceiling below has nothing to bite on against a max that big.
 
        DMG takes BASE -- what the core is drawing NOW -- and that is the
        change. Max was chosen when the only two cores had base == max, and it
@@ -1045,7 +1154,9 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
        The BUFFER is still allocated from max (video_create). That is memory
        safety and it did not move. */
     int rect_w = max_w, rect_h = max_h;
-    if (c->layout_mode != KOBOY_LAYOUT_LCD) { rect_w = base_w; rect_h = base_h; }
+    if (c->layout_mode != KOBOY_LAYOUT_LCD || !c->lcd_rect_from_max) {
+        rect_w = base_w; rect_h = base_h;
+    }
     if (par != KOBOY_ASPECT_ONE) {
         rect_w = (int)((((uint64_t)rect_w * par) + 65535u) >> 16);
         if (rect_w < 1) rect_w = 1;
@@ -1069,6 +1180,50 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
         video_fit_frac(rect_w, rect_h, panel_w, ctrl_top, &gw, &gh);
         if (gw < 1 || gh < 1) return false;
 
+        /* THE PER-SYSTEM SCALE CEILING, and it applies here for exactly the
+           reason it applies in the DMG branch below -- it is a measured cap
+           on how much PICTURE AREA a system's heaviest titles can afford, and
+           the pixel pipeline that spends it (video_submit) does not care
+           which faceplate is drawn around the result. Without this, moving
+           SNES to this layout would have handed it a 1264x1106 fractional fit
+           -- 2.3x the area the ceiling exists to hold it to -- and put Star
+           Fox straight back at the 67% that bought the ceiling in the first
+           place (see `ceiling` on g_core_by_ext, and TESTED.md's rect-sizing
+           table for the device numbers).
+
+           The cap is ceiling x rect, which is the same picture the DMG
+           branch's scale search would have produced: on the verified panel a
+           .sfc is 897x672 in both layouts, to the pixel.
+
+           ONE TEST DECIDES BOTH DIMENSIONS. video_fit_frac preserves the
+           rect's aspect and the cap is exactly proportional to it, so gw
+           exceeding cap_w and gh exceeding cap_h cannot disagree by more than
+           the fit's own rounding; taking both from the cap rather than
+           scaling gw down and re-deriving gh keeps the ratio exact.
+
+           UNCONDITIONAL, unlike the DMG branch's version, and the asymmetry
+           is deliberate and was MEASURED rather than reasoned about. Down
+           there an explicit `scale =` overrides the ceiling, but the margin
+           loop below is a second limiter that no setting can switch off --
+           on the verified 1264x1680 panel it is what actually takes a .sfc
+           from 4 to 3, ceiling or no ceiling. THIS branch has no such
+           backstop: the fractional fit always fills the panel width. So
+           honouring scale_explicit here would not "let the owner override a
+           default", it would delete the only protection SNES has -- and it
+           would do it on every real device, because the shipped
+           config/koboy.ini sets `scale = 5` (for the Game Boy, measured), so
+           scale_explicit is TRUE for everybody in practice. Checked on the
+           device: with that ini a .sfc resolves to 897x672 here and would
+           have resolved to 1264x946, 2.1x the area, with the cap gated.
+           There is nothing for an explicit scale to override in this branch
+           anyway -- the fit has no integer step to take, and c->scale is
+           unread here. */
+        if (c->scale_ceiling > 0) {
+            int cap_w = rect_w * c->scale_ceiling;
+            int cap_h = rect_h * c->scale_ceiling;
+            if (gw > cap_w) { gw = cap_w; gh = cap_h; }
+        }
+
         p->panel_w = panel_w;
         p->panel_h = panel_h;
         p->base_w  = base_w;
@@ -1076,6 +1231,9 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
         p->max_w   = max_w;
         p->max_h   = max_h;
         p->layout_mode = KOBOY_LAYOUT_LCD;
+        /* Carried into the profile because video.c decides from it and only
+           has the profile -- see koboy_profile. */
+        p->rect_from_max = c->lcd_rect_from_max;
         p->game_w  = gw;
         p->game_h  = gh;
         p->game_x  = (panel_w - gw) / 2;

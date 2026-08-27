@@ -471,6 +471,7 @@ TEST_MAIN({
            and pinned here, because a one-pixel shortfall is invisible by eye
            and shifts every pointer coordinate. */
         p.layout_mode = KOBOY_LAYOUT_LCD;
+        p.rect_from_max = true;           /* a Game & Watch rect: see koboy.h */
         p.max_w = 654; p.max_h = 396; p.scale = 1;
         p.game_w = 1264; p.game_h = 765;
         video_fit_rect(&p, 654, 396, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
@@ -630,6 +631,7 @@ TEST_MAIN({
            layout and every assertion above would still pass. */
         koboy_config lc; config_defaults(&lc);
         lc.layout_mode = KOBOY_LAYOUT_LCD;
+        lc.lcd_rect_from_max = true;
         koboy_profile lp;
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
         CHECK_EQ_INT(lp.game_w, 1264);

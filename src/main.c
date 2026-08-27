@@ -1023,6 +1023,17 @@ int main(int argc, char **argv)
        chrome_controls_top counts the extra discs when there are any, and the
        profile is resolved against what that returns. */
     config_extra_buttons_for_rom(&cfg.layout, cfg.rom_path);
+    /* And what the LCD strip's controls SAY, from the same extension. Only
+       the LCD faceplate reads these, but they are set unconditionally beside
+       the two calls above so there is one place a reader can see everything
+       the ROM's extension decides. Order does not matter to the resolver --
+       labels have no geometry -- but keeping the three together is what stops
+       a fourth being added somewhere else. */
+    config_lcd_labels_for_rom(&cfg.layout, cfg.rom_path);
+    /* Which geometry the LCD rect is sized from. MUST come before
+       config_resolve_profile, which is what reads it, and it is a fact about
+       the system exactly like layout_mode above. */
+    cfg.lcd_rect_from_max = config_lcd_rect_from_max_for_rom(cfg.rom_path);
     /* Set from the ROM, and OUTSIDE the core_explicit branch below on
        purpose: a scale ceiling is a property of the system, not of which
        core the owner pointed at it. Someone running a .sfc through their own

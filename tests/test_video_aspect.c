@@ -267,18 +267,52 @@ TEST_MAIN({
     /* The DMG branch just relays video_fit_par; the LCD branch has its own
        aspect fit and its own max-geometry shortcut, and the shortcut had to
        learn that its premise (the rect was sized from max) only holds for
-       square pixels. */
+       square pixels -- and then, when SNES and Mega Drive joined this layout,
+       that it only holds for GAME & WATCH at all. */
     {
         koboy_config lc; config_defaults(&lc);
         lc.layout_mode = KOBOY_LAYOUT_LCD;
+        lc.lcd_rect_from_max = true;            /* .mgw: see config.c */
         koboy_profile lp;
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 654, 396, 654, 396));
+        CHECK(lp.rect_from_max);
 
         int dw, dh, ox, oy;
         /* Square pixels at max: the shortcut, exact, filling the rect. This is
            every Game & Watch title -- the gw core reports aspect 0. */
         video_fit_rect(&lp, 654, 396, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
         CHECK_EQ_INT(dw, lp.game_w); CHECK_EQ_INT(dh, lp.game_h);
+
+        /* THE SAME FRAME, THE SAME SQUARE PIXELS, ON A CONSOLE'S RECT: also
+           not the shortcut. The rect there is fitted from BASE and may then
+           be cut by the per-system scale ceiling, so max geometry is neither
+           its shape nor its size -- taking the shortcut would stretch the
+           frame to fill a rect it does not match. This is the case that
+           `rect_from_max` exists for, and it cannot be reached through
+           layout_mode: both profiles below are KOBOY_LAYOUT_LCD.
+
+           Built from the SAME geometry as the run above so the only thing
+           that differs is the flag, which is what makes this measure the
+           flag. base 305x191 is Donkey Kong zoomed to its LCD alone; a
+           console rect fitted from that is 1264x791, and a frame arriving at
+           the 654x396 max must be fitted INTO it, not handed all of it. */
+        {
+            koboy_config bc = lc;
+            bc.lcd_rect_from_max = false;
+            koboy_profile bp;
+            CHECK(config_resolve_profile(&bp, &bc, 1264, 1680, 305, 191, 654, 396));
+            CHECK(!bp.rect_from_max);
+            int bdw, bdh, box, boy;
+            video_fit_rect(&bp, 654, 396, KOBOY_ASPECT_ONE, &bdw, &bdh, &box, &boy);
+            CHECK(bdw <= bp.game_w && bdh <= bp.game_h);
+            /* The rect is TALLER than 654:396, so an honest fit is width-bound
+               and leaves height over. Handing over the whole rect would give
+               game_h exactly, which is the mutant. */
+            CHECK(bdh < bp.game_h);
+            CHECK(boy > 0);
+            /* ...and the shape that came out is the frame's, not the rect's. */
+            CHECK(bdw * 396 / 654 >= bdh - 1 && bdw * 396 / 654 <= bdh + 1);
+        }
 
         /* The SAME frame with wide pixels must NOT fill the rect: it has a
            different shape now, so the shortcut's premise is gone. */
@@ -458,6 +492,7 @@ TEST_MAIN({
     {
         koboy_config lc; config_defaults(&lc);
         lc.layout_mode = KOBOY_LAYOUT_LCD;
+        lc.lcd_rect_from_max = true;            /* Game & Watch: see config.c */
         koboy_profile lp;
         CHECK(config_resolve_profile(&lp, &lc, 1264, 1680, 400, 420, 400, 420));
         CHECK_EQ_INT(lp.game_w, 1200);          /* exactly 3x, both axes */
@@ -473,6 +508,36 @@ TEST_MAIN({
         CHECK_EQ_INT(run_w(video_buffer(v), video_stride(v),
                            fr.x, fr.y + fr.h / 2, fr.x + fr.w), 4);
         video_destroy(v);
+
+        /* AND THE SAME EXACT-MULTIPLE FIT ON A CONSOLE'S RECT TAKES THE BLOCK
+           PATH, which is the other half of that decision and the half that
+           arrived with SNES and Mega Drive. The skew above is a property the
+           Game & Watch presentation has always had and must keep; there is no
+           reason to hand it to two systems that only share the layout, and
+           the block scaler is the better one -- it is what the Game Boy gets.
+           Same panel, same geometry, same exactly-3x rect: the ONLY
+           difference is which geometry the rect was fitted from, so runs of 3
+           against runs of 4 is the block path against the fractional one and
+           nothing else.
+
+           Mutant that made this necessary: keying block_ok on
+           `layout_mode != KOBOY_LAYOUT_LCD` (its shape before this change)
+           instead of on `!rect_from_max`. Nothing else in the suite noticed. */
+        koboy_config bc = lc;
+        bc.lcd_rect_from_max = false;
+        koboy_profile bp;
+        CHECK(config_resolve_profile(&bp, &bc, 1264, 1680, 400, 420, 400, 420));
+        CHECK_EQ_INT(bp.game_w, 1200);
+        CHECK_EQ_INT(bp.game_h, 1260);
+        CHECK(!bp.rect_from_max);
+        koboy_video *bv = video_create(&bp, false, KOBOY_GRAY_DEFAULT);
+        CHECK(bv != NULL);
+        video_submit(bv, fb, 400, 420, 800, KOBOY_PIXFMT_RGB565);
+        koboy_rect br; video_frame_rect(bv, &br);
+        CHECK_EQ_INT(br.w, 1200); CHECK_EQ_INT(br.h, 1260);
+        CHECK_EQ_INT(run_w(video_buffer(bv), video_stride(bv),
+                           br.x, br.y + br.h / 2, br.x + br.w), 3);
+        video_destroy(bv);
     }
 
     /* ========================================= config_resolve_profile_par = */

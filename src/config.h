@@ -82,6 +82,15 @@ typedef struct {
        caller that never sets it -- every existing test, and the placeholder
        profile main.c resolves before a ROM has been chosen -- gets. */
     int      layout_mode;
+    /* KOBOY_LAYOUT_LCD only: size the game rect from the core's MAX geometry
+       rather than from the frame it is drawing now. Another fact about the
+       loaded system rather than a preference, derived from the extension by
+       config_lcd_rect_from_max_for_rom and written here by main.c beside
+       layout_mode. config_defaults leaves it false, which is what every
+       caller that never sets it gets -- and false is the DMG branch's own
+       behaviour, so a config that never heard of this field resolves exactly
+       as it did before. */
+    bool     lcd_rect_from_max;
     koboy_layout layout;
 } koboy_config;
 
@@ -240,6 +249,22 @@ const char *config_core_for_rom(const char *rom_path);
    interpreting it, so naming a core by hand cannot make a DMG faceplate the
    right answer for it. */
 int config_layout_for_rom(const char *rom_path);
+
+/* Whether this ROM's system wants its LCD game rect sized from the core's MAX
+   geometry (true) or from the frame the core is drawing now (false). Asked
+   only in KOBOY_LAYOUT_LCD; see config.c for why Game & Watch is the only
+   true and what taking max would cost the two console systems that now share
+   this layout. */
+bool config_lcd_rect_from_max_for_rom(const char *rom_path);
+
+/* Fills `l->lcd` -- what the LCD strip's discs and pills SAY on this ROM's
+   system -- from the extension, the same way the core, the layout mode and
+   the extra discs are. Clears every field first, so a config reused across a
+   MENU -> CHOOSE ROM reload cannot keep the last system's labels; an empty
+   field means "use the retropad's own name", which is what chrome.c draws.
+   See koboy_lcd_labels in koboy.h for the contract and why a Mega Drive
+   cannot be allowed to print the retropad's names. */
+void config_lcd_labels_for_rom(koboy_layout *l, const char *rom_path);
 
 /* Fill or clear the DMG faceplate's EXTRA discs for this ROM -- see
    koboy_extra_btn in koboy.h. A third function rather than more return values

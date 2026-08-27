@@ -497,10 +497,14 @@ static void draw_pill(uint8_t *fb, int stride, int W, int H,
    is exactly the "four indistinguishable grey shapes" text.c was added to
    stop.
 
-   The names are X / Y / A / B and NOT the DMG's own two, deliberately: the
-   gw core's own overlay speaks retropad ("NORTHEAST" sits over the SNES
-   pad's TOP button, which is X), and a label that disagreed with the overlay
-   would send a user to the wrong button every time they consulted it. */
+   The name is the CALLER's, and which one it is depends on the loaded system
+   (koboy_lcd_labels). The default -- what an empty label table draws -- is
+   the retropad's own X / Y / A / B, and not the DMG's own two: the gw core's
+   overlay speaks retropad ("NORTHEAST" sits over the SNES pad's TOP button,
+   which is X), and a label that disagreed with the overlay would send a user
+   to the wrong button every time they consulted it. A console overrides it,
+   because a Mega Drive's overlay is the moulding on its own pad and that
+   calls this bit C. */
 static void draw_face_button(uint8_t *fb, int stride, int W, int H,
                              int cx, int cy, int r, const char *label)
 {
@@ -531,6 +535,13 @@ static void draw_face_button(uint8_t *fb, int stride, int W, int H,
    diamond, SELECT and START (without which no round can be started at all),
    and L1/R1.
 
+   That same set is now why SNES and Mega Drive live here too -- it is exactly
+   a SNES pad and a superset of a six-button Mega Drive's, and neither fits
+   the DMG faceplate's two spare pockets (config_layout_for_rom). The
+   GEOMETRY below is identical for all three; only the LABELS change, from
+   `l->lcd`, because a disc that says "A" and produces the Mega Drive's C is
+   worse than an unlabelled one.
+
    No strapline. In the DMG layout it sits in the top bezel band, whose
    height that layout guarantees; here the game rect is allowed to reach
    y = 0, so there is no band to guarantee it a home.
@@ -538,7 +549,18 @@ static void draw_face_button(uint8_t *fb, int stride, int W, int H,
    Obeys the same contract as chrome_render: it must never write inside the
    game rect. Every element below is either in the bottom strip or clipped to
    the recess band, and the game rect is filled by nothing at all. */
-static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p)
+/* An empty label means "the retropad's own name" -- koboy_lcd_labels says
+   why, and it is what keeps a config that predates that struct (every unit
+   test, and the placeholder profile main.c resolves before a ROM is chosen)
+   drawing exactly the strip it drew before. Not a defensive clamp: this is
+   the encoding of the default, and the goldens depend on it. */
+static const char *lcd_label(const char *set, const char *retropad)
+{
+    return (set && *set) ? set : retropad;
+}
+
+static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p,
+                              const koboy_layout *l)
 {
     const int W = p->panel_w, H = p->panel_h;
     int gx0 = p->game_x, gy0 = p->game_y;
@@ -587,15 +609,19 @@ static void chrome_render_lcd(uint8_t *fb, int stride, const koboy_profile *p)
     /* The diamond, in the arrangement the core's own overlay uses. Drawn in
        the order X, Y, A, B purely so the source reads top, left, right,
        bottom; they do not overlap (see chrome.h on face_off). */
-    draw_face_button(fb, stride, W, H, c.x_cx, c.x_cy, c.face_r, "X");
-    draw_face_button(fb, stride, W, H, c.y_cx, c.y_cy, c.face_r, "Y");
-    draw_face_button(fb, stride, W, H, c.a_cx, c.a_cy, c.face_r, "A");
-    draw_face_button(fb, stride, W, H, c.b_cx, c.b_cy, c.face_r, "B");
+    draw_face_button(fb, stride, W, H, c.x_cx, c.x_cy, c.face_r,
+                     lcd_label(l->lcd.x, "X"));
+    draw_face_button(fb, stride, W, H, c.y_cx, c.y_cy, c.face_r,
+                     lcd_label(l->lcd.y, "Y"));
+    draw_face_button(fb, stride, W, H, c.a_cx, c.a_cy, c.face_r,
+                     lcd_label(l->lcd.a, "A"));
+    draw_face_button(fb, stride, W, H, c.b_cx, c.b_cy, c.face_r,
+                     lcd_label(l->lcd.b, "B"));
 
-    draw_pill(fb, stride, W, H, &c.l1,     "L1");
-    draw_pill(fb, stride, W, H, &c.select, "SELECT");
+    draw_pill(fb, stride, W, H, &c.l1,     lcd_label(l->lcd.l1, "L1"));
+    draw_pill(fb, stride, W, H, &c.select, lcd_label(l->lcd.select, "SELECT"));
     draw_pill(fb, stride, W, H, &c.start,  "START");
-    draw_pill(fb, stride, W, H, &c.r1,     "R1");
+    draw_pill(fb, stride, W, H, &c.r1,     lcd_label(l->lcd.r1, "R1"));
     draw_pill(fb, stride, W, H, &c.menu,   "MENU");
 
     /* Wordmark, in the centre column under MENU -- the only decoration the
@@ -625,12 +651,11 @@ void chrome_render(uint8_t *fb, int stride, const koboy_profile *p,
     const int W = p->panel_w, H = p->panel_h;
 
     if (p->layout_mode == KOBOY_LAYOUT_LCD) {
-        /* `l` is genuinely unused by this branch -- the LCD faceplate has no
-           permille controls to place. Not dropped from the signature, because
-           chrome_render is called from five places that all have a layout and
-           do not know which faceplate they are about to get. */
-        (void)l;
-        chrome_render_lcd(fb, stride, p);
+        /* `l` carries no permille GEOMETRY this branch can use -- the LCD
+           strip derives every control from chrome_lcd_layout -- but it does
+           carry `l->lcd`, what those controls say on the loaded system. That
+           is the whole of what the LCD faceplate reads from it. */
+        chrome_render_lcd(fb, stride, p, l);
         return;
     }
 

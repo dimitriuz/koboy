@@ -865,4 +865,123 @@ TEST_MAIN({
 
         input_destroy(li);
     }
+
+    /* ============ the LCD strip under a CONSOLE: the label IS the contract
+     *
+     * SNES and Mega Drive were moved to this layout because their pads do not
+     * fit the DMG faceplate, and the strip's discs are labelled per system as
+     * a result. That makes a new thing checkable, and it is the thing that
+     * actually matters to a player: TAPPING THE DISC THAT SAYS "C" MUST
+     * PRODUCE THE MEGA DRIVE'S C.
+     *
+     * The geometry below is not under test -- the block above already pins
+     * every zone. What is under test is the AGREEMENT between the label
+     * config_lcd_labels_for_rom writes and the bit input.c reports at that
+     * control, against the core's own descriptor table. Those two live in
+     * different files and nothing else compares them: a label table with two
+     * fields transposed draws a perfectly sensible strip and silently swaps
+     * two buttons.
+     *
+     * Built exactly the way src/main.c builds it for a loaded ROM -- layout,
+     * labels and rect sizing all from the extension -- so this also catches a
+     * main.c that set one of the three and not the others.
+     */
+    {
+        static const struct {
+            const char *rom;
+            int bw, bh, mw, mh;              /* the core's base and max */
+            /* WHAT THE CONSOLE CALLS IT, paired with the koboy bit that
+               control reports. Read off the cores: Genesis Plus GX's port-0
+               descriptors for the Mega Drive (JOYPAD_Y -> A, JOYPAD_B -> B,
+               JOYPAD_A -> C, JOYPAD_L -> X, JOYPAD_X -> Y, JOYPAD_R -> Z,
+               JOYPAD_SELECT -> Mode) and snes9x2005's identity map for the
+               SNES. */
+            struct { const char *label; uint16_t bit; } want[7];
+        } sys[] = {
+            { "/roms/MegaDrive/Streets of Rage 2 (USA).md", 293, 224, 348, 240,
+              { { "A", KOBOY_BTN_Y }, { "B", KOBOY_BTN_B }, { "C", KOBOY_BTN_A },
+                { "X", KOBOY_BTN_L1 }, { "Y", KOBOY_BTN_X }, { "Z", KOBOY_BTN_R1 },
+                { "MODE", KOBOY_BTN_SELECT } } },
+            { "/roms/SNES/Star Fox (USA) (Rev 2).sfc", 299, 224, 299, 224,
+              { { "A", KOBOY_BTN_A }, { "B", KOBOY_BTN_B }, { "X", KOBOY_BTN_X },
+                { "Y", KOBOY_BTN_Y }, { "L", KOBOY_BTN_L1 }, { "R", KOBOY_BTN_R1 },
+                { "SELECT", KOBOY_BTN_SELECT } } },
+        };
+
+        for (size_t si = 0; si < sizeof sys / sizeof sys[0]; si++) {
+            koboy_config cc; config_defaults(&cc);
+            cc.layout_mode       = config_layout_for_rom(sys[si].rom);
+            cc.lcd_rect_from_max = config_lcd_rect_from_max_for_rom(sys[si].rom);
+            config_lcd_labels_for_rom(&cc.layout, sys[si].rom);
+            CHECK_EQ_INT(cc.layout_mode, KOBOY_LAYOUT_LCD);
+
+            koboy_profile cp;
+            CHECK(config_resolve_profile(&cp, &cc, 1264, 1680,
+                                         sys[si].bw, sys[si].bh,
+                                         sys[si].mw, sys[si].mh));
+            koboy_input *ci = input_create(&cc, &cp);
+            CHECK(ci != NULL);
+            input_set_touch_transform(ci, 1264 - 1, 1680 - 1, false, false, false);
+
+            chrome_lcd_controls cl;
+            memset(&cl, 0, sizeof cl);
+            chrome_lcd_layout(&cp, &cl);
+
+            /* Every control the strip labels, as (where it is, what it says).
+               The label is read out of the resolved config rather than
+               written here twice, so this asserts the SHIPPED table and not a
+               copy of it. */
+            struct { int x, y; const char *says; } ctl[7] = {
+                { cl.x_cx, cl.x_cy, cc.layout.lcd.x },
+                { cl.y_cx, cl.y_cy, cc.layout.lcd.y },
+                { cl.a_cx, cl.a_cy, cc.layout.lcd.a },
+                { cl.b_cx, cl.b_cy, cc.layout.lcd.b },
+                { cl.l1.x + cl.l1.w / 2, cl.l1.y + cl.l1.h / 2, cc.layout.lcd.l1 },
+                { cl.r1.x + cl.r1.w / 2, cl.r1.y + cl.r1.h / 2, cc.layout.lcd.r1 },
+                { cl.select.x + cl.select.w / 2, cl.select.y + cl.select.h / 2,
+                  cc.layout.lcd.select },
+            };
+
+            for (int w = 0; w < 7; w++) {
+                const char *name = sys[si].want[w].label;
+                int found = -1;
+                for (int i = 0; i < 7; i++)
+                    if (ctl[i].says && strcmp(ctl[i].says, name) == 0) { found = i; break; }
+                /* THE CONSOLE'S BUTTON IS ON THE STRIP AT ALL. This is the
+                   half that the DMG faceplate could not satisfy -- X and Z had
+                   nowhere to go on a Mega Drive, L and R nowhere on a SNES --
+                   and it is why these two systems moved. */
+                if (found < 0)
+                    fprintf(stderr, "  %s: no control says \"%s\"\n", sys[si].rom, name);
+                CHECK(found >= 0);
+                if (found < 0) continue;
+                /* ...AND IT PRODUCES THAT CONSOLE BUTTON. The WHOLE button
+                   word is compared, so a zone that also fires its neighbour
+                   fails here too. */
+                uint16_t got = touch_probe(ci, ctl[found].x, ctl[found].y);
+                if (got != sys[si].want[w].bit)
+                    fprintf(stderr, "  %s: the control marked \"%s\" reports"
+                            " 0x%04x, the console's %s is 0x%04x\n",
+                            sys[si].rom, name, got, name,
+                            (unsigned)sys[si].want[w].bit);
+                CHECK_EQ_INT(got, sys[si].want[w].bit);
+            }
+
+            /* MENU IS STILL REACHABLE, and it is the only way back to the ROM
+               browser once a game is running -- a layout change that stranded
+               it would strand the device in the game. Checked here rather
+               than only in the Game & Watch block above because the strip is
+               now reached by three systems and the profile differs for each:
+               these two size the rect from BASE, so the strip's position is
+               derived from a different resolver branch. */
+            CHECK_EQ_INT(input_take_menu_request(ci), 0);
+            CHECK_EQ_INT(touch_probe(ci, cl.menu.x + cl.menu.w / 2,
+                                         cl.menu.y + cl.menu.h / 2), 0);
+            CHECK_EQ_INT(input_take_menu_request(ci), 1);
+            /* And the game rect stops above the strip, so nothing the player
+               taps down there is under the picture. */
+            CHECK(cp.game_y + cp.game_h <= cl.strip.y);
+            input_destroy(ci);
+        }
+    }
 })

@@ -674,6 +674,11 @@ printf '\0' > "$d/GAME.sms"
 # the author's Game Gear directory holds 38 files ending .gg and 15 ending
 # .GG, side by side in one folder.
 printf '\0' > "$d/GAME.GG"
+# The two systems on the LCD strip. 32768 bytes rather than one, because
+# config_min_rom_bytes floors a .sfc/.smc at 8192 -- snes9x2005 raises SIGFPE
+# inside retro_load_game below one mapping block.
+head -c 32768 /dev/zero > "$d/GAME.sfc"
+head -c 32768 /dev/zero > "$d/GAME.md"
 
 # .mgw with no --core: the Game & Watch core, resolved beside the binary.
 rc=0
@@ -951,6 +956,29 @@ echo "$out" | grep -q "scale 5, game 800x720 at (232,84)" \
     || { echo "FAIL: the Game Boy rect moved"; rm -rf "$d"; exit 1; }
 echo "ok: .gb keeps the DMG faceplate at scale 5"
 
+# ...AND THE TWO CONSOLES WHOSE PADS OUTGREW THAT FACEPLATE. A SNES pad is
+# A B X Y L R and a six-button Mega Drive is A B C X Y Z; the DMG faceplate
+# has two spare pockets, the LCD strip has a d-pad, a four-button diamond,
+# L1, R1, SELECT and START. Asserted end to end for the same reason the .mgw
+# run above is: config.c can get the predicate right and src/main.c never read
+# it. `--core` is given because the stub stands in for both cores here.
+for ext in sfc md; do
+    rc=0
+    out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+            --rom "$d/GAME.$ext" --panel 1264x1680 --frames 10 2>&1) || rc=$?
+    # `|| true` because this line is INFORMATIONAL and the file runs under
+    # `set -e`: a build that dropped the layout also drops this log line, and
+    # an unguarded grep would abort the script before the check below could
+    # say why. (Found by mutant, not by reasoning.)
+    echo "$out" | grep -E "core geometry" || true
+    [ "$rc" -eq 0 ] || { echo "FAIL: .$ext layout run exited $rc"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -q "LCD layout" \
+        || { echo "FAIL: a .$ext did not get the LCD layout"; rm -rf "$d"; exit 1; }
+    echo "$out" | grep -q '^presented=' \
+        || { echo "FAIL: the .$ext layout run never reached the emulator loop"; rm -rf "$d"; exit 1; }
+done
+echo "ok: .sfc and .md get the LCD control strip"
+
 # GEOMETRY CHURN: a re-fit happens when, and only when, the RECT moves.
 #
 # main.c used to decide this from the inputs -- max moved, re-fit; base moved,
@@ -968,10 +996,12 @@ echo "ok: .gb keeps the DMG faceplate at scale 5"
 # video_destroy/video_create + full faceplate repaint + forced full-rect
 # refresh this whole branch exists to avoid on e-ink.
 
-# (1) LCD, base churn: SILENT. This is the real case -- a Game & Watch title
-#     alternates between the whole unit and the LCD alone several times a
-#     second, and the LCD rect comes from max, so nothing about the
-#     presentation moves.
+# (1) LCD, base churn: SILENT for a GAME & WATCH. This is the real case -- a
+#     .mgw title alternates between the whole unit and the LCD alone several
+#     times a second, and ITS LCD rect comes from max, so nothing about the
+#     presentation moves. Which geometry an LCD rect comes from is now a
+#     per-system question (config_lcd_rect_from_max_for_rom); run (1b) below
+#     is the other side of it.
 rc=0
 out=$(KOBOY_STUB_OSCILLATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom "$d/GAME.mgw" --frames 120 2>&1) || rc=$?
@@ -982,6 +1012,29 @@ n=$(echo "$out" | grep -c "geometry settled" || true)
 [ "$n" -eq 0 ] || { echo "FAIL: LCD base churn re-fit $n time(s); its rect comes from max"; exit 1; }
 echo "$out" | grep -q "presented=" || { echo "FAIL: LCD oscillating run never presented"; exit 1; }
 echo "ok: base-only churn does not re-fit in the LCD layout"
+
+# (1b) LCD, base churn, on a CONSOLE: RE-FITS, because .sfc/.smc/.md size the
+#      LCD rect from base. Same layout, same stub, same oscillation as (1) --
+#      only the extension differs, which is what makes this measure the
+#      per-system flag rather than the layout. Without it, `lcd_rect_from_max`
+#      could be hardwired true and (1) would still pass.
+#
+#      A .sfc is used rather than a .md because the SNES also carries the
+#      scale ceiling, so this run doubles as the end-to-end proof that the
+#      ceiling is live in the LCD layout: the stub's 160x144 max at the
+#      Game Boy's geometry gives a capped rect either side of the churn.
+rc=0
+out=$(KOBOY_STUB_OSCILLATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$d/GAME.sfc" --frames 120 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || { echo "FAIL: LCD console oscillating-base run exited $rc"; exit 1; }
+echo "$out" | grep -q "LCD layout" \
+    || { echo "FAIL: the .sfc oscillating run did not get the LCD layout"; exit 1; }
+n=$(echo "$out" | grep -c "geometry settled" || true)
+[ "$n" -gt 0 ] || {
+    echo "FAIL: a .sfc under the LCD layout never re-fit; its rect must follow base"
+    exit 1; }
+echo "$out" | grep -q "presented=" || { echo "FAIL: LCD console oscillating run never presented"; exit 1; }
+echo "ok: base churn DOES re-fit for a console in the LCD layout ($n re-fits)"
 
 # (2) DMG, base churn: RE-FITS, and the log has to show the rect actually
 #     following base. The stub alternates base between its 160x144 max and
@@ -1045,6 +1098,14 @@ echo "ok: a max-only change re-fits without moving the rect"
 # rather than the geometry: 256x224 auto-fits to scale 4 (1024x896), and the
 # ceiling takes .sfc to scale 3 (768x672). A test that let the geometry differ
 # too would pass with the ceiling deleted.
+#
+# THE .sfc RUN NOW GOES THROUGH THE LCD LAYOUT, which is why the layout is
+# asserted alongside the rect. That layout fits FRACTIONALLY to the full panel
+# width and has no margin loop to fall back on, so the cap in
+# config_resolve_profile_par's LCD branch is the only thing between Star Fox
+# and the 67% the ceiling was added to prevent -- and 768x672 here is that cap
+# doing the work, not an integer scale search. Uncapped, this run resolves to
+# 1264x1106.
 d_sc=$(mktemp -d)
 cp build/stub_core.so "$d_sc/"
 head -c 32768 /dev/zero > "$d_sc/GAME.sfc"
@@ -1055,14 +1116,54 @@ out=$(KOBOY_STUB_GEOM=256x224 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
 echo "$out" | grep -q "game 768x672" || {
     echo "FAIL: a .sfc did not take the scale-3 ceiling"
     echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sc"; exit 1; }
+echo "$out" | grep -q "LCD layout" || {
+    echo "FAIL: the .sfc ceiling run did not go through the LCD layout,"
+    echo "      so the cap it proves is not the one the device will use"
+    rm -rf "$d_sc"; exit 1; }
 out=$(KOBOY_STUB_GEOM=256x224 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core "$d_sc/stub_core.so" --rom "$d_sc/GAME.gb" \
         --panel 1264x1680 --frames 2 2>&1) || { echo "FAIL: .gb ceiling run"; rm -rf "$d_sc"; exit 1; }
 echo "$out" | grep -q "game 1024x896" || {
     echo "FAIL: a system with no ceiling stopped auto-fitting"
     echo "$out" | grep -E "game [0-9]+x[0-9]+"; rm -rf "$d_sc"; exit 1; }
+echo "ok: .sfc takes the scale-3 ceiling in the LCD layout, an uncapped system still auto-fits"
+
+# AND THE IN-GAME MENU STILL OPENS UNDER THAT LAYOUT. MENU is the only way
+# back to the ROM browser once a game is running, so a layout change that
+# stranded it strands the device in the game -- and MODE_MENU's handlers had
+# no automated coverage at all until the --ui-script `menu` verb existed.
+# Driven on a .sfc specifically: it is the extension that changed layout AND
+# carries the ceiling, so this run exercises both together.
+#
+#   menu         -- open the in-game MENU from inside the emulator loop
+#   tap 200 360  -- row 4, FRAMES (row_h=64, centre = 8 + 64 + r*64 + 32)
+#
+# FRAMES rather than RESUME because it leaves EVIDENCE: the divisor cycles
+# 3 -> 4 and is written back, so this fails if the menu opened but its rows
+# were not where the tap landed. A run that merely exited 0 would pass with
+# the menu never drawn.
+mini="$(mktemp)"; mscript="$(mktemp)"
+printf '# keep me\npresent_divisor = 3\n' > "$mini"
+printf 'menu\ntap 200 360\n' > "$mscript"
+rc=0
+out=$(KOBOY_STUB_GEOM=256x224 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core "$d_sc/stub_core.so" --rom "$d_sc/GAME.sfc" --config "$mini" \
+        --ui-script "$mscript" --panel 1264x1680 --frames 60 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: scripted MENU run under the LCD layout exited $rc"
+    echo "$out" | tail -5; rm -rf "$d_sc" "$mini" "$mscript"; exit 1; }
+echo "$out" | grep -q "LCD layout" || {
+    echo "FAIL: the scripted MENU run was not in the LCD layout"
+    rm -rf "$d_sc" "$mini" "$mscript"; exit 1; }
+echo "$out" | grep -q "koboy: present_divisor = 4\$" || {
+    echo "FAIL: MENU -> FRAMES did not cycle under the LCD layout"
+    echo "$out" | grep -i "divisor"; rm -rf "$d_sc" "$mini" "$mscript"; exit 1; }
+grep -q "^present_divisor = 4\$" "$mini" || {
+    echo "FAIL: the LCD-layout menu did not write the divisor back"
+    cat "$mini"; rm -rf "$d_sc" "$mini" "$mscript"; exit 1; }
+rm -f "$mini" "$mscript"
 rm -rf "$d_sc"
-echo "ok: .sfc takes the scale-3 ceiling, an uncapped system still auto-fits"
+echo "ok: the in-game MENU opens and acts under the LCD layout"
 
 rm -rf "$d"
 

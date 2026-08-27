@@ -3,7 +3,32 @@
 #include "chrome.h"
 #include "config.h"
 #include "input.h"
+#include "text.h"
 #include <stdlib.h>
+
+/* How many pixels the label `s` covers when chrome.c's label_in_box draws it
+   into a bw x bh control. An INDEPENDENT re-derivation -- it re-implements the
+   px ladder from label_in_box's contract and then asks text.c itself for the
+   bitmap -- so a test using it fails when the label drawn is not the label
+   expected, which is the whole point: a disc that says "A" over the Mega
+   Drive's C bit is the defect this guards.
+
+   Duplicating the ladder is deliberate, and the same trade chrome_controls_top
+   makes: an independent computation catches a wrong string, where sampling one
+   pixel of the rendered glyph would not. */
+static int label_glyph_px(const char *s, int bw, int bh)
+{
+    int px = 1;
+    while (px < 4 && text_measure(s, px + 1) <= bw - 8 &&
+           TEXT_GLYPH_H * (px + 1) <= bh - 8)
+        px++;
+    static uint8_t scratch[512 * 64];
+    memset(scratch, 0, sizeof scratch);
+    text_draw(scratch, 512, 512, 64, 4, 4, s, px, 0xFF);
+    int n = 0;
+    for (size_t i = 0; i < sizeof scratch; i++) if (scratch[i]) n++;
+    return n;
+}
 
 static int render(koboy_config *c, int W, int H, uint8_t *fb, koboy_profile *p)
 {
@@ -702,25 +727,22 @@ TEST_MAIN({
                produces and therefore the hardest case for a disc to stay
                clear of. */
             { "/roms/galaga.zip",         2, 512, 512 },
-            /* Mega Drive, SNES and PC Engine, again at the MAX geometry
-               their cores really report (measured with scripts/corebench.c,
-               which prints it): Genesis Plus GX 348x240, snes9x2005 512x512
-               -- square, and the joint-largest rect in this table alongside
-               arcade -- and beetle-pce-fast 512x243.
+            /* MEGA DRIVE AND SNES ARE NOT IN THIS TABLE ANY MORE, and their
+               absence is the deliberate kind. They used to be, with two discs
+               each, and they were here for a reason the others were not:
+               their extra discs stopped a REAL button being unreachable
+               rather than merely adding one. That is exactly why they LEFT --
+               two discs were not enough for a pad with six face buttons, so
+               config_layout_for_rom now sends .md/.sfc/.smc to
+               KOBOY_LAYOUT_LCD, whose strip carries the whole set. Their
+               labels are asserted in the LCD section below, and
+               config_extra_buttons_for_rom's empty case for them is asserted
+               in test_config.c.
 
-               Mega Drive and SNES are here for a reason the others are not:
-               they are the two systems in this batch whose extra discs stop
-               a REAL button being unreachable rather than merely adding one.
-               The Mega Drive's hardware "A" is on JOYPAD_Y, which the
-               faceplate's A disc is NOT (that one is the Mega Drive's C), so
-               without extra[0] a three-button pad is missing a third of
-               itself while looking complete. PC Engine is the opposite case
-               and is deliberately absent from this table: a standard PC
-               Engine pad is I, II, RUN and Select, which the faceplate
-               already carries in full, so it has NO extra discs and is
+               PC Engine is absent for the opposite reason and always was: a
+               standard PC Engine pad is I, II, RUN and Select, which the DMG
+               faceplate carries in full, so it has NO extra discs and is
                asserted as such separately below. */
-            { "/roms/Sonic.md",           2, 348, 240 },
-            { "/roms/Super Mario World.sfc", 2, 512, 512 },
         };
         static uint8_t fbc[1440 * 1920], fbn[1440 * 1920];
 
@@ -1557,6 +1579,149 @@ TEST_MAIN({
         memcpy(fb0, fb, (size_t)1264 * 1680);
         chrome_render_battery(fb, 1264, &lp, &lc.layout, 0);
         CHECK(memcmp(fb0, fb, (size_t)1264 * 1680) != 0);
+    }
+
+    /* ================================ THE STRIP'S PER-SYSTEM LABELS
+     *
+     * The strip's GEOMETRY is one thing for all three systems that reach this
+     * layout; only what the controls SAY changes. That matters more than it
+     * sounds: Genesis Plus GX maps JOYPAD_A to the Mega Drive's **C**, so a
+     * disc drawn "A" over that bit is a lie a player acts on -- press the
+     * button marked A in Streets of Rage 2 and you get C. The retropad names
+     * the strip shipped with are right for Game & Watch (gw-libretro's own
+     * overlay speaks retropad) and wrong for a console.
+     *
+     * Asserted two ways, because either alone is weak. (1) EXACT LABEL PIXEL
+     * COUNTS, against a string rendered independently through text.c -- that
+     * pins WHAT each control says. (2) A SAME/DIFFER MATRIX between the three
+     * systems -- that pins WHICH control says it, and catches a swap of two
+     * labels whose glyph counts happen to match.
+     *
+     * One profile for all three renders, so the ONLY thing that differs
+     * between the buffers is the label table. */
+    {
+        koboy_config gwc; config_defaults(&gwc);
+        gwc.layout_mode = KOBOY_LAYOUT_LCD;
+        gwc.lcd_rect_from_max = true;
+        config_lcd_labels_for_rom(&gwc.layout, "/roms/Donkey Kong.mgw");
+
+        koboy_config snc = gwc;
+        config_lcd_labels_for_rom(&snc.layout, "/roms/Star Fox (USA) (Rev 2).sfc");
+        koboy_config mdc = gwc;
+        config_lcd_labels_for_rom(&mdc.layout, "/roms/Streets of Rage 2 (USA).md");
+
+        koboy_profile lp2;
+        CHECK(config_resolve_profile(&lp2, &gwc, 1264, 1680, 654, 396, 654, 396));
+        chrome_lcd_controls ct;
+        memset(&ct, 0, sizeof ct);
+        chrome_lcd_layout(&lp2, &ct);
+
+        static uint8_t fbg[1264 * 1680], fbs[1264 * 1680], fbm[1264 * 1680];
+        memset(fbg, 0x7F, sizeof fbg); chrome_render(fbg, 1264, &lp2, &gwc.layout);
+        memset(fbs, 0x7F, sizeof fbs); chrome_render(fbs, 1264, &lp2, &snc.layout);
+        memset(fbm, 0x7F, sizeof fbm); chrome_render(fbm, 1264, &lp2, &mdc.layout);
+
+        /* `box` is the rect chrome.c's label_in_box was handed -- a disc's
+           inscribed square, a pill's whole rect -- because that is what
+           chooses the glyph size, and the expectation has to choose the same
+           one. `inset` shrinks it to the region actually COUNTED over: a
+           disc's inscribed square clips its own INK ring at the extreme
+           corner (measured: exactly one pixel of it, at the top-left), and a
+           pill's rect contains its 2 px INK frame. Both would be counted as
+           label ink. The px ladder guarantees at least 4 px of clear margin
+           on every side, so neither inset can touch a glyph. */
+        int fr = ct.face_r * 7 / 10;
+        struct { koboy_rect box; int inset; const char *name;
+                 const char *gw, *snes, *md; } lb[] = {
+            { { ct.x_cx - fr, ct.x_cy - fr, 2 * fr, 2 * fr }, 3, "diamond top",   "X", "X", "Y" },
+            { { ct.y_cx - fr, ct.y_cy - fr, 2 * fr, 2 * fr }, 3, "diamond left",  "Y", "Y", "A" },
+            { { ct.a_cx - fr, ct.a_cy - fr, 2 * fr, 2 * fr }, 3, "diamond right", "A", "A", "C" },
+            { { ct.b_cx - fr, ct.b_cy - fr, 2 * fr, 2 * fr }, 3, "diamond bottom","B", "B", "B" },
+            { { ct.l1.x, ct.l1.y, ct.l1.w, ct.l1.h }, 6,
+              "left shoulder",  "L1", "L", "X" },
+            { { ct.r1.x, ct.r1.y, ct.r1.w, ct.r1.h }, 6,
+              "right shoulder", "R1", "R", "Z" },
+            { { ct.select.x, ct.select.y, ct.select.w, ct.select.h }, 6,
+              "select pill", "SELECT", "SELECT", "MODE" },
+            /* START is in the table with the same string three times on
+               purpose: koboy_lcd_labels has no field for it, and this row is
+               what says that is a decision rather than a dropped case. */
+            { { ct.start.x, ct.start.y, ct.start.w, ct.start.h }, 6,
+              "start pill", "START", "START", "START" },
+        };
+
+        for (size_t i = 0; i < sizeof lb / sizeof lb[0]; i++) {
+            koboy_rect cr = { lb[i].box.x + lb[i].inset, lb[i].box.y + lb[i].inset,
+                              lb[i].box.w - 2 * lb[i].inset,
+                              lb[i].box.h - 2 * lb[i].inset };
+            const koboy_rect *r = &cr;
+            const uint8_t *bufs[3] = { fbg, fbs, fbm };
+            const char *want[3] = { lb[i].gw, lb[i].snes, lb[i].md };
+            for (int k = 0; k < 3; k++) {
+                int fill_v = bufs[k][(r->y + r->h - 2) * 1264 + r->x + 1];
+                int glyph = 0;
+                for (int y = r->y; y < r->y + r->h; y++)
+                    for (int x = r->x; x < r->x + r->w; x++)
+                        if (bufs[k][y * 1264 + x] != fill_v) glyph++;
+                int expect = label_glyph_px(want[k], lb[i].box.w, lb[i].box.h);
+                /* A label that vanished would satisfy an equality against a
+                   zero expectation, so the expectation itself is checked to
+                   be non-trivial first -- the "expected value is also the
+                   default" shape this project has caught six times. */
+                CHECK(expect > 20);
+                if (glyph != expect)
+                    fprintf(stderr, "  %s on system %d: %d label px, \"%s\" is %d\n",
+                            lb[i].name, k, glyph, want[k], expect);
+                CHECK_EQ_INT(glyph, expect);
+            }
+
+            /* (2) THE MATRIX. Two controls whose labels are the same string
+               must render IDENTICAL boxes; two whose labels differ must not.
+               This is what catches a table whose fields are correct but wired
+               to the wrong discs -- every count above would still match. */
+            struct { const uint8_t *a, *b; const char *sa, *sb; } pr[3] = {
+                { fbg, fbs, lb[i].gw,   lb[i].snes },
+                { fbg, fbm, lb[i].gw,   lb[i].md   },
+                { fbs, fbm, lb[i].snes, lb[i].md   },
+            };
+            for (int k = 0; k < 3; k++) {
+                int diff = 0;
+                for (int y = r->y; y < r->y + r->h; y++)
+                    for (int x = r->x; x < r->x + r->w; x++)
+                        if (pr[k].a[y * 1264 + x] != pr[k].b[y * 1264 + x]) diff++;
+                bool same_label = strcmp(pr[k].sa, pr[k].sb) == 0;
+                if (same_label != (diff == 0))
+                    fprintf(stderr, "  %s: \"%s\" vs \"%s\" -> %d differing px\n",
+                            lb[i].name, pr[k].sa, pr[k].sb, diff);
+                CHECK_EQ_INT(same_label, diff == 0);
+            }
+        }
+
+        /* NOTHING OUTSIDE THE LABELLED CONTROLS MOVED. The label table has no
+           geometry in it, so the d-pad, MENU, the battery lamp, the wordmark,
+           the recess and the game rect must be byte for byte identical across
+           all three systems. Without this, a "label" that quietly nudged a
+           control would pass every check above. */
+        {
+            int diff_total = 0, diff_outside = 0;
+            for (int y = 0; y < 1680; y++)
+                for (int x = 0; x < 1264; x++) {
+                    if (fbg[y * 1264 + x] == fbm[y * 1264 + x]) continue;
+                    diff_total++;
+                    bool inside = false;
+                    for (size_t i = 0; i < sizeof lb / sizeof lb[0]; i++) {
+                        const koboy_rect *r = &lb[i].box;
+                        if (x >= r->x && x < r->x + r->w &&
+                            y >= r->y && y < r->y + r->h) { inside = true; break; }
+                    }
+                    if (!inside) diff_outside++;
+                }
+            if (diff_outside)
+                fprintf(stderr, "  %d px changed outside the labelled controls\n",
+                        diff_outside);
+            CHECK_EQ_INT(diff_outside, 0);
+            CHECK(diff_total > 0);      /* ...and something DID change */
+        }
     }
 
     /* EXTREME PANELS, where the strip's two live guards actually fire. Both

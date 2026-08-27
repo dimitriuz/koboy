@@ -84,7 +84,14 @@ int chrome_lcd_strip_h(int panel_h);
    active) draws a SNES pad and labels the TOP button NORTHEAST, the BOTTOM
    one SOUTHEAST. X is that top button, Y left, A right, B bottom -- so a
    user reading the core's overlay can find the same button here. Rearranging
-   them into a row would break that correspondence silently.
+   them into a row would break that correspondence silently. It is also,
+   literally, a SNES pad, which is why that system moved to this layout when
+   its L and R turned out not to fit the DMG faceplate.
+
+   The FIELD NAMES here are the retropad's, and they stay the retropad's:
+   they say which BIT each disc reports, which is one thing for every system.
+   What each disc SAYS is a separate table (koboy_lcd_labels in koboy.h),
+   because JOYPAD_A is the SNES's A and the Mega Drive's C.
 
    `face_r` is every disc's radius and `face_off` the centre-to-centre
    distance out to each one. face_off > face_r * sqrt(2) by construction (it
