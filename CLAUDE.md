@@ -36,7 +36,7 @@ on hardware. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 25 binaries, 3803 checks. Runs on x86_64.
+make test        # host suite: 26 binaries, 5946 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -85,7 +85,9 @@ src/platform_if.h     the portability seam: init, shutdown, screen_info,
 src/platform_kobo.c   FBInk + evdev. Device quirks live here and nowhere else.
 src/platform_sdl.c    host equivalent, so the whole pipeline is testable
 src/video.c           RGB565->gray LUT (five selectable mappings, koboy_gray_map),
-                      integer upscale, 4-level quantise, Bayer dither,
+                      integer upscale, 4-level quantise, Bayer dither
+                      (thresholds are the matrix SCALED to 0..254, or pure
+                      white speckles one pixel per 16x16 tile -- g_thresh),
                       8x8-tile dirty rects
 src/input.c           protocol-B multitouch decode, axis transpose, d-pad modes
 src/chrome.c          the procedural faceplate drawn around the game rect
@@ -314,6 +316,17 @@ spec's appendices are the record; the short version:
   inside their existing levels, so the DMG golden is byte-identical and **no
   per-system exemption exists**. Do not add one keyed on 160x144 — Game Gear
   is also 160x144 and is a colour system.
+- **DU4's failure is NOT evidence against DU, and the two are not the same
+  waveform.** DU4 is the FOUR-level variant; DU is two-level. FBInk's header
+  says a DU-class waveform "will leave on-screen pixels as-is for new content
+  that is *not* B&W" — so against koboy's four-level output, every pixel whose
+  new value is one of the two MIDDLE levels is a pixel the panel declines to
+  touch, which is exactly what "DU4 cannot erase" looked like from the inside.
+  `waveform_fast = du` plus `force_dither` (the in-game **MENU → MOTION** row,
+  which cycles the PAIR) is the untried combination; neither half is expected
+  to be worth anything alone. **UNPROVEN ON A PANEL** — see "Known unfinished"
+  and `docs/FOLLOWUPS.md` #25/#96/#97. Do not promote this bullet to a
+  measured one without a play session.
 - **Refresh cost scales with area**, so dirty rectangles pay for themselves, and
   non-blocking submission beats blocking by ~2.6x. The main loop never waits for
   completion.
@@ -464,6 +477,16 @@ hiding.
   script and reads it back. The same two runs would work on the device with
   Nickel up, exactly as the FRAMES row was verified there. Nobody has done
   it. See `docs/FOLLOWUPS.md` #76.
+- **The 1-bit motion pair has never been seen on a panel.** `force_dither`
+  now runs end to end (it never had — `docs/FOLLOWUPS.md` #4), `waveform_fast
+  = du` is new, and **MENU → MOTION** cycles the pair `4 GREYS / AUTO` →
+  `1-BIT / AUTO` → `1-BIT / DU`. Everything asserted about it is host-side:
+  the buffer holds exactly 0x00 and 0xFF, both halves reach the live pipeline
+  and the live backend, both ini keys persist. **No measurement koboy can
+  take can see ghosting** — residue is panel-side and the dirty diff only
+  compares koboy's own buffers — so the visual claim is entirely the owner's,
+  on the device. #96 and #97 (DU has no timing number on any panel) are the
+  open ends.
 - **One verified device, and v2-core's UI layer has run on it only partially.**
   The 2026-08-26 session ran the `koboy` binary directly with `--frames` over
   ssh — never through `scripts/koboy.sh`, so Nickel was never stopped and the

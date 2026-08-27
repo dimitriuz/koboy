@@ -284,6 +284,25 @@ uint32_t       video_get_aspect(const koboy_video *v);
 
 void           video_set_gray_map(koboy_video *v, koboy_gray_map map);
 koboy_gray_map video_get_gray_map(const koboy_video *v);
+
+/* Whether the pipeline ends in video_dither_1bit (two output values) instead
+   of video_quantise4 (four). Settable on a LIVE pipeline for the same reason
+   video_set_gray_map is: the in-game MOTION entry has to be judged while
+   looking at the game in motion, and the only honest comparison is one made
+   without relaunching.
+
+   A change needs a video_invalidate -- every pixel's output value can move,
+   and the dirty diff would otherwise leave untouched tiles carrying the old
+   rendering, which on e-ink persists until something else happens to write
+   them. main.c's return-from-menu path already invalidates unconditionally.
+
+   The getter exists so the log can report what the LIVE pipeline is doing
+   rather than what config.c parsed -- the same end-to-end trick as
+   video_get_gray_map, and the only handle a host test has on this at all,
+   since the panel is the only thing that can see the difference the setting
+   is for. */
+void           video_set_dither(koboy_video *v, bool on);
+bool           video_get_dither(const koboy_video *v);
 void           video_destroy(koboy_video *v);
 koboy_rect     video_submit(koboy_video *v, const void *src, int src_w, int src_h,
                             size_t src_pitch, koboy_pixfmt fmt);

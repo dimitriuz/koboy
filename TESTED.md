@@ -1888,3 +1888,88 @@ launch, which started at 8 (the menu writes it back to the ini) and faulted
 before presenting a frame. **Not reproduced**: 60 frames of Pokemon Emerald
 at `present_divisor = 8` exits 0 on both the deployed binary and the fixed
 one. The device's live `koboy.ini` still says 8. See `docs/FOLLOWUPS.md` #92.
+
+## The motion pair: 1-bit output and a two-level waveform (2026-08-27)
+
+**NOTHING IN THIS SECTION HAS BEEN SEEN ON A PANEL.** It is here so that the
+next session knows exactly what was and was not established, because the thing
+this change is for -- e-ink residue behind a moving sprite -- is invisible to
+every instrument koboy has. Residue is panel-side; koboy's dirty diff compares
+koboy's own output buffers, so a `--frames` run cannot see ghosting at all.
+That is why `docs/FOLLOWUPS.md` #25 has outlived two attempts.
+
+### What the photographs established
+
+The owner filmed Super Mario Bros. under the takeover. A jump leaves a
+vertical column one dirty-rect wide holding a faint grey ghost above the
+sprite, the solid sprite, and **bright white bands below, brighter than the
+sky**. The white is the finding: those pixels were black (sprite) and are
+being driven toward a mid-grey sky, and they overshoot past it. Both
+directions of the transition land wrong. The residue never leaves the dirty
+rect's column, so the dirty-rect logic is exonerated -- this is waveform and
+levels.
+
+Sampled off the live framebuffer during play, before the panel does anything:
+**sky 170 (level 2), brick 85 (level 1)**. A mid-grey background is what makes
+every sprite transition a hard one for a fast waveform.
+
+### What was verified, on the host only
+
+| claim | how |
+|---|---|
+| 1-bit output really is two-valued end to end | `tests/test_video_pipeline.c`: exactly 2 distinct byte values over the whole 800x720 game rect, and they are 0x00 and 0xFF |
+| the flag flips on a LIVE pipeline | same file: 4 levels -> 2 -> 4 across `video_set_dither`, so the menu row does not need a relaunch |
+| pure white stays pure white under dither | `tests/test_video_quant.c`: 0 dark pixels over four whole 16x16 tiles of 255 (this was NOT true before -- see below) |
+| both halves reach the live objects | `tests/smoke_host.sh`: `koboy: motion 1-bit / DU` printed off the live `koboy_video` and the live backend, not off `koboy_config` |
+| the ladder steps the PAIR | three scripted MENU runs, one per rung, each from the rung below |
+| both ini keys persist, in one write | same runs; `force_dither` and `waveform_fast` each appear exactly once after five cycles |
+
+### The white-speckle bug this found
+
+The ditherer thresholded against the raw Bayer matrix, a permutation of
+0..255, so `255 > 255` was false and **one pixel in every 16x16 tile of pure
+white came out black** -- 2250 isolated black dots over an 800x720 game rect
+at 16px spacing. Pure white is not a corner case: it is the Game Boy's own
+lightest shade and most HUD text on every other system. Fixed by scaling the
+thresholds to 0..254 (`g_thresh` in `src/video.c`). This would have poisoned
+the very judgement the owner is being asked to make -- "1-bit looks dirty" for
+a reason that has nothing to do with motion.
+
+### Per-stage cost, host, dither on versus off
+
+Measured through `koboy --frames`, same ROM, same geometry, so the numbers are
+comparable to each other and NOT to any device figure.
+
+| force_dither | `submit` mean (3 runs) | `presented` | rects |
+|---|---|---|---|
+| false | 1110 / 994 / 1075 us | 300 | 1 per frame |
+| true  | 1286 / 1284 / 1374 us | 300 | 1 per frame |
+
+**Dithering costs about 24% more `video_submit`**, which is the stage CLAUDE.md
+identifies as the pipeline's bottleneck. On the device that stage is ~17 ms for
+a Game Boy at scale 5, so expect roughly +4 ms per presented frame. At the
+owner's `present_divisor = 8` there is ample budget; at 1 or 2 it will cost
+presented frames. The rect count does not move -- the Bayer phase is indexed by
+absolute screen position, so a static region dithers identically every frame
+and the dirty diff still suppresses it.
+
+`blit` and `refresh` here are SDL numbers and mean nothing about a panel;
+`core` is a stub. Only the `submit` column is a real comparison, and only
+against itself.
+
+### What is still needed
+
+A play session. Cycle MENU -> MOTION through its three rungs on the same jump
+in SMB and say which column looks least wrong. The middle rung (1-BIT / AUTO)
+is the control: if it is already as good as 1-BIT / DU, the waveform is not
+doing the work. Expect the 1-bit rungs to make a flat sky a fine black-and-
+white pattern rather than a flat grey -- 170 is about two thirds white -- and
+expect the Game Boy to LOSE from this, since its four shades already are the
+panel's four levels.
+
+Also worth doing in the same session, because it is one probe run with Nickel
+up: `koboy-probe --coexist` now times DU alongside AUTO/DU4/A2/GC16. Nobody
+has a number for what DU costs on this panel, and if it is as slow as FBInk's
+header guesses (~260 ms) that changes the verdict independently of how it
+looks. `docs/FOLLOWUPS.md` #97.
+

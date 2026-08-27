@@ -870,6 +870,22 @@ koboy_gray_map video_get_gray_map(const koboy_video *v)
     return v ? v->map : (koboy_gray_map)KOBOY_GRAY_DEFAULT;
 }
 
+/* Contract in video.h. No invalidate here on purpose: this function does not
+   know what the caller is about to do, and video_invalidate is not free (a
+   memset of the whole game rect). The one caller that changes this mid-session
+   -- main.c's MOTION row -- is on the return-from-menu path, which already
+   invalidates and repaints unconditionally. */
+void video_set_dither(koboy_video *v, bool on)
+{
+    if (!v) return;
+    v->dither = on;
+}
+
+bool video_get_dither(const koboy_video *v)
+{
+    return v ? v->dither : false;
+}
+
 void video_destroy(koboy_video *v)
 {
     if (!v) return;

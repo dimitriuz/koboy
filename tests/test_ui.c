@@ -766,4 +766,76 @@ TEST_MAIN({
         ui_divisor_label(guard2, 0, 3);
         CHECK_EQ_INT(guard2[0], 'Q');
     }
+
+    /* ------------------------------------------------ the MOTION row label */
+    {
+        /* ALL SIX legal combinations, not just the three the menu's ladder
+           offers: the ini may hold any pair, and a label that only covered
+           the rungs would render something wrong -- or nothing -- for a
+           hand-edited file. Each string is spelled out rather than built,
+           which is what makes a label that silently dropped one of the two
+           halves fail here instead of looking plausible on the panel. */
+        static const struct { bool d; koboy_wfm_policy w; const char *want; } cases[] = {
+            { false, KOBOY_WFM_AUTO, "MOTION: 4 GREYS / AUTO" },
+            { false, KOBOY_WFM_DU4,  "MOTION: 4 GREYS / DU4"  },
+            { false, KOBOY_WFM_DU,   "MOTION: 4 GREYS / DU"   },
+            { true,  KOBOY_WFM_AUTO, "MOTION: 1-BIT / AUTO"   },
+            { true,  KOBOY_WFM_DU4,  "MOTION: 1-BIT / DU4"    },
+            { true,  KOBOY_WFM_DU,   "MOTION: 1-BIT / DU"     },
+            /* Out of range names the default waveform, the same way
+               config_wfm_policy_name does -- a row reading "MOTION: 1-BIT /"
+               with nothing after the slash would be worse than wrong. */
+            { true,  (koboy_wfm_policy)99, "MOTION: 1-BIT / AUTO" },
+        };
+        char lab[64];
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            ui_motion_label(lab, sizeof lab, cases[i].d, cases[i].w);
+            CHECK(strcmp(lab, cases[i].want) == 0);
+            if (strcmp(lab, cases[i].want) != 0)
+                fprintf(stderr, "  motion %d/%d gave \"%s\"\n",
+                        (int)cases[i].d, (int)cases[i].w, lab);
+        }
+
+        /* Six distinct strings from six distinct pairs. A label that named
+           only the dither half would collapse these to two, and every
+           per-case check above would still pass if the table were rewritten
+           to match it -- this is the check that says the two halves are
+           independently visible. */
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0] - 1; i++)
+            for (size_t j = i + 1; j < sizeof cases / sizeof cases[0] - 1; j++)
+                CHECK(strcmp(cases[i].want, cases[j].want) != 0);
+
+        /* The ini's own vocabulary, uppercased -- so a photo of the panel and
+           a hand-edited koboy.ini can be compared without a translation
+           table. Derived from config_wfm_policy_name rather than restated,
+           which is what makes this fail if the two ever drift. */
+        for (int w = 0; w < KOBOY_WFM_COUNT; w++) {
+            const char *tok = config_wfm_policy_name((koboy_wfm_policy)w);
+            char        up[16];
+            size_t      k = 0;
+            for (; tok[k] && k + 1 < sizeof up; k++)
+                up[k] = (tok[k] >= 'a' && tok[k] <= 'z') ? (char)(tok[k] - 'a' + 'A') : tok[k];
+            up[k] = '\0';
+            ui_motion_label(lab, sizeof lab, true, (koboy_wfm_policy)w);
+            CHECK(strstr(lab, up) != NULL);
+        }
+
+        /* Fits a MENU row on the narrowest supported panel. */
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+            ui_motion_label(lab, sizeof lab, cases[i].d, cases[i].w);
+            CHECK((int)strlen(lab) <= UI_TITLE_CHARS);
+        }
+
+        /* Truncates rather than overruns, and always terminates. */
+        char tiny[6];
+        memset(tiny, 'Z', sizeof tiny);
+        ui_motion_label(tiny, sizeof tiny, true, KOBOY_WFM_DU);
+        CHECK_EQ_INT((int)strlen(tiny), 5);
+        CHECK(strcmp(tiny, "MOTIO") == 0);
+
+        /* A zero-size buffer writes nothing at all. */
+        char guard3[2] = { 'Q', 'Q' };
+        ui_motion_label(guard3, 0, true, KOBOY_WFM_DU);
+        CHECK_EQ_INT(guard3[0], 'Q');
+    }
 })

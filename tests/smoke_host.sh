@@ -462,7 +462,7 @@ echo "ok: present_divisor = 0 keeps the default rather than dividing by zero"
 # Row geometry is the same 1264x1680 derivation as every browser tap above
 # (row_h=64, row r's centre is 8 + 64 + r*64 + 32), against the MENU's own
 # order in src/main.c: 0 SAVE STATE, 1 LOAD STATE, 2 RESET GAME,
-# 3 GREYSCALE, 4 FRAMES, 5 CHOOSE ROM, 6 RESUME, 7 QUIT.
+# 3 GREYSCALE, 4 FRAMES, 5 MOTION, 6 CHOOSE ROM, 7 RESUME, 8 QUIT.
 #   menu         -- open the in-game MENU from inside the emulator loop
 #   tap 200 360  -- row 4, FRAMES
 #
@@ -548,11 +548,113 @@ grep -q '^gray_map = equal$' "$ini" || {
     cat "$ini"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
 echo "ok: MENU -> GREYSCALE cycles the mapping and writes it back (closes #47)"
 
-# A NEGATIVE control for both of the above, and it is the check that stops the
-# two runs before it from being self-fulfilling. The same script, aimed at a
-# row that is neither settings row (row 2, RESET GAME): if the taps were
+# ------------------------------------------- MENU -> MOTION, the 1-bit PAIR
+#
+# The same hook again, over the row that turns the picture 1-bit and asks the
+# panel for a two-level waveform. THREE runs, because the row moves two
+# settings at once and they fail independently.
+#
+#   tap 200 424  -- row 5, MOTION (row_h=64, centre = 8 + 64 + 5*64 + 32)
+#
+# WHAT A HOST RUN CAN AND CANNOT SEE. It cannot see ghosting: residue is
+# panel-side, and koboy's dirty diff only ever compares koboy's own output
+# buffers. What it CAN see is that both halves of the pair went live -- the
+# pipeline is dithering (read back off the live koboy_video) and the platform
+# is asking for DU (read back off the live backend, not off koboy_config) --
+# and that both keys landed in the ini. The visual claim is the owner's, on
+# the panel, and nothing here asserts it.
+romdir_m="$(mktemp -d)"; : > "$romdir_m/AAA TEST.gb"
+ini_m="$(mktemp)"; script_m="$(mktemp)"
+printf 'menu\ntap 200 424\n' > "$script_m"
+
+# THE WHOLE LADDER, one rung per run, and each run starts from the rung below
+# it. Three starting points and three distinct destinations: a handler wired
+# to a constant, or one that advanced only the dither flag, or only the
+# waveform, fails at least one of these rows. The middle rung (1-bit under
+# AUTO) is the control the ladder exists to offer and would be invisible to a
+# two-state toggle.
+#
+#   from                    ->  to
+#   4-level / auto          ->  1-bit  / auto
+#   1-bit   / auto          ->  1-bit  / du
+#   1-bit   / du            ->  4-level/ auto   (wraps)
+while read -r fd fw td tw; do
+    printf '# keep me\nforce_dither = %s\nwaveform_fast = %s\n' "$fd" "$fw" > "$ini_m"
+    rc=0
+    out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+            --core build/stub_core.so --rom "$romdir_m/AAA TEST.gb" \
+            --config "$ini_m" --ui-script "$script_m" \
+            --panel 1264x1680 --frames 60 2>&1) || rc=$?
+    echo "$out" | grep -E 'koboy: motion'
+    if [ "$rc" -ne 0 ]; then
+        echo "FAIL: scripted MOTION run from $fd/$fw exited $rc"
+        rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1
+    fi
+    # The line main.c prints is read off the LIVE koboy_video and the LIVE
+    # platform. A build whose video_set_dither was a no-op, or whose
+    # set_wfm_policy never reached the backend, prints the old pair here and
+    # fails -- while still writing the new one to the ini below.
+    want_log="koboy: motion = $td / $tw"
+    echo "$out" | grep -q "^$want_log\$" || {
+        echo "FAIL: MOTION from $fd/$fw did not report \"$want_log\""
+        rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+    # PERSISTED, both keys, one write. The menu and the two ini keys are one
+    # setting: a run that applied the pair and saved half of it would come
+    # back next launch as a combination nobody picked.
+    want_fd=false; [ "$td" = "1-bit" ] && want_fd=true
+    want_fw=$(echo "$tw" | tr 'A-Z' 'a-z')
+    grep -q "^force_dither = $want_fd\$" "$ini_m" || {
+        echo "FAIL: the ini does not say force_dither = $want_fd after MOTION"
+        cat "$ini_m"; rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+    grep -q "^waveform_fast = $want_fw\$" "$ini_m" || {
+        echo "FAIL: the ini does not say waveform_fast = $want_fw after MOTION"
+        cat "$ini_m"; rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+    grep -q '^# keep me$' "$ini_m" || {
+        echo "FAIL: saving the motion pair destroyed the rest of the ini"
+        cat "$ini_m"; rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+done <<'MOTION_LADDER'
+false auto 1-bit AUTO
+true auto 1-bit DU
+true du 4-level AUTO
+MOTION_LADDER
+echo "ok: MENU -> MOTION cycles the 1-bit/waveform pair and writes both keys"
+
+# THE PAIR IS LIVE FROM THE INI TOO, not only from the menu -- which is the
+# half the runs above cannot see, because every one of them starts by opening
+# a menu. `force_dither = true` had never run end to end in this project
+# (docs/FOLLOWUPS.md #4) and `waveform_fast = du` did not exist; this is the
+# run that says a launch reads both and hands them to the pipeline and the
+# backend respectively.
+printf 'force_dither = true\nwaveform_fast = du\n' > "$ini_m"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir_m/AAA TEST.gb" \
+        --config "$ini_m" --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out" | grep -E 'koboy: motion'
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: a launch with force_dither = true, waveform_fast = du exited $rc"
+    rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+echo "$out" | grep -q '^koboy: motion 1-bit / DU$' || {
+    echo "FAIL: the ini's motion pair did not reach the live pipeline and backend"
+    rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+# The positive control's negative twin: the shipped default must report the
+# other pair through the same line, or "1-bit / DU" above would be equally
+# consistent with a line that says that whatever the file holds.
+printf 'force_dither = false\nwaveform_fast = auto\n' > "$ini_m"
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir_m/AAA TEST.gb" \
+        --config "$ini_m" --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out" | grep -q '^koboy: motion 4-level / AUTO$' || {
+    echo "FAIL: the default motion pair did not report 4-level / AUTO"
+    rm -rf "$romdir_m" "$ini_m" "$script_m"; exit 1; }
+rm -rf "$romdir_m" "$ini_m" "$script_m"
+echo "ok: force_dither + waveform_fast reach the pipeline and the backend from the ini"
+
+# A NEGATIVE control for all of the above, and it is the check that stops the
+# runs before it from being self-fulfilling. The same script, aimed at a
+# row that is no settings row at all (row 2, RESET GAME): if the taps were
 # landing anywhere at all -- or if the handler fired regardless of which row
-# was chosen -- this run would move a setting too. Neither key may change.
+# was chosen -- this run would move a setting too. No key may change.
 printf 'menu\ntap 200 232\n' > "$script"
 printf 'present_divisor = 3\ngray_map = balanced\n' > "$ini"
 rc=0
@@ -569,6 +671,9 @@ echo "$out" | grep -q 'koboy: present_divisor = ' && {
     rm -rf "$romdir" "$ini" "$script"; exit 1; }
 echo "$out" | grep -q 'koboy: gray_map = ' && {
     echo "FAIL: tapping RESET GAME changed gray_map"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "$out" | grep -q 'koboy: motion = ' && {
+    echo "FAIL: tapping RESET GAME changed the motion pair"
     rm -rf "$romdir" "$ini" "$script"; exit 1; }
 grep -q '^present_divisor = 3$' "$ini" || {
     echo "FAIL: the ini's present_divisor moved without being asked"
@@ -1553,12 +1658,12 @@ head -c 212 /dev/zero > "$rd/BAD.sfc"
 : > "$rd/GOOD.gb"
 s5="$(mktemp)"
 #   menu        -- open the in-game MENU
-#   tap 200 424 -- MENU row 5, CHOOSE ROM (SAVE LOAD RESET GRAY FRAMES ...)
+#   tap 200 488 -- MENU row 6, CHOOSE ROM (SAVE LOAD RESET GRAY FRAMES MOTION ...)
 #   tap 200 168 -- mid-session MAIN MENU row 1, ALL GAMES
 #   tap 200 104 -- browser row 0, BAD.sfc   <- the load that fails
 #   tap 200 168 -- MAIN MENU row 1 again    <- proves we came BACK
 #   tap 200 168 -- browser row 1, GOOD.gb   <- and can still start a game
-printf 'menu\ntap 200 424\ntap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s5"
+printf 'menu\ntap 200 488\ntap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s5"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom "$rd/GOOD.gb" --rom-dir "$rd" --save-dir "$sd" --ui-script "$s5" \
@@ -1614,10 +1719,10 @@ printf '\0' > "$d_sw/roms/AAA.gb"
 head -c 32768 /dev/zero > "$d_sw/roms/ZZZ.md"
 sw_script="$(mktemp)"
 #   menu        -- open the in-game MENU on the Game Boy game
-#   tap 200 424 -- MENU row 5, CHOOSE ROM (row_h=64, centre 8+64+r*64+32)
+#   tap 200 488 -- MENU row 6, CHOOSE ROM (row_h=64, centre 8+64+r*64+32)
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
 #   tap 200 168 -- browser row 1, ZZZ.md (row 0 is AAA.gb; alphabetical)
-printf 'menu\ntap 200 424\ntap 200 168\ntap 200 168\n' > "$sw_script"
+printf 'menu\ntap 200 488\ntap 200 168\ntap 200 168\n' > "$sw_script"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d_sw/koboy" --rom "$d_sw/roms/AAA.gb" \
         --rom-dir "$d_sw/roms" --save-dir "$d_sw/save" --ui-script "$sw_script" \
@@ -1724,11 +1829,11 @@ mkdir -p "$d_sw3/roms" "$d_sw3/save"
 printf '\0' > "$d_sw3/roms/AAA.gb"
 head -c 32768 /dev/zero > "$d_sw3/roms/ZZZ.md"
 sw3="$(mktemp)"
-# Three switches. Each is: menu, CHOOSE ROM (row 5), ALL GAMES (row 1), then
+# Three switches. Each is: menu, CHOOSE ROM (row 6), ALL GAMES (row 1), then
 # the browser row -- 104 for AAA.gb, 168 for ZZZ.md.
-{ printf 'menu\ntap 200 424\ntap 200 168\ntap 200 168\n'
-  printf 'menu\ntap 200 424\ntap 200 168\ntap 200 104\n'
-  printf 'menu\ntap 200 424\ntap 200 168\ntap 200 168\n'; } > "$sw3"
+{ printf 'menu\ntap 200 488\ntap 200 168\ntap 200 168\n'
+  printf 'menu\ntap 200 488\ntap 200 168\ntap 200 104\n'
+  printf 'menu\ntap 200 488\ntap 200 168\ntap 200 168\n'; } > "$sw3"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 60 "$d_sw3/koboy" --rom "$d_sw3/roms/AAA.gb" \
         --rom-dir "$d_sw3/roms" --save-dir "$d_sw3/save" --ui-script "$sw3" \

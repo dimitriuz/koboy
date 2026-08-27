@@ -402,8 +402,13 @@ static bool load_rom_into(koboy_core *core, koboy_config *cfg,
     return true;
 }
 
+/* MOTION sits BELOW FRAMES, and the order is not free: tests/smoke_host.sh
+   drives this menu by hardcoded pixel coordinates derived from the row index,
+   so a row inserted ABOVE an existing one silently strands every tap below it
+   outside the row it names. Adding at the end of the settings group costs one
+   comment update per tap below it and nothing else. */
 enum {
-    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_FRAMES,
+    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_FRAMES, MENU_MOTION,
     MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
     MENU_COUNT
 };
@@ -417,17 +422,20 @@ enum {
 static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                     int stride, int pw, int ph, bool has_states,
                     koboy_gray_map map, int divisor,
+                    bool dither, koboy_wfm_policy wfm,
                     const koboy_input_state *script, int *script_i, int script_n)
 {
     const char *items[MENU_COUNT];
-    static char gray_label[48], divisor_label[48];
+    static char gray_label[48], divisor_label[48], motion_label[48];
     ui_gray_label(gray_label, sizeof gray_label, map);
     ui_divisor_label(divisor_label, sizeof divisor_label, divisor);
+    ui_motion_label(motion_label, sizeof motion_label, dither, wfm);
     items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
     items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
     items[MENU_RESET]       = "RESET GAME";
     items[MENU_GRAY]        = gray_label;
     items[MENU_FRAMES]      = divisor_label;
+    items[MENU_MOTION]      = motion_label;
     items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
     items[MENU_RESUME]      = "RESUME";
     items[MENU_QUIT]        = "QUIT";
@@ -1396,6 +1404,17 @@ int main(int argc, char **argv)
        in a way that looks like a broken core rather than a missing line. */
     if (vid) video_set_aspect(vid, core_aspect(&cfg, core));
     if (vid) say("koboy: gray_map %s\n", video_gray_map_name(video_get_gray_map(vid)));
+    /* Both halves of the MOTION pair, read back off the LIVE pipeline and the
+       LIVE platform rather than off cfg -- same trick as the line above and
+       the pacer's below. A line printed from cfg would prove the parser; this
+       one fails if video_create ignored force_dither or the backend never got
+       the policy, which are the two ways this setting can be on in the file
+       and off on the panel. */
+    if (vid)
+        say("koboy: motion %s / %s\n",
+            video_get_dither(vid) ? "1-bit" : "4-level",
+            pf->wfm_fast_name ? pf->wfm_fast_name(pf->ctx)
+                              : config_wfm_policy_name((koboy_wfm_policy)cfg.wfm_fast_policy));
     if (vid && core_rotation(core))
         say("koboy: core asked for %u quarter turn%s; presenting %dx%d\n",
             core_rotation(core), core_rotation(core) == 1 ? "" : "s",
@@ -1538,6 +1557,8 @@ int main(int argc, char **argv)
             size_t ssz = core_state_size(core);
             int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
                                (koboy_gray_map)cfg.gray_map, cfg.present_divisor,
+                               cfg.force_dither,
+                               (koboy_wfm_policy)cfg.wfm_fast_policy,
                                ui_scr, ui_scr_i, ui_script_n);
 
             if (act == MENU_SAVE || act == MENU_LOAD) {
@@ -1644,6 +1665,66 @@ int main(int argc, char **argv)
                 else
                     say("koboy: present_divisor = %d (this session only -- "
                         "could not write %s)\n", cfg.present_divisor, ini_path);
+            } else if (act == MENU_MOTION) {
+                /* Cycles and returns to the GAME, exactly like GREYSCALE and
+                   FRAMES above and for the same reason: whether a dithered
+                   1-bit picture under a two-level waveform smears LESS than
+                   four greys under AUTO is a judgement about a reflective
+                   panel in motion, and no framebuffer measurement can make
+                   it -- residue is panel-side and koboy's dirty diff only
+                   ever sees what koboy itself wrote.
+
+                   ONE ROW, TWO KEYS, because the thing being tested is the
+                   PAIR. FBInk's header says a DU-class waveform leaves
+                   on-screen pixels as-is for new content that is not black
+                   or white, so four-level content under DU is the forced-DU4
+                   experiment that already failed here, and 1-bit content
+                   under AUTO gives the driver less to work with rather than
+                   more. config_next_motion holds the ladder and the argument
+                   for its three rungs.
+
+                   BOTH HALVES GO LIVE HERE, and each needs its own call:
+                   video_set_dither changes what the next frame CONTAINS,
+                   pf->set_wfm_policy changes how the panel is asked to draw
+                   it, and a setting where only one of the two moved would be
+                   a combination the owner never picked. The unconditional
+                   redraw_chrome + video_invalidate below is what makes the
+                   change whole-frame rather than half-old: without it the
+                   dirty diff would leave untouched tiles carrying the
+                   previous rendering, which on e-ink persists until
+                   something else writes them. */
+                {
+                    bool             nd = cfg.force_dither;
+                    koboy_wfm_policy nw = (koboy_wfm_policy)cfg.wfm_fast_policy;
+                    config_next_motion(&nd, &nw);
+                    cfg.force_dither    = nd;
+                    cfg.wfm_fast_policy = (int)nw;
+                    video_set_dither(vid, nd);
+                    /* Optional in the seam (platform_if.h), so null-checked --
+                       both shipped backends implement it, and a future one
+                       that cannot change waveforms should degrade to "the
+                       dithering half still works" rather than crash. */
+                    if (pf->set_wfm_policy) pf->set_wfm_policy(pf->ctx, nw);
+                    /* Read back off the LIVE pipeline and the LIVE platform,
+                       not off cfg, for the reason the gray_map and
+                       present_divisor lines do it: a line reporting what this
+                       branch just assigned proves this branch, while these
+                       fail if either setter never landed. */
+                    const char *wn = pf->wfm_fast_name ? pf->wfm_fast_name(pf->ctx)
+                                                       : config_wfm_policy_name(nw);
+                    /* One choice, two keys, ONE write. A failure is not fatal
+                       and must not be silent: the pair is live for this
+                       session either way, it just will not survive a relaunch
+                       (a read-only .adds, most likely). */
+                    if (config_save_motion(ini_path, nd, nw))
+                        say("koboy: motion = %s / %s\n",
+                            video_get_dither(vid) ? "1-bit" : "4-level", wn);
+                    else
+                        say("koboy: motion = %s / %s (this session only -- "
+                            "could not write %s)\n",
+                            video_get_dither(vid) ? "1-bit" : "4-level", wn,
+                            ini_path);
+                }
             } else if (act == MENU_QUIT) {
                 mode = MODE_QUIT;
             } else if (act == MENU_CHOOSE_ROM) {

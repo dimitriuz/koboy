@@ -1846,6 +1846,178 @@ TEST_MAIN({
             CHECK_EQ_INT(c.key_b, 305);
         }
 
+        /* ------------------------------------------- MOTION: the 1-bit pair */
+
+        /* The ini vocabulary, both directions. These strings are what the
+           writer emits AND what the loader parses, so a name table that
+           drifted from the parser would be a menu whose choice the next
+           launch throws away. */
+        {
+            koboy_wfm_policy w = KOBOY_WFM_DU4;
+            CHECK(config_wfm_policy_parse("auto", &w));
+            CHECK_EQ_INT((int)w, (int)KOBOY_WFM_AUTO);
+            CHECK(config_wfm_policy_parse("du4", &w));
+            CHECK_EQ_INT((int)w, (int)KOBOY_WFM_DU4);
+            CHECK(config_wfm_policy_parse("du", &w));
+            CHECK_EQ_INT((int)w, (int)KOBOY_WFM_DU);
+            /* "du" is a PREFIX of "du4", which is exactly the shape of bug a
+               strncmp-based parser would have: this pins that they are two
+               distinct answers and not one. */
+            CHECK(strcmp(config_wfm_policy_name(KOBOY_WFM_DU),
+                         config_wfm_policy_name(KOBOY_WFM_DU4)) != 0);
+            /* Rejected, and *out is left alone -- config_load leans on that
+               to keep AUTO rather than half-assigning something. */
+            w = KOBOY_WFM_DU;
+            CHECK(!config_wfm_policy_parse("du5", &w));
+            CHECK(!config_wfm_policy_parse("DU", &w));      /* case-sensitive, like every key here */
+            CHECK(!config_wfm_policy_parse("", &w));
+            CHECK(!config_wfm_policy_parse(NULL, &w));
+            CHECK_EQ_INT((int)w, (int)KOBOY_WFM_DU);
+            /* Never NULL, and an out-of-range policy names the default. */
+            CHECK(!strcmp(config_wfm_policy_name(KOBOY_WFM_AUTO), "auto"));
+            CHECK(!strcmp(config_wfm_policy_name((koboy_wfm_policy)99), "auto"));
+            CHECK(!strcmp(config_wfm_policy_name((koboy_wfm_policy)-3), "auto"));
+        }
+
+        /* Every token reaches koboy_config through the FILE, which is the half
+           config_wfm_policy_parse alone cannot prove. "du" specifically: it is
+           the value this whole change exists to make reachable, and before it
+           the loader's ternary read anything that was not "du4" as auto. */
+        {
+            static const struct { const char *tok; int want; } cases[] = {
+                { "auto", KOBOY_WFM_AUTO }, { "du4", KOBOY_WFM_DU4 },
+                { "du",   KOBOY_WFM_DU   },
+                /* Unparseable keeps AUTO, and is checked from a du4 PRIOR so
+                   the assertion can tell "rejected and reset to auto" from
+                   "silently kept du4". */
+                { "nonsense", KOBOY_WFM_AUTO }, { "", KOBOY_WFM_AUTO },
+            };
+            for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+                FILE *f = fopen(path, "w");
+                CHECK(f != NULL);
+                fprintf(f, "waveform_fast = du4\nwaveform_fast = %s\n", cases[i].tok);
+                fclose(f);
+                config_defaults(&c);
+                CHECK(config_load(&c, path));
+                CHECK_EQ_INT(c.wfm_fast_policy, cases[i].want);
+            }
+        }
+
+        /* THE LADDER. Three rungs, and it is the PAIR that steps, which is
+           the whole argument for one row: a ladder that advanced only the
+           dither flag, or only the waveform, would still be three states and
+           would still cycle, and only these assertions can tell it apart. */
+        {
+            bool             d = false;
+            koboy_wfm_policy w = KOBOY_WFM_AUTO;
+            config_next_motion(&d, &w);
+            CHECK(d); CHECK_EQ_INT((int)w, (int)KOBOY_WFM_AUTO);   /* rung 1: control */
+            config_next_motion(&d, &w);
+            CHECK(d); CHECK_EQ_INT((int)w, (int)KOBOY_WFM_DU);     /* rung 2: the pair */
+            config_next_motion(&d, &w);
+            CHECK(!d); CHECK_EQ_INT((int)w, (int)KOBOY_WFM_AUTO);  /* wraps to the default */
+
+            /* The rung the ladder deliberately does NOT offer -- four-level
+               content into a two-level waveform, the experiment that already
+               failed on this panel -- must not appear anywhere in a full
+               cycle. Asserted by walking the whole ladder rather than by
+               reading the table, so adding it later fails here. */
+            d = false; w = KOBOY_WFM_AUTO;
+            for (int i = 0; i < 3; i++) {
+                CHECK(!(d == false && w == KOBOY_WFM_DU));
+                CHECK(!(w == KOBOY_WFM_DU4));      /* nor forced DU4, from either side */
+                config_next_motion(&d, &w);
+            }
+
+            /* An off-ladder pair -- legal in the file, unreachable from the
+               menu -- lands on rung 0 rather than being guessed at. */
+            d = false; w = KOBOY_WFM_DU4;
+            config_next_motion(&d, &w);
+            CHECK(!d); CHECK_EQ_INT((int)w, (int)KOBOY_WFM_AUTO);
+            d = true; w = KOBOY_WFM_DU4;
+            config_next_motion(&d, &w);
+            CHECK(!d); CHECK_EQ_INT((int)w, (int)KOBOY_WFM_AUTO);
+
+            /* NULL on either side is a no-op, not a crash: this is public. */
+            d = true; w = KOBOY_WFM_DU;
+            config_next_motion(NULL, &w);
+            config_next_motion(&d, NULL);
+            CHECK(d); CHECK_EQ_INT((int)w, (int)KOBOY_WFM_DU);
+        }
+
+        /* ONE WRITE, TWO KEYS, and the round trip is what proves it: a writer
+           that emitted only one of them would leave the file describing a
+           combination the owner never picked. Driven from a file that already
+           holds the OPPOSITE of both, so "the key was rewritten" cannot be
+           confused with "the key happened to already say that". */
+        {
+            FILE *f = fopen(path, "w");
+            CHECK(f != NULL);
+            fputs("# keep me\nforce_dither = false\nwaveform_fast = du4\n", f);
+            fclose(f);
+
+            CHECK(config_save_motion(path, true, KOBOY_WFM_DU));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.force_dither, 1);
+            CHECK_EQ_INT(c.wfm_fast_policy, (int)KOBOY_WFM_DU);
+
+            /* ...and back, so neither half is a constant. */
+            CHECK(config_save_motion(path, false, KOBOY_WFM_AUTO));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.force_dither, 0);
+            CHECK_EQ_INT(c.wfm_fast_policy, (int)KOBOY_WFM_AUTO);
+
+            /* Exactly one line each, not an append per menu tap: cycling the
+               row a few dozen times must not grow the file without bound.
+               Counted by re-reading, because a duplicated key still LOADS
+               correctly (last wins) and would pass every check above. */
+            for (int i = 0; i < 5; i++)
+                CHECK(config_save_motion(path, i & 1, KOBOY_WFM_DU));
+            {
+                FILE *r = fopen(path, "r");
+                char  line[512];
+                int   nd = 0, nw = 0, keep = 0;
+                CHECK(r != NULL);
+                while (fgets(line, sizeof line, r)) {
+                    if (!strncmp(line, "force_dither ", 13))  nd++;
+                    if (!strncmp(line, "waveform_fast ", 14)) nw++;
+                    if (!strncmp(line, "# keep me", 9))       keep++;
+                }
+                fclose(r);
+                CHECK_EQ_INT(nd, 1);
+                CHECK_EQ_INT(nw, 1);
+                CHECK_EQ_INT(keep, 1);     /* the rest of the file survived */
+            }
+
+            /* Refused rather than written, for the reason
+               config_save_present_divisor refuses an out-of-range divisor:
+               a file holding a token config_load cannot parse back is the
+               file/menu disagreement one shared key exists to prevent. */
+            CHECK(!config_save_motion(path, true, (koboy_wfm_policy)99));
+            CHECK(!config_save_motion(path, true, (koboy_wfm_policy)-1));
+            CHECK(!config_save_motion(path, true, KOBOY_WFM_COUNT));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.wfm_fast_policy, (int)KOBOY_WFM_DU);   /* refusals changed nothing */
+
+            /* And it does not clobber the other writers' keys, the same
+               shared-rewrite_ini regression gray_map's writer once caught. */
+            CHECK(config_save_keys(path, 304, 305));
+            CHECK(config_save_gray_map(path, KOBOY_GRAY_VALUE));
+            CHECK(config_save_present_divisor(path, 4));
+            CHECK(config_save_motion(path, true, KOBOY_WFM_DU));
+            config_defaults(&c);
+            CHECK(config_load(&c, path));
+            CHECK_EQ_INT(c.force_dither, 1);
+            CHECK_EQ_INT(c.wfm_fast_policy, (int)KOBOY_WFM_DU);
+            CHECK_EQ_INT(c.present_divisor, 4);
+            CHECK_EQ_INT(c.gray_map, (int)KOBOY_GRAY_VALUE);
+            CHECK_EQ_INT(c.key_a, 304);
+            CHECK_EQ_INT(c.key_b, 305);
+        }
+
         remove(path); remove(dir);
     }
 })

@@ -1,4 +1,7 @@
 #include "ui.h"
+#include "config.h"         /* config_wfm_policy_name: ui_motion_label spells the
+                              waveform half of the MOTION row with the ini's
+                              own vocabulary, so the panel and the file agree */
 #include "video.h"          /* video_gray_map_name: ui_gray_label spells the
                               current mapping into the MENU row */
 #include "text.h"
@@ -191,6 +194,25 @@ void ui_divisor_label(char *out, size_t outsz, int divisor)
        takes an int. */
     if (divisor <= 1) { snprintf(out, outsz, "FRAMES: EVERY FRAME"); return; }
     snprintf(out, outsz, "FRAMES: EVERY %d%s", divisor, ordinal_suffix(divisor));
+}
+
+/* Contract, and why it is not in main.c, in ui.h. */
+void ui_motion_label(char *out, size_t outsz, bool dither, koboy_wfm_policy wfm)
+{
+    if (!out || outsz == 0) return;
+    /* "4 GREYS" and not "4-LEVEL": the row is read by someone holding the
+       device, and greys are what they are looking at. config_wfm_policy_name
+       never returns NULL -- an out-of-range policy names the default -- so
+       there is no null branch here to leave untested, and the waveform half
+       is spelled with the SAME vocabulary the ini uses, uppercased, so a
+       photo of the panel and a hand-edited file can be compared directly. */
+    const char *w = config_wfm_policy_name(wfm);
+    char up[8];
+    size_t i = 0;
+    for (; w[i] && i + 1 < sizeof up; i++)
+        up[i] = (w[i] >= 'a' && w[i] <= 'z') ? (char)(w[i] - 'a' + 'A') : w[i];
+    up[i] = '\0';
+    snprintf(out, outsz, "MOTION: %s / %s", dither ? "1-BIT" : "4 GREYS", up);
 }
 
 void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)

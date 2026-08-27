@@ -1195,8 +1195,15 @@ bool config_load(koboy_config *c, const char *path)
             int t = atoi(v);
             c->refresh_fixed_tiles = t < 0 ? 0 : t;
         }
-        else if (!strcmp(k, "waveform_fast"))
-            c->wfm_fast_policy = !strcmp(v, "du4") ? KOBOY_WFM_DU4 : KOBOY_WFM_AUTO;
+        else if (!strcmp(k, "waveform_fast")) {
+            /* Unparseable keeps AUTO rather than the previous value, which is
+               what the old ternary did too: this key selects a PANEL
+               behaviour, and the one behaviour that is safe on a device
+               nobody has measured is "let the driver decide". */
+            koboy_wfm_policy wp = KOBOY_WFM_AUTO;
+            config_wfm_policy_parse(v, &wp);
+            c->wfm_fast_policy = wp;
+        }
         /* An ini `core=` is an explicit choice and outranks the ROM's
            extension -- see core_explicit in config.h. WITH ONE EXCEPTION,
            and it is not a special case so much as a dated one: every koboy.ini
@@ -1667,4 +1674,72 @@ bool config_save_present_divisor(const char *path, int divisor)
              "# written by the in-game FRAMES menu entry\npresent_divisor = %d\n",
              divisor);
     return rewrite_ini(path, drop, 1, block);
+}
+
+/* ------------------------------------------------------------------ MOTION */
+
+/* Index by koboy_wfm_policy. These strings ARE the ini's vocabulary: the
+   parser below and the writer further down both go through them, so the token
+   the menu writes is by construction the token config_load reads back. */
+static const char *const WFM_NAMES[KOBOY_WFM_COUNT] = { "auto", "du4", "du" };
+
+const char *config_wfm_policy_name(koboy_wfm_policy p)
+{
+    if ((int)p < 0 || (int)p >= KOBOY_WFM_COUNT) return WFM_NAMES[KOBOY_WFM_AUTO];
+    return WFM_NAMES[p];
+}
+
+bool config_wfm_policy_parse(const char *s, koboy_wfm_policy *out)
+{
+    if (!s || !out) return false;
+    for (int i = 0; i < KOBOY_WFM_COUNT; i++)
+        if (!strcmp(s, WFM_NAMES[i])) { *out = (koboy_wfm_policy)i; return true; }
+    return false;
+}
+
+/* The rungs, in the order the menu steps through them. Contract and the
+   argument for these three and not all four combinations are on
+   config_next_motion in config.h. Kept here, beside the loader, for the same
+   reason PRESENT_DIVISOR_LADDER is: the file's vocabulary and the menu's
+   offer live in one place and cannot drift. */
+typedef struct { bool dither; koboy_wfm_policy wfm; } motion_rung;
+static const motion_rung MOTION_LADDER[] = {
+    { false, KOBOY_WFM_AUTO },
+    { true,  KOBOY_WFM_AUTO },
+    { true,  KOBOY_WFM_DU   },
+};
+#define MOTION_LADDER_N ((int)(sizeof MOTION_LADDER / sizeof MOTION_LADDER[0]))
+
+void config_next_motion(bool *dither, koboy_wfm_policy *wfm)
+{
+    if (!dither || !wfm) return;
+    for (int i = 0; i < MOTION_LADDER_N; i++) {
+        if (MOTION_LADDER[i].dither == *dither && MOTION_LADDER[i].wfm == *wfm) {
+            const motion_rung *n = &MOTION_LADDER[(i + 1) % MOTION_LADDER_N];
+            *dither = n->dither; *wfm = n->wfm;
+            return;
+        }
+    }
+    /* Off the ladder entirely (a hand-edited pair). Land on rung 0 rather
+       than guessing which rung the file "meant" -- rung 0 is the shipped
+       default and the one combination a whole game has been played at. */
+    *dither = MOTION_LADDER[0].dither;
+    *wfm    = MOTION_LADDER[0].wfm;
+}
+
+bool config_save_motion(const char *path, bool dither, koboy_wfm_policy wfm)
+{
+    static const char *const drop[] = { "force_dither", "waveform_fast" };
+    char block[192];
+    /* Checked before the write for the reason config_save_present_divisor
+       checks its range: rewrite_ini would happily produce a file whose
+       waveform_fast config_load then silently reads as `auto`, and a menu
+       whose choice does not survive the relaunch is worse than one that says
+       it could not save. */
+    if ((int)wfm < 0 || (int)wfm >= KOBOY_WFM_COUNT) return false;
+    snprintf(block, sizeof block,
+             "# written by the in-game MOTION menu entry\n"
+             "force_dither = %s\nwaveform_fast = %s\n",
+             dither ? "true" : "false", config_wfm_policy_name(wfm));
+    return rewrite_ini(path, drop, 2, block);
 }

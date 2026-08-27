@@ -151,18 +151,48 @@ static int platform_mark(const char *plat)
    gate fall back to A2 for FAST and GL16 for GRAY, which is the classic
    pre-Mk.9 pairing. FULL is GC16, flashing, everywhere: it is the
    ghost-clearing refresh, and a non-flashing GC16 does not clear ghosting. */
-static void map_waveforms(kobo_ctx *k, const FBInkState *st)
+/* Split from map_waveforms so the mapping can be REDONE on a running session
+   -- the in-game MOTION entry changes wfm_fast_policy mid-game -- without
+   needing an FBInkState the backend no longer has. The capability question is
+   answered once, at init, off the state FBInk reported then; nothing about a
+   panel's waveform table changes while koboy is running. */
+static void probe_du4_capable(kobo_ctx *k, const FBInkState *st)
 {
-    int  mark    = platform_mark(st->device_platform);
-    bool has_du4 = !st->is_sunxi && st->has_eclipse_wfm && mark >= 9;
-    k->du4_capable = has_du4;
+    int mark = platform_mark(st->device_platform);
+    k->du4_capable = !st->is_sunxi && st->has_eclipse_wfm && mark >= 9;
+}
+
+static void map_waveforms(kobo_ctx *k)
+{
+    bool has_du4 = k->du4_capable;
 
     /* AUTO hands the choice to the EPDC driver, which looks at the actual pixel
        transitions in the region. That is the right default: it is the only
        party that knows whether a given update is erasing (dark -> light), which
        is exactly what a non-flashing waveform cannot do. Forcing a waveform
        means overriding that judgement on every single refresh. */
-    if (k->cfg.wfm_fast_policy == KOBOY_WFM_AUTO) {
+    if (k->cfg.wfm_fast_policy == KOBOY_WFM_DU) {
+        /* TWO-LEVEL, and no capability gate: WFM_DU is in FBInk's "Common"
+           block, so every mxcfb-era Kobo has it and there is no quirk to
+           check and no silent downgrade to report -- unlike DU4 below.
+
+           It is here for `force_dither`, not on its own. FBInk's header:
+           "on-screen pixels will be left as-is for new content that is *not*
+           B&W". Against koboy's four-level output that clause means the two
+           MIDDLE levels are pixels the panel declines to touch, which is the
+           failed forced-DU4 experiment wearing a different number. Against
+           genuinely 1-bit output every pixel's new value is black or white,
+           so there is no transition DU is being asked to leave half-done.
+           See koboy_wfm_policy and docs/FOLLOWUPS.md #25.
+
+           GRAY stays AUTO rather than following FAST, and that is deliberate
+           rather than an omission: KOBOY_REFRESH_GRAY means "this update has
+           intermediate levels in it", and DU is by definition the waveform
+           that cannot render them. Naming DU there would be a lie the log
+           would then repeat. */
+        k->wfm[KOBOY_REFRESH_FAST] = WFM_DU;   k->wfm_name[KOBOY_REFRESH_FAST] = "DU";
+        k->wfm[KOBOY_REFRESH_GRAY] = WFM_AUTO; k->wfm_name[KOBOY_REFRESH_GRAY] = "AUTO";
+    } else if (k->cfg.wfm_fast_policy == KOBOY_WFM_AUTO) {
         k->wfm[KOBOY_REFRESH_FAST] = WFM_AUTO; k->wfm_name[KOBOY_REFRESH_FAST] = "AUTO";
         k->wfm[KOBOY_REFRESH_GRAY] = WFM_AUTO; k->wfm_name[KOBOY_REFRESH_GRAY] = "AUTO";
     } else if (has_du4) {
@@ -504,7 +534,8 @@ static bool kobo_init(void *ctx, const koboy_config *c)
         goto fail;
     }
 
-    map_waveforms(k, &st);
+    probe_du4_capable(k, &st);
+    map_waveforms(k);
 
     kobo_say(k, "koboy: %s (id %u, %s, %s), %dx%d @ %ubpp, stride %u bytes "
                 "(%u px), origin (%d,%d), fast=%s\n",
@@ -755,6 +786,32 @@ static bool kobo_should_quit(void *ctx) { return ((kobo_ctx *)ctx)->quit; }
    node name differs by model, so the directory is scanned rather than
    hardcoded -- the same capability-detection rule the rest of the backend
    follows. A missing or unreadable node is -1, not an error. */
+/* Contract in platform_if.h. Re-runs the mapping rather than poking one slot,
+   so FAST and GRAY cannot drift out of step with each other -- there is one
+   piece of code that decides what a policy means, and it is map_waveforms.
+
+   Nothing is refreshed here on purpose. A waveform selects how the NEXT update
+   is drawn; it says nothing about what the panel is currently holding, and the
+   caller (main.c's return-from-menu path) is already repainting the whole
+   panel with GC16 immediately afterwards. */
+static void kobo_set_wfm_policy(void *ctx, koboy_wfm_policy policy)
+{
+    kobo_ctx *k = ctx;
+    if (!k) return;
+    k->cfg.wfm_fast_policy = (int)policy;
+    map_waveforms(k);
+}
+
+/* The REAL waveform, not an echo of the policy: a DU4 request on a panel
+   without the eclipse quirk lands on A2 (see map_waveforms), and this is the
+   only thing that says so out loud. */
+static const char *kobo_wfm_fast_name(void *ctx)
+{
+    kobo_ctx *k = ctx;
+    return (k && k->wfm_name[KOBOY_REFRESH_FAST]) ? k->wfm_name[KOBOY_REFRESH_FAST]
+                                                  : "AUTO";
+}
+
 static int kobo_battery_percent(void *ctx)
 {
     (void)ctx;
@@ -810,6 +867,8 @@ koboy_platform *platform_kobo_create(void)
     pf->now_us      = kobo_now_us;
     pf->should_quit = kobo_should_quit;
     pf->battery_percent = kobo_battery_percent;
+    pf->set_wfm_policy  = kobo_set_wfm_policy;
+    pf->wfm_fast_name   = kobo_wfm_fast_name;
     return pf;
 }
 

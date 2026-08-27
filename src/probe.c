@@ -620,10 +620,21 @@ static int run_coexist(void)
         return 0;
     }
 
-    wfm_case cases[6];
+    /* Five are filled below (DU4 only when the device has it); the slack is
+       so that adding a waveform to the sweep is a one-line change and not a
+       silent write past the end. */
+    wfm_case cases[8];
     int      n_cases = 0;
     cases[n_cases++] = (wfm_case){ "AUTO", WFM_AUTO, false };
     if (du4_capable) cases[n_cases++] = (wfm_case){ "DU4", WFM_DU4, false };
+    /* DU, the TWO-level fast waveform, ungated: it is in FBInk's "Common"
+       block, so unlike DU4 there is no quirk to check. It is here because
+       `waveform_fast = du` is now a shipped option and nobody has a number
+       for what it costs on ANY panel -- the reference device's Appendix A
+       sweep predates it. A probe of an unknown device that reported AUTO,
+       DU4, A2 and GC16 but not the one waveform koboy might newly be told to
+       use would leave exactly the gap this file exists to close. */
+    cases[n_cases++] = (wfm_case){ "DU",   WFM_DU,   false };
     cases[n_cases++] = (wfm_case){ "A2",   WFM_A2,   false };
     cases[n_cases++] = (wfm_case){ "GC16", WFM_GC16, true  };
 

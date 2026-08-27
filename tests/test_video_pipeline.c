@@ -3,6 +3,21 @@
 #include "video.h"
 #include "config.h"
 
+/* How many distinct byte values the whole game rect holds. The four-level
+   quantiser emits exactly four and the 1-bit ditherer exactly two, so this one
+   number separates the two renderings without asserting which pixel is which
+   -- which is the point, since the Bayer phase is a screen-position detail
+   this test has no business pinning. */
+static int distinct_levels(const koboy_video *v)
+{
+    int seen[256] = {0}, n = 0;
+    const uint8_t *buf = video_buffer(v);
+    for (int y = 0; y < 720; y++)
+        for (int x = 0; x < 800; x++) seen[buf[(size_t)y * video_stride(v) + x]] = 1;
+    for (int i = 0; i < 256; i++) n += seen[i];
+    return n;
+}
+
 static void fill565(uint16_t *fb, int w, int h, int shift)
 {
     static const uint16_t dmg[4] = { 0x0000, 0x52AA, 0xA555, 0xFFFF };
@@ -90,6 +105,54 @@ TEST_MAIN({
         CHECK(dseen[0xFF]);
 
         video_destroy(dv);
+    }
+
+    /* THE SAME CLAIM, but through video_set_dither on a LIVE pipeline -- the
+       path the in-game MOTION row takes. video_create's force_dither argument
+       above proves the flag is honoured at construction; nothing proved it
+       could be flipped afterwards, and "the setting only takes effect next
+       launch" is precisely the failure that would make the row useless
+       (nobody compares two renderings a relaunch apart).
+
+       Counted BOTH WAYS, four levels -> two -> four, so a setter that latched
+       on and never off fails here. Each flip is followed by
+       video_invalidate + a resubmit of the SAME frame, which is exactly the
+       discipline main.c's return-from-menu path uses: without it the dirty
+       diff suppresses the frame entirely (nothing in the source changed) and
+       the buffer keeps the old rendering, which is the bug the invalidate
+       exists to prevent rather than a quirk of this test. */
+    {
+        koboy_video *lv = video_create(&p, false, KOBOY_GRAY_DEFAULT);
+        CHECK(lv != NULL);
+        CHECK(!video_get_dither(lv));
+
+        fill565(fb, KOBOY_GB_W, KOBOY_GB_H, 0);
+        koboy_rect lr = video_submit(lv, fb, KOBOY_GB_W, KOBOY_GB_H,
+                                     KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(lr.w > 0);
+        CHECK_EQ_INT(distinct_levels(lv), 4);
+
+        video_set_dither(lv, true);
+        CHECK(video_get_dither(lv));
+        video_invalidate(lv);
+        lr = video_submit(lv, fb, KOBOY_GB_W, KOBOY_GB_H,
+                          KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(lr.w > 0);
+        CHECK_EQ_INT(distinct_levels(lv), 2);
+
+        video_set_dither(lv, false);
+        CHECK(!video_get_dither(lv));
+        video_invalidate(lv);
+        lr = video_submit(lv, fb, KOBOY_GB_W, KOBOY_GB_H,
+                          KOBOY_GB_W * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
+        CHECK(lr.w > 0);
+        CHECK_EQ_INT(distinct_levels(lv), 4);
+
+        /* NULL is a no-op, not a crash: both are public. */
+        video_set_dither(NULL, true);
+        CHECK(!video_get_dither(NULL));
+
+        video_destroy(lv);
     }
 
     /* Item 4 of the task: video_submit must accept any frame up to the

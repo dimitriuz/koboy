@@ -89,11 +89,33 @@ typedef enum {
 #define KOBOY_GRAY_DEFAULT KOBOY_GRAY_BALANCED
 
 /* Which waveform KOBOY_REFRESH_FAST asks for.
+
    AUTO delegates the choice to the EPDC driver, which inspects the actual pixel
    transitions in the update region -- including whether anything is being
-   erased -- and picks accordingly. DU4 forces the fast non-flashing waveform:
-   quicker per refresh, but it cannot erase, so trails accumulate. */
-typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4 } koboy_wfm_policy;
+   erased -- and picks accordingly. DU4 forces the FOUR-level non-flashing
+   waveform: quicker per refresh, but on this project's reference panel it
+   ghosted badly in play, and `waveform_fast = auto` ships because of that.
+
+   DU IS NOT A SMALLER DU4, AND THE DISTINCTION IS THE WHOLE REASON IT IS HERE.
+   DU4 is four-level; DU is TWO-level -- FBInk's own header says "from any to
+   B&W" and, decisively, "on-screen pixels will be left as-is for new content
+   that is *not* B&W". Read that second sentence against what DU4 was asked to
+   do: koboy's pipeline quantises to four levels, so under DU every pixel whose
+   new value is one of the two MIDDLE levels is a pixel the panel simply does
+   not update -- which is what "cannot erase" looks like from the inside, and
+   why forcing a fast waveform at four-level content failed.
+
+   Content that is genuinely 1-bit (`force_dither`, and the in-game MOTION
+   entry that turns it on together with this) asks DU only for transitions it
+   can complete exactly: black to white and white to black. That pairing is the
+   hypothesis this enum entry exists to let someone test -- neither half is
+   expected to be worth anything alone. It is UNPROVEN on a panel; see
+   docs/FOLLOWUPS.md #25.
+
+   No capability gate, unlike DU4. DU is in FBInk's "Common" block: every
+   mxcfb-era Kobo has it, sunxi included, so there is no quirk to check and no
+   silent downgrade to report. */
+typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4, KOBOY_WFM_DU, KOBOY_WFM_COUNT } koboy_wfm_policy;
 
 /* Linux evdev key codes, mirrored rather than #included, for the same reason
    input.h mirrors input_event: portable code in this project never pulls in

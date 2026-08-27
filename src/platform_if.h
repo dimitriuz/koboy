@@ -23,5 +23,30 @@ typedef struct koboy_platform {
        when the whole panel is already being repainted, so the faceplate keeps
        its zero-per-frame-cost property and needs no timer. */
     int      (*battery_percent)(void *ctx);
+    /* Re-pick the waveform KOBOY_REFRESH_FAST asks for, on a running session.
+       Optional -- callers must null-check -- but implemented by BOTH backends,
+       because "the menu row reached the platform" is the one link of this
+       chain a host test can observe.
+
+       It exists because the in-game MOTION entry is a judgement about a
+       reflective panel in motion, which can only be made while looking at the
+       game: a policy that took effect on the next LAUNCH would be a policy
+       nobody ever compares. The caller is responsible for putting a whole
+       frame back afterwards (main.c's return-from-menu path already does
+       redraw_chrome + video_invalidate), because a waveform change says
+       nothing about what the panel is currently holding. */
+    void     (*set_wfm_policy)(void *ctx, koboy_wfm_policy policy);
+    /* The name of the waveform FAST refreshes are ASKING FOR right now, e.g.
+       "AUTO", "DU4", "DU" -- never NULL. Read back off the platform rather
+       than off koboy_config for the same reason main.c reads the divisor off
+       the live pacer: a line reporting what config.c parsed proves config.c,
+       while this one fails if the policy never reached the backend.
+
+       On the Kobo it is the REAL mapped waveform, which is strictly more than
+       an echo -- a DU4 request on a panel without the eclipse quirk maps to
+       A2, and this is what says so. On SDL it is the policy it was handed,
+       because a monitor has no waveforms at all and inventing one would be
+       device theatre. */
+    const char *(*wfm_fast_name)(void *ctx);
 } koboy_platform;
 #endif

@@ -224,6 +224,56 @@ int  config_next_present_divisor(int cur);
    having one key exists to prevent. */
 bool config_save_present_divisor(const char *path, int divisor);
 
+/* ---------------------------------------------------------------- MOTION --
+   The 1-bit/waveform PAIR, which is one setting in the menu and two keys in
+   the ini.
+
+   WHY ONE ROW AND NOT TWO. `force_dither` and `waveform_fast` are already
+   independent ini keys and stay that way -- nothing here restricts what the
+   file may say. But the thing being TESTED is the pair: 1-bit content under
+   AUTO asks the driver to pick a waveform for content it now has less
+   information about, and four-level content under DU is the experiment that
+   already failed on this panel (see koboy_wfm_policy). Offering the two axes
+   as separate rows would hand the owner four combinations, two of which are
+   known-uninteresting, and would leave the coupling -- the entire hypothesis
+   -- as something they had to infer. One row that steps through the
+   combinations worth looking at states it instead.
+
+   The ladder is what the MENU offers, not what the FILE permits; that is the
+   same split config_next_present_divisor already makes. */
+
+/* The ini token for a waveform policy ("auto", "du4", "du"), which is exactly
+   what config_load parses back. Never NULL: an out-of-range policy names the
+   default, so what reaches the file is always something readable back. */
+const char *config_wfm_policy_name(koboy_wfm_policy p);
+
+/* Parses one of those tokens. False (and *out untouched) for anything else. */
+bool config_wfm_policy_parse(const char *s, koboy_wfm_policy *out);
+
+/* The next rung of the MOTION ladder, given where the pair is now. Both
+   arguments are in/out. The ladder, lowest to highest commitment:
+
+     dither=false, wfm=auto   the shipped default -- four greys, driver picks
+     dither=true,  wfm=auto   1-bit content, driver still picks
+     dither=true,  wfm=du     1-bit content into a two-level waveform
+
+   THE MIDDLE RUNG IS THE CONTROL AND IS NOT DECORATION. With only the default
+   and the pair, an improvement could not be attributed to either half; with
+   it, the owner can see whether the dithering alone does the work.
+
+   A pair the ladder does not contain -- `force_dither = false` with
+   `waveform_fast = du4`, say, both perfectly legal in the file -- runs as
+   written and steps to the FIRST rung, the same way an off-ladder divisor
+   steps to the next one up rather than being snapped somewhere unrelated. */
+void config_next_motion(bool *dither, koboy_wfm_policy *wfm);
+
+/* Rewrites `path` with exactly one `force_dither =` line and exactly one
+   `waveform_fast =` line, through the same rewrite_ini as every other writer
+   here. ONE call and not two: the pair is one choice, and two rewrites would
+   be two chances to leave the file describing a combination the owner never
+   picked if the second one failed. */
+bool config_save_motion(const char *path, bool dither, koboy_wfm_policy wfm);
+
 /* Should a frame whose dirty rect covers dirty_px of a whole_px game rect be
    promoted from the fast waveform to the flashing one? Lives here, and is
    tested, because the shipped default turns the promotion off and "off" is only

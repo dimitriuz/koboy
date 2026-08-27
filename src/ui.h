@@ -105,6 +105,27 @@ void      ui_gray_label(char *out, size_t outsz, koboy_gray_map map);
    overruns. */
 void      ui_divisor_label(char *out, size_t outsz, int divisor);
 
+/* The in-game MOTION row, e.g. "MOTION: 1-BIT / DU".
+
+   Here rather than in main.c for exactly the reason the two labels above are:
+   main.c is not linked into the test binaries (the Makefile's SRC filter), so
+   a label built inline there could be asserted against nothing, and a row that
+   always read "MOTION" would look right on the panel and prove nothing.
+
+   BOTH HALVES ARE ALWAYS NAMED, and that is the point of the row rather than
+   a formatting choice. The hypothesis this setting exists to test is the PAIR
+   -- 1-bit content INTO a two-level waveform -- and a label that showed only
+   the rung's name would leave the owner unable to say which combination they
+   were looking at when they report back. It is composable, not a table of the
+   ladder's three rungs: a hand-edited ini can put the pair anywhere in the
+   six legal combinations, and every one of them has to render something true.
+
+   Uppercased for the same reason every other row is: the 5x7 font's lower
+   case is not worth reading. Always NUL-terminated; truncates rather than
+   overruns. */
+void      ui_motion_label(char *out, size_t outsz, bool dither,
+                          koboy_wfm_policy wfm);
+
 #define UI_TITLE_CHARS 40
 
 /* Builds a breadcrumb title -- `head` alone when `sub` is empty, otherwise

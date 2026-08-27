@@ -232,6 +232,69 @@ deliberately deferred, not a known live bug.
 
 ### 25. Full-screen scrollers smear, on v1 and v2 alike — the biggest open problem
 
+**Extended 2026-08-27 (the motion plan, Task 1). The artifact has now been
+PHOTOGRAPHED, and a photograph says two things a frame counter cannot.** The
+owner filmed Super Mario Bros. on the panel. A jump leaves a vertical column
+one dirty-rect wide holding three things at once:
+
+- a faint grey ghost of an older position, ABOVE the sprite
+- the solid current sprite
+- **bright WHITE bands BELOW, brighter than the surrounding sky**
+
+The white is the part that reframes this. It is not leftover sprite — it is
+the panel driving pixels that were black toward the sky's mid grey and
+overshooting past it. So **both directions of the transition land wrong**: the
+old position is not fully erased, and where it is erased it goes too far. The
+residue is confined to the dirty rect's column, so the dirty-rect logic is
+doing its job; this is a waveform/level problem and nothing else.
+
+**The measurement that sharpens it.** Sampled off the live framebuffer while
+the game was on screen — what koboy WRITES, before the panel does anything:
+sky 170 (level 2), brick 85 (level 1), cloud 0 (level 0). **The sky is a MID
+GREY, and that is what makes every sprite transition a hard one.** A fast
+waveform drives toward black or white; from level 2 it has to travel most of
+the way in either direction and, at partial-refresh speed, lands somewhere in
+between. A sky at level 3 would make a dark sprite over it a black<->white
+transition, which is the one transition a two-level waveform completes exactly.
+
+So there are TWO levers, and they compose:
+
+1. **Make the CONTENT two-valued** — `force_dither`. Then no pixel ever asks
+   for an intermediate state at all.
+2. **Make the BACKGROUND land on an extreme** — which is the tone mapping's
+   choice. See #96: measured through koboy's own reduction, `value` is the
+   only shipped mapping that puts SMB's sky at pure white, and it does so by
+   putting the HUD text there too (#48). Lever 2 is real and is NOT currently
+   reachable without losing something else.
+
+Lever 1 shipped this session, together with the two-level waveform it is
+meant to pair with (`waveform_fast = du`, new) and one in-game row that
+cycles the pair: **MENU -> MOTION**, rungs `4 GREYS / AUTO`, `1-BIT / AUTO`,
+`1-BIT / DU`. **The visual claim is UNTESTED.** A `--frames` run cannot see
+ghosting — residue is panel-side and koboy's dirty diff only ever compares
+koboy's own output buffers — which is why this defect has outlived two
+attempts at it. What was verified is that the content really is two-valued end
+to end, that both halves reach the live pipeline and the live backend, and
+that both keys persist. Whether it LOOKS better is the owner's call, on the
+panel.
+
+Why this is not the forced-DU4 experiment again: DU4 is the FOUR-level
+variant, and FBInk's header says a DU-class waveform leaves on-screen pixels
+as-is for new content that is not black or white. Against four-level output
+that clause means the two middle levels are pixels the panel declines to
+touch — which is what "cannot erase" looks like from the inside. Against
+1-bit output there is no such pixel. Neither half of the pair is expected to
+be worth anything alone, which is why the ladder's middle rung (1-bit under
+AUTO) exists: it is the control that says whether the dithering alone did it.
+
+**Also worth reporting back:** the ghost persists across several video frames
+at 10 fps, so residue is accumulating over successive partial updates rather
+than arriving in one bad one — consistent with #26, and the owner is already
+at `present_divisor = 8`, the top of that ladder. The two settings interact
+and should be judged together, not one at a time.
+
+Original text follows.
+
 **Not a regression.** The player confirms v1 looked the same. On a horizontal
 scroll the picture degrades into heavy horizontal streaking within a few
 seconds: a fast non-erasing waveform draws each frame's background without
@@ -1702,3 +1765,72 @@ mode a remote session can run, and the suspicious surface is the takeover and
 input path rather than pacing. The next person with the device in hand should
 try cycling `gray_map` repeatedly under a real takeover, which is what
 preceded the first one.
+
+### 96. The MOTION pair ships unjudged, and lever 2 has no reachable answer
+
+Two separate open ends from the motion plan's Task 1.
+
+**a) Nothing about `MENU -> MOTION` has been seen on a panel.** The row, the
+1-bit pipeline (`force_dither`, which #4 recorded as never having run end to
+end and which now does, on the host) and the new `waveform_fast = du` are all
+verified only as far as a host can verify them: the buffer holds exactly 0x00
+and 0xFF, the policy reaches the backend, both ini keys persist. Every claim
+about smearing is a mechanism argument, not a measurement. What the owner
+should do is cycle the three rungs on the same jump in SMB and say which
+column looks least wrong.
+
+Two things to expect and not mistake for a bug. The 1-bit rungs make a flat
+sky a fine black-and-white PATTERN rather than a flat grey, because 170 is
+about two thirds white — it will read noisier up close and should read
+roughly as light from reading distance. And the Game Boy has the most to lose
+from this and the least to gain: its four shades already ARE the panel's four
+levels, so dithering can only approximate what it had.
+
+**b) Lever 2 -- putting the sky on an extreme -- has no shipped mapping that
+does it without a cost.** Measured through `video_rgb565_to_gray` +
+`video_quantise4`, the shipped five, on SMB 1-1's own palette entries:
+
+| colour | luma | bright | balanced | equal | value |
+|---|---|---|---|---|---|
+| sky `$22` rgb(92,148,252) | 143 L2 | 157 L2 | 167 L2 | 177 L2 | **255 L3** |
+| brick `$17` rgb(200,76,12) | 107 L1 | 121 L1 | 116 L1 | 109 L1 | 206 L2 |
+| Mario red `$16` rgb(216,40,0) | 90 L1 | 103 L1 | 101 L1 | 99 L1 | **222 L3** |
+| ground `$27` rgb(228,160,104) | 176 L2 | 187 L2 | 183 L2 | 178 L2 | 231 L3 |
+| cloud/white `$30` | 255 L3 | 255 L3 | 255 L3 | 255 L3 | 255 L3 |
+
+`value` is the only one that lands the sky on pure white, and the same column
+shows why it is not free -- it is max(R,G,B), so it lands MARIO on pure white
+too, and the white HUD text with him (#48). The sprite and the sky would both
+be level 3 and the picture would be gone. That is the whole of lever 2 today:
+it is real, it matters (a level-3 sky turns every sprite edge into the one
+transition a two-level waveform completes exactly), and no shipped mapping
+delivers it without taking the foreground with it.
+
+The owner's current `bright` and the shipped `balanced` differ by 10 grey
+levels on this sky and land on the same panel level, so switching between
+those two cannot move this at all -- worth saying plainly, because "gray is
+ok" and "the sky's level is causing the smearing" are both true at once and
+look contradictory.
+
+A mapping that pushed only LARGE FLAT LIGHT AREAS to white would, but that is
+not a per-pixel LUT any more -- it is spatial, and the LUT is one lookup in
+the measured bottleneck (#23). Not attempted. Note also that lever 1 partly
+subsumes it: under `force_dither` the sky is already only black and white
+cells, so its exact level stops deciding whether transitions are completable
+and starts deciding only how light the pattern reads.
+
+### 97. `waveform_fast = du` has no timing number on any panel
+
+Appendix A's waveform sweep (DU4 15.0 ms non-blocking, A2 135.8 ms blocking,
+GL16 310.8 ms) predates DU being an option, so the one waveform koboy can now
+be told to use is the one nobody has timed here. FBInk's header guesses ~260
+ms against A2's ~120, which would make DU the SLOWER of the two two-level
+modes -- but that ordering is exactly the folklore the device already
+overruled once for A2 versus DU4, so it should not be believed without a
+measurement.
+
+`koboy-probe --coexist` now includes DU in its sweep (`src/probe.c`), so the
+number costs one probe run with Nickel up. Do that before concluding anything
+from a play session: if DU turns out to cost 250 ms a refresh, a better-looking
+frame will arrive too rarely to play against, and that is a different verdict
+from "it does not help".

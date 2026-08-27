@@ -53,6 +53,14 @@ typedef struct {
     /* raw key-down codes, consumed by first-run calibration only */
     uint16_t raw[RAWKEY_RING];
     int      raw_head, raw_tail;
+
+    /* The fast-refresh waveform policy this backend has been HANDED. A monitor
+       has no waveforms, so nothing here ever reads it to draw with -- it is
+       recorded so that main.c can print it back and a host test can tell
+       "the MOTION row reached the platform" from "the MOTION row updated a
+       struct in main". That is the only link of the waveform chain the host
+       can observe at all; the rest is panel-side and needs the device. */
+    koboy_wfm_policy wfm_policy;
 } sdl_ctx;
 
 /* ------------------------------------------------------------------ keys */
@@ -285,6 +293,10 @@ static bool sdl_init(void *ctx, const koboy_config *c)
 {
     sdl_ctx *s = ctx;
     s->cfg = *c;
+    /* Same starting point the Kobo backend takes from the same key, so the
+       name main.c prints at startup is the configured policy on both sides
+       rather than "AUTO" here and the truth there. */
+    s->wfm_policy = (koboy_wfm_policy)c->wfm_fast_policy;
     if (s->panel_w <= 0) s->panel_w = SDL_PANEL_W;
     if (s->panel_h <= 0) s->panel_h = SDL_PANEL_H;
 
@@ -378,6 +390,29 @@ static bool sdl_refresh(void *ctx, int x, int y, int w, int h, koboy_refresh_mod
     return true;
 }
 
+/* Contract in platform_if.h. Recorded, not applied: sdl_refresh ignores the
+   waveform mode entirely and always will. */
+static void sdl_set_wfm_policy(void *ctx, koboy_wfm_policy policy)
+{
+    sdl_ctx *s = ctx;
+    if (s) s->wfm_policy = policy;
+}
+
+/* The POLICY, uppercased, and not a waveform: on a monitor there is no
+   waveform to report, and inventing a plausible one would be exactly the
+   device theatre this seam exists to avoid. On the Kobo the same call returns
+   the real mapped waveform, which is a strictly stronger answer -- the two
+   agree except where a device downgrades a request, and no monitor does. */
+static const char *sdl_wfm_fast_name(void *ctx)
+{
+    sdl_ctx *s = ctx;
+    switch (s ? s->wfm_policy : KOBOY_WFM_AUTO) {
+        case KOBOY_WFM_DU4: return "DU4";
+        case KOBOY_WFM_DU:  return "DU";
+        default:            return "AUTO";
+    }
+}
+
 static bool sdl_poll_input(void *ctx, struct koboy_input *in)
 {
     pump(ctx, in);
@@ -419,6 +454,8 @@ koboy_platform *platform_sdl_create(void)
     pf->now_us      = sdl_now_us;
     pf->should_quit = sdl_should_quit;
     pf->battery_percent = sdl_battery_percent;
+    pf->set_wfm_policy  = sdl_set_wfm_policy;
+    pf->wfm_fast_name   = sdl_wfm_fast_name;
     return pf;
 }
 
