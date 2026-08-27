@@ -3,6 +3,24 @@
  * Everything here is platform-independent: pixels reach the panel as gray8 at
  * final scale and input arrives already normalised to libretro joypad bits,
  * so this file is the same on the desktop and on the device.
+ *
+ * Copyright (C) 2026 the koboy authors.
+ *
+ * koboy is free software: you can redistribute it and/or modify it under the
+ * terms of the GNU General Public License as published by the Free Software
+ * Foundation, either version 3 of the License, or (at your option) any later
+ * version. It is distributed WITHOUT ANY WARRANTY; see the LICENSE file at
+ * the root of this repository, or <https://www.gnu.org/licenses/>.
+ *
+ * THIS NOTICE IS IN THIS FILE ONLY, and that is deliberate rather than an
+ * unfinished job: no source file in this project carries a per-file header,
+ * so adding thirty of them would bury a year of real history in `git blame`
+ * for no legal gain that LICENSE and README.md do not already supply. The
+ * entry point is the customary place for the one that does exist.
+ * LICENSES.md covers the fifteen emulator cores, which are NOT under this
+ * licence and are not linked into this binary -- they are separate shared
+ * objects, dlopen'd at runtime, each with its own terms, and three of them
+ * restrict commercial use.
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
