@@ -116,23 +116,78 @@ static void say(const char *fmt, ...)
     va_end(ap);
 }
 
-/* Every fatal path goes through here. On the desktop that is just stderr; on
-   the device there is no terminal, so an error that only reaches stderr is
-   indistinguishable from a crash -- the panel keeps whatever was on it and the
-   user power-cycles. The Kobo backend draws the message on the panel and waits
-   for an acknowledgement. */
+/* Every message the user must SEE goes through here. On the desktop that is
+   just stderr; on the device there is no terminal, so an error that only
+   reaches stderr is indistinguishable from a crash -- the panel keeps whatever
+   was on it and the user power-cycles. The Kobo backend draws the message on
+   the panel and waits for an acknowledgement (bounded: 20s, so an unattended
+   run cannot hang here).
+
+   Nothing in here ends the process, and nothing ever did -- the CALLERS did.
+   Two of them already did not, and the split below says which is which by
+   name: notify() for a condition the session survives, fatal() for one it
+   does not. The names are the whole point. "fatal" sitting above a return to
+   the ROM browser reads as a bug for as long as it takes to check, and a
+   failed ROM load is now the most common thing this function prints. */
 static koboy_platform *g_pf;
-static void fatal(const char *fmt, ...)
+static void message_v(const char *fmt, va_list ap)
 {
     char msg[512];
-    va_list ap;
-    va_start(ap, fmt);
     vsnprintf(msg, sizeof msg, fmt, ap);
-    va_end(ap);
     fprintf(stderr, "koboy: %s\n", msg);
 #ifdef KOBOY_PLATFORM_KOBO
     if (g_pf) platform_kobo_fatal(g_pf->ctx, msg);
 #endif
+}
+
+/* The session goes on after this one. */
+static void notify(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    message_v(fmt, ap);
+    va_end(ap);
+}
+
+/* The caller is about to end the run. */
+static void fatal(const char *fmt, ...)
+{
+    va_list ap;
+    va_start(ap, fmt);
+    message_v(fmt, ap);
+    va_end(ap);
+}
+
+/* One place for "that game did not start", because there are three sites --
+   the core would not open, the ROM would not load, and the same pair again
+   mid-session -- and they must all reach the same two decisions.
+
+   Returns true if the caller should go BACK TO THE MAIN MENU, false if it
+   must end the run. The difference is whether there is anywhere to go back
+   to: `recoverable` is the caller's used_startup_ui / mid-session state, and
+   a run given its ROM on the command line has no list behind it.
+
+   The message names the game FIRST, on its own line, and the technical
+   reason after it. `err` already contains the full path (core.c writes it
+   into every one of its messages), so the panel repeats the name -- that is
+   deliberate: fbink wraps at the column edge rather than at word boundaries
+   and at fontmult 3 a full path is several unreadable lines, while the head
+   of the message has to be legible at a glance to be worth drawing at all.
+   The log line, which has room, keeps the path. */
+static bool load_failed_recoverable(bool recoverable, const char *rom_path,
+                                    const char *err)
+{
+    if (!recoverable) {
+        fatal("%s", err);
+        return false;
+    }
+    char name[KOBOY_RECENT_DISPLAY];
+    recent_name_from_path(name, sizeof name, rom_path);
+    /* Explicit precisions, not snprintf's own bound: err can fill the
+       message buffer on its own, and clipping the REASON is better than
+       clipping the name the user is looking for. */
+    notify("COULD NOT LOAD\n%.60s\n\n%.300s", name, err);
+    return true;
 }
 
 /* ------------------------------------------------------------------- args */
@@ -890,6 +945,49 @@ int main(int argc, char **argv)
        redraw of chrome nothing has touched. */
     bool used_startup_ui = (mode == MODE_MAIN);
 
+    /* Where the load lands when it fails, and the reason this is a loop at
+       all. A ROM chosen from RECENT or the browser that does not load is an
+       ORDINARY condition -- the file was deleted between the scan and the
+       tap, an SD card is not mounted, a partial copy is short, a core is
+       missing, the core simply refuses it -- and it used to end the process.
+       On the device that is indistinguishable from a crash: koboy vanishes
+       and Nickel comes back, with whatever the user was doing gone. Reported
+       twice from the device, both times from RECENT.
+
+       So a failed load goes BACK TO THE MAIN MENU rather than out. Back to
+       the main menu specifically, and not to the exact list the ROM came
+       from: this is the loop's own top, so it costs no new state and no new
+       mode, both lists are one tap away, and the RECENT list in particular
+       must be rebuilt from disk anyway (recent_load/prune below) rather than
+       resumed. Do not add a mode for this.
+
+       The whole per-ROM setup is inside the loop because ALL of it depends on
+       which ROM was chosen: the faceplate, the button complement, the scale
+       ceiling and the core itself are all derived from the extension, so a
+       second trip round must redo them or the second ROM would be dressed as
+       the first.
+
+       A run that did NOT come through the startup UI (--rom, or rom= in the
+       ini) still dies on a failed load -- see the branches below. There is no
+       list to go back to, and "koboy --rom nonsense.gb" exiting 0 would be a
+       lie to whatever launched it. used_startup_ui is what tells them apart. */
+    char err[512];
+    koboy_core *core = NULL;
+    /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
+       every compiler that matters here, but Linaro GCC 4.9 (the ARM cross
+       compiler; the host's newer GCC does not) applies -Wmissing-braces to
+       the nested path[] array and -Wmissing-field-initializers to the rest,
+       so a bare {0} is warning-free on host and warning-*full* on-device.
+       Spell out every field so both toolchains agree it is zeroed. */
+    koboy_sram_binding sb = {{0}, NULL, 0, false};
+
+    /* ITS BODY IS DELIBERATELY NOT RE-INDENTED. Everything down to the
+       matching brace (marked "end of the retry loop") is the same code at the
+       same indentation it has always had; re-indenting two hundred lines to
+       add one enclosing loop would bury a five-line behaviour change in a
+       diff nobody can read. */
+    for (;;) {
+
     while (mode == MODE_MAIN) {
         koboy_input *ui_in = input_create(&cfg, &prof);
         if (!ui_in) { fatal("out of memory"); free(panel); pf->shutdown(pf->ctx); return 1; }
@@ -911,8 +1009,11 @@ int main(int argc, char **argv)
             if (ri >= 0) {
                 snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s", recent_path(&rc, ri));
                 say("koboy: chose %s (recent)\n", cfg.rom_path);
-                recent_touch(&rc, cfg.rom_path);
-                recent_save(&rc, recents_file);
+                /* NOT recorded here. "Played" means LOADED -- the recording
+                   moved below the load for both entry points, and this is
+                   the one where it matters most: recording at pick time
+                   promoted a ROM that then failed to the top of the very
+                   list the user has to walk past to try something else. */
                 mode = MODE_PLAY;
             }
             /* else: BACK was tapped, or the run was stopped/exhausted while
@@ -952,15 +1053,6 @@ int main(int argc, char **argv)
                 free(panel); pf->shutdown(pf->ctx); return 0;
             }
             say("koboy: chose %s\n", cfg.rom_path);
-            {
-                /* Recorded here too, not only from RECENT: "played" means
-                   actually loaded, and ALL GAMES is the other of the two
-                   entry points that can load a rom at startup. */
-                koboy_recent rc;
-                recent_load(&rc, recents_file);
-                recent_touch(&rc, cfg.rom_path);
-                recent_save(&rc, recents_file);
-            }
             mode = MODE_PLAY;
         } else {
             /* MAIN_QUIT, or run_main_menu itself was stopped/exhausted
@@ -977,11 +1069,6 @@ int main(int argc, char **argv)
         }
     }
 
-    if (used_startup_ui) {
-        /* Whichever screen led here (RECENT or ALL GAMES) painted over the
-           faceplate. */
-        redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
-    }
     /* mode is MODE_PLAY from here on, until the emulator loop below reads and
        writes it: MODE_QUIT ends the loop from inside the menu (a chosen QUIT,
        or CHOOSE ROM leaving nothing loaded), kept distinct from g_stop so the
@@ -1074,26 +1161,60 @@ int main(int argc, char **argv)
         say("koboy: faceplate %s%s\n", layout_name(cfg.layout_mode), extras);
     }
 
-    char err[512];
-    koboy_core *core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);
+    core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);
     if (!core) {
-        fatal("%s", err);
-        free(panel);
-        pf->shutdown(pf->ctx); return 1;
+        /* A MISSING CORE IS A FAILED LOAD, not a broken installation. Fifteen
+           systems ship now and the core is picked from the extension, so
+           "tapped a .gba on a device whose gba_libretro.so did not survive
+           the copy" arrives here -- and it is exactly the same user-visible
+           event as a ROM the core refuses: this game did not start. It is
+           handled the same way. */
+        if (!load_failed_recoverable(used_startup_ui, cfg.rom_path, err)) {
+            free(panel);
+            pf->shutdown(pf->ctx); return 1;
+        }
+        mode = MODE_MAIN;
+        continue;
     }
 
-    /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
-       every compiler that matters here, but Linaro GCC 4.9 (the ARM cross
-       compiler; the host's newer GCC does not) applies -Wmissing-braces to
-       the nested path[] array and -Wmissing-field-initializers to the rest,
-       so a bare {0} is warning-free on host and warning-*full* on-device.
-       Spell out every field so both toolchains agree it is zeroed. */
-    koboy_sram_binding sb = {{0}, NULL, 0, false};
     if (!load_rom_into(core, &cfg, &sb, err, sizeof err)) {
-        fatal("%s", err);
+        /* Closed, not kept: the next ROM through this loop picks its own
+           core from its own extension, and a handle left open here would
+           leak one .so per failed tap. core_close on a core with no ROM
+           loaded is the ordinary shutdown path (core.c). */
         core_close(core);
-        free(panel);
-        pf->shutdown(pf->ctx); return 1;
+        core = NULL;
+        if (!load_failed_recoverable(used_startup_ui, cfg.rom_path, err)) {
+            free(panel);
+            pf->shutdown(pf->ctx); return 1;
+        }
+        mode = MODE_MAIN;
+        continue;
+    }
+
+    break;
+    }   /* end of the retry loop opened before the MAIN MENU */
+
+    /* Recorded HERE, once, for both entry points, and only now: "played"
+       means the game actually started. Recording at pick time (where this
+       used to live, twice) put a ROM that failed to load at the top of the
+       RECENT list -- the wall the user just hit, promoted to row 0 of the
+       screen they have to get past to try anything else. A row that fails is
+       left in the list, deliberately: see the note above the retry loop. */
+    if (used_startup_ui) {
+        koboy_recent rc;
+        recent_load(&rc, recents_file);
+        recent_touch(&rc, cfg.rom_path);
+        recent_save(&rc, recents_file);
+    }
+
+    if (used_startup_ui) {
+        /* Whichever screen led here (RECENT or ALL GAMES) painted over the
+           faceplate. Below the load rather than above it, since the load can
+           now send the user back to the menu: a faceplate drawn for a game
+           that never starts is a full-panel flash on the way to an error
+           message. */
+        redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
     }
 
     /* --------------------------------------------- re-fit for real geometry */
@@ -1219,8 +1340,8 @@ int main(int argc, char **argv)
             /* On the panel, not just the log: a save that silently did not load
                is how a user loses hours without ever being told. Short lines --
                FBInk wraps at the column edge, not at word boundaries. */
-            fatal("Save file unreadable.\nStarting fresh.\nSaving is OFF this run.");
-            /* fatal() drew over the faceplate; put it back. */
+            notify("Save file unreadable.\nStarting fresh.\nSaving is OFF this run.");
+            /* The message drew over the faceplate; put it back. */
             redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
         }
     } else {
@@ -1525,8 +1646,8 @@ int main(int argc, char **argv)
                                !sram_load(sb.path, sb.mem, sb.len) &&
                                access(sb.path, F_OK) == 0) {
                         sb.writeback = false;
-                        fatal("Save file unreadable.\nStarting fresh.\n"
-                              "Saving is OFF this run.");
+                        notify("Save file unreadable.\nStarting fresh.\n"
+                               "Saving is OFF this run.");
                     }
                 }
             }

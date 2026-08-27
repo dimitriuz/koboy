@@ -1382,3 +1382,148 @@ SDL_VIDEODRIVER=dummy ./build/koboy --core build/stub_core.so \
     exit 1; }
 rm -f "$short_sfc" "$ok_sfc" "$short_gb"
 echo "PASS smoke_host cartridge floor: 212B .sfc refused, 8192B .sfc ok, 212B .gb ok"
+
+# ------------------------------- a ROM that fails to load must not kill koboy
+# REPORTED FROM THE DEVICE, TWICE: selecting a game from RECENT exited koboy
+# back to Nickel. Any failure to load the startup ROM used to call fatal() and
+# return 1, which on a device with no terminal is indistinguishable from a
+# crash -- the app vanishes, Nickel comes back, and whatever the user was
+# doing is gone. A stale RECENT row is an ORDINARY condition (the file was
+# deleted, renamed, half-copied, or lives on a card that is not mounted), so
+# the run must survive it and put the user back on the MAIN MENU.
+#
+# THE FAILURE IS REAL, NOT SIMULATED: the .sfc cartridge floor above is the
+# one refusal this suite can trigger from outside the process without a core
+# that lies. BAD.sfc is 8192 bytes when it is recorded into RECENT and 212
+# bytes when it is selected -- exactly the shape of a file that was fine and
+# is not any more (an interrupted re-copy), and the one case recent_prune_
+# missing cannot catch, because the file still exists.
+#
+# The run asserts RECOVERY, not a printed message: it fails the ROM, comes
+# back, and starts a DIFFERENT game, so what is proven is that the process
+# was still alive and still driving its UI. A test that only grepped for
+# "COULD NOT LOAD" would pass against a koboy that printed it and exited.
+rd="$(mktemp -d)"; sd="$(mktemp -d)"
+head -c 8192 /dev/zero > "$rd/BAD.sfc"
+: > "$rd/GOOD.gb"
+# Row geometry is this file's usual 1264x1680 derivation: row_h=64, row r's
+# centre is 8 + 64 + r*64 + 32. $rd is FLAT so no folder row shifts an index.
+#   MAIN MENU: row 0 RECENT, row 1 ALL GAMES
+#   browser:   row 0 BAD.sfc, row 1 GOOD.gb   (alphabetical, src/romlist.c)
+s1="$(mktemp)"; printf 'tap 200 168\ntap 200 104\n' > "$s1"   # ALL GAMES -> BAD.sfc
+s2="$(mktemp)"; printf 'tap 200 168\ntap 200 168\n' > "$s2"   # ALL GAMES -> GOOD.gb
+for seed in "$s1" "$s2"; do
+    rc=0
+    SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$rd" --save-dir "$sd" --ui-script "$seed" \
+        --panel 1264x1680 --frames 3 --quiet >/dev/null 2>&1 || rc=$?
+    [ "$rc" -eq 0 ] || {
+        echo "FAIL: seeding the RECENT list exited $rc"
+        rm -rf "$rd" "$sd" "$s1" "$s2"; exit 1; }
+done
+# RECENT is most-recent-first, so: row 0 GOOD.gb, row 1 BAD.sfc, row 2 BACK.
+# Both names must be in recent.dat, or the taps below aim at nothing.
+grep -qa "BAD.sfc" "$sd/recent.dat" && grep -qa "GOOD.gb" "$sd/recent.dat" || {
+    echo "FAIL: the RECENT list was not seeded with both roms"
+    rm -rf "$rd" "$sd" "$s1" "$s2"; exit 1; }
+
+head -c 212 /dev/zero > "$rd/BAD.sfc"      # ...and now it is broken
+s3="$(mktemp)"
+#   tap 200 104 -- MAIN MENU row 0, RECENT
+#   tap 200 168 -- RECENT row 1, BAD.sfc            <- the load that fails
+#   tap 200 104 -- MAIN MENU row 0, RECENT          <- proves we came BACK
+#   tap 200 104 -- RECENT row 0, GOOD.gb            <- and can still play
+# The third and fourth taps are the discriminator. A koboy that exited on the
+# failed load never consumes them, and the run reports the exit code it died
+# with instead of 0.
+printf 'tap 200 104\ntap 200 168\ntap 200 104\ntap 200 104\n' > "$s3"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$rd" --save-dir "$sd" --ui-script "$s3" \
+        --panel 1264x1680 --frames 3 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: a RECENT row that could not load exited $rc instead of recovering"
+    echo "      (1 = the old fatal-and-quit; 4 = it never reached the second game;"
+    echo "       124 = it hung on the error message)"
+    echo "$out" | tail -20
+    rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+echo "$out" | grep -q "chose $rd/BAD.sfc (recent)" || {
+    echo "FAIL: the run never selected the broken rom, so it proved nothing"
+    echo "$out"; rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+echo "$out" | grep -q "too short to be a cartridge" || {
+    echo "FAIL: the broken rom was not refused for being short"
+    echo "$out"; rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+echo "$out" | grep -q "COULD NOT LOAD" || {
+    echo "FAIL: nothing was drawn on the panel to say why the game did not start"
+    echo "$out"; rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+echo "$out" | grep -q "chose $rd/GOOD.gb (recent)" || {
+    echo "FAIL: the run did not come back to the MAIN MENU and start another game"
+    echo "$out"; rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+echo "$out" | grep -q '^presented=' || {
+    echo "FAIL: the recovered run never reached the emulator loop"
+    echo "$out"; rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+# The FACEPLATE followed the second ROM. Everything derived from the
+# extension -- layout, buttons, ceiling, and the core itself -- sits inside
+# the retry loop, so a second trip round must redo it; a koboy that recovered
+# but kept the first ROM's presentation would dress a Game Boy as an SNES.
+echo "$out" | grep -q "faceplate DMG" || {
+    echo "FAIL: the recovered run kept the failed rom's faceplate"
+    echo "$out" | grep -i faceplate; rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"; exit 1; }
+rm -rf "$rd" "$sd" "$s1" "$s2" "$s3"
+echo "ok: a RECENT row that cannot load returns to the MAIN MENU, and the next game starts"
+
+# ...and the SAME failure from ALL GAMES, which is the other startup entry
+# point, plus the half of the fix that is about the list rather than the
+# process: a ROM is recorded as "played" only once it actually LOADED.
+# Recording at pick time (where it used to happen) promoted a ROM that failed
+# to the top of the RECENT list -- the wall the user just hit, moved to row 0
+# of the screen they have to walk past to try something else.
+rd="$(mktemp -d)"; sd="$(mktemp -d)"
+head -c 212 /dev/zero > "$rd/BAD.sfc"
+: > "$rd/GOOD.gb"
+s4="$(mktemp)"
+#   tap 200 168 -- MAIN MENU row 1, ALL GAMES
+#   tap 200 104 -- browser row 0, BAD.sfc   <- fails
+#   tap 200 168 -- MAIN MENU row 1, ALL GAMES
+#   tap 200 168 -- browser row 1, GOOD.gb   <- plays
+printf 'tap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s4"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$rd" --save-dir "$sd" --ui-script "$s4" \
+        --panel 1264x1680 --frames 3 2>&1) || rc=$?
+[ "$rc" -eq 0 ] || {
+    echo "FAIL: a browser pick that could not load exited $rc instead of recovering"
+    echo "$out" | tail -20; rm -rf "$rd" "$sd" "$s4"; exit 1; }
+echo "$out" | grep -q "chose $rd/GOOD.gb\$" || {
+    echo "FAIL: the browser run did not come back and start another game"
+    echo "$out"; rm -rf "$rd" "$sd" "$s4"; exit 1; }
+grep -qa "GOOD.gb" "$sd/recent.dat" || {
+    echo "FAIL: the game that DID load was not recorded as recent"
+    rm -rf "$rd" "$sd" "$s4"; exit 1; }
+grep -qa "BAD.sfc" "$sd/recent.dat" && {
+    echo "FAIL: a rom that never loaded was recorded as recently played"
+    rm -rf "$rd" "$sd" "$s4"; exit 1; }
+rm -rf "$rd" "$sd" "$s4"
+echo "ok: a browser pick that cannot load recovers, and is not recorded as played"
+
+# THE OTHER HALF OF THE RULE: with no list to go back to there is nothing to
+# recover TO, so --rom must still fail the run. The cartridge-floor block
+# above already asserts the exit code for exactly this file; what it cannot
+# see is the DISTINCTION, which is the whole basis of the fix -- the same
+# 212-byte .sfc that returns to the menu when it was tapped in a list must
+# still exit nonzero when it was named on the command line. Without this
+# check, "never exit on a bad rom" would pass everything above and would
+# silently make `koboy --rom nonsense` report success to its launcher.
+rd="$(mktemp -d)"
+head -c 212 /dev/zero > "$rd/BAD.sfc"
+rc=0
+SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+    --rom "$rd/BAD.sfc" --frames 3 --quiet >/dev/null 2>&1 || rc=$?
+[ "$rc" -ne 0 ] || {
+    echo "FAIL: --rom with an unloadable file exited 0; there was no menu to return to"
+    rm -rf "$rd"; exit 1; }
+[ "$rc" -ne 124 ] || {
+    echo "FAIL: --rom with an unloadable file hung instead of exiting"
+    rm -rf "$rd"; exit 1; }
+rm -rf "$rd"
+echo "ok: --rom with an unloadable file still ends the run (rc=$rc)"
