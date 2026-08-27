@@ -1,0 +1,361 @@
+# Build a release from a `v*` tag.
+#
+# THE HARD PART IS THE TOOLCHAIN AND THE CORES, so the shape of this file is
+# an answer to a timing problem rather than a matter of taste.
+#
+# What has to happen for one release:
+#
+#   - fetch a 2014 Linaro cross toolchain (~90 MB) from the Wayback Machine,
+#     because Linaro decommissioned their release server (see BUILD.md);
+#   - cross-build FBInk and link it statically into koboy-arm;
+#   - cross-build FOURTEEN emulator cores from source. Thirteen are minutes
+#     each. FBNeo is tens of megabytes of C++ across hundreds of drivers and
+#     is, on its own, longer than everything else in this workflow put
+#     together.
+#
+# Built naively as one job that is an hour of serial work on a cold cache, and
+# the failure mode is the bad one: it works for months and then times out on
+# the release you were in a hurry for.
+#
+# THREE THINGS MAKE IT FIT.
+#
+# 1. THE CORES ARE A MATRIX. Fourteen parallel jobs instead of one serial
+#    one, so the wall clock is FBNeo's build and not the sum. Each publishes
+#    its .so as an artifact and `package` collects them.
+#
+# 2. EVERY CORE IS CACHED ON ITS OWN PINNED COMMIT. The key is that core's
+#    SHA from scripts/pins.txt plus a hash of its build script and pins.sh --
+#    which is exactly the set of inputs that decides the bytes. So the cache
+#    is correct BY CONSTRUCTION rather than by a `restore-keys` guess:
+#    changing a pin or a compiler flag misses, and changing anything else
+#    hits. A second release that touches no pin rebuilds no core at all.
+#
+# 3. THE TOOLCHAIN IS FETCHED ONCE, in a job of its own that the others wait
+#    on. Not because a cache cannot be shared -- it can -- but because on a
+#    COLD cache fifteen jobs would start simultaneously and each pull the same
+#    90 MB from the Internet Archive, which is both slow and rude. Priming it
+#    first costs one job's startup and makes the cold path the fast one.
+#
+# COLD CACHE STILL FINISHES, which is the requirement that rules out the
+# clever version of this. Nothing here depends on a warm cache to be correct;
+# a cache miss is a build, and every job's timeout is set for the miss.
+#
+# NOTHING IS DOWNLOADED THAT IS NOT VERIFIED. The core dependency closure is
+# checked by scripts/verify-core.sh as the last step of every build script,
+# and tests/test_dist.sh re-checks the finished archive -- every core present
+# by name, no ROM, no BIOS, nothing written outside .adds/koboy/.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build (for a dry run; no release is published)'
+        required: false
+
+permissions:
+  contents: write
+
+env:
+  # The Linaro 4.9-2014.09 armhf toolchain: the only prebuilt one found that
+  # targets the device's glibc 2.19 ceiling. releases.linaro.org is gone and
+  # now redirects to a contact page; this is a Wayback capture of the actual
+  # binary (an `id_` capture, so it is the file and not an archived redirect).
+  # BUILD.md says what to do if it dies, and the cache key below is the hash
+  # of this string, so changing it invalidates the cache exactly when it
+  # should.
+  TOOLCHAIN_URL: "http://web.archive.org/web/20150803153714id_/http://releases.linaro.org/14.09/components/toolchain/binaries/gcc-linaro-arm-linux-gnueabihf-4.9-2014.09_linux.tar.xz"
+
+jobs:
+  # ---------------------------------------------------------------- gate
+  # Runs first and costs nothing. A tag that disagrees with the Makefile's
+  # VERSION would produce a release called v0.2.0 containing koboy-0.1.0.zip,
+  # which is the kind of thing nobody notices until someone files a bug about
+  # the wrong build. The version lives in ONE place -- the Makefile -- and the
+  # tag has to agree with it.
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          mk=$(awk -F':=' '/^VERSION[[:space:]]*:=/ { gsub(/[[:space:]]/,"",$2); print $2 }' Makefile)
+          [ -n "$mk" ] || { echo "FAIL: no VERSION in the Makefile"; exit 1; }
+          tag="${GITHUB_REF#refs/tags/}"
+          if [ "$GITHUB_REF" = "$tag" ]; then
+            echo "not a tag build (workflow_dispatch); using the Makefile's $mk"
+          elif [ "v$mk" != "$tag" ]; then
+            echo "FAIL: tag $tag does not match the Makefile's VERSION ($mk)."
+            echo "      Bump VERSION in the Makefile, or retag as v$mk."
+            exit 1
+          fi
+          echo "version=$mk" >> "$GITHUB_OUTPUT"
+          echo "building koboy $mk"
+
+  # ----------------------------------------------------------- toolchain
+  # Primes the shared cache. See note 3 in the header for why this is a job
+  # rather than a step every other job repeats.
+  toolchain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: toolchain.tar.xz
+          # A LITERAL key naming the toolchain, not a hash of this file. The
+          # cached thing is a specific 2014 tarball, and it stays valid if
+          # TOOLCHAIN_URL moves to another mirror of the SAME file -- which is
+          # a change BUILD.md expects somebody to have to make. Hashing the
+          # workflow would throw away a 90 MB download every time a comment
+          # here changed, and would keep a stale one if the URL moved to a
+          # different toolchain. Bump the trailing -1 if the toolchain itself
+          # ever changes.
+          key: toolchain-gcc-linaro-4.9-2014.09-armhf-1
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          # --retry, because the Internet Archive is not a CDN and a single
+          # transient failure here fails the whole release.
+          curl -fL --retry 5 --retry-delay 10 --retry-all-errors \
+               -o toolchain.tar.xz "$TOOLCHAIN_URL"
+          # A redirect page or an error document would be small and would
+          # extract to nothing useful. Fail on the size before anything
+          # downstream tries to compile with it.
+          sz=$(wc -c < toolchain.tar.xz)
+          [ "$sz" -gt 50000000 ] || {
+            echo "FAIL: toolchain download is $sz bytes -- that is not the tarball."
+            echo "      The Wayback capture may have rotted; see BUILD.md."
+            exit 1; }
+          tar tJf toolchain.tar.xz >/dev/null || {
+            echo "FAIL: toolchain download is not a valid xz tarball"; exit 1; }
+          echo "ok: toolchain $sz bytes"
+
+  # --------------------------------------------------------------- cores
+  # Fourteen cores in parallel, each cached on its own pinned commit.
+  #
+  # fail-fast is OFF deliberately. If one core stops building upstream, the
+  # useful outcome is thirteen green jobs and one red one naming the culprit,
+  # not thirteen cancelled jobs and no information.
+  cores:
+    needs: [check, toolchain]
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { pin: gambatte,   target: core,       so: gambatte_libretro.so,          script: build-core.sh }
+          - { pin: gw,         target: core-gw,    so: gw_libretro.so,                script: build-gw-core.sh }
+          - { pin: fceumm,     target: core-nes,   so: fceumm_libretro.so,            script: build-fceumm-core.sh }
+          - { pin: pokemini,   target: core-pm,    so: pokemini_libretro.so,          script: build-pokemini-core.sh }
+          - { pin: wswan,      target: core-ws,    so: mednafen_wswan_libretro.so,    script: build-wswan-core.sh }
+          - { pin: race,       target: core-ngp,   so: race_libretro.so,              script: build-race-core.sh }
+          - { pin: stella2014, target: core-a26,   so: stella2014_libretro.so,        script: build-stella-core.sh }
+          - { pin: gearcoleco, target: core-col,   so: gearcoleco_libretro.so,        script: build-gearcoleco-core.sh }
+          - { pin: freeintv,   target: core-int,   so: freeintv_libretro.so,          script: build-freeintv-core.sh }
+          - { pin: gpgx,       target: core-sms,   so: genesis_plus_gx_libretro.so,   script: build-gpgx-core.sh }
+          - { pin: snes9x2005, target: core-snes,  so: snes9x2005_libretro.so,        script: build-snes-core.sh }
+          - { pin: pce,        target: core-pce,   so: mednafen_pce_fast_libretro.so, script: build-pce-core.sh }
+          - { pin: gpsp,       target: core-gba,   so: gpsp_libretro.so,              script: build-gba-core.sh }
+          # FBNeo is the long pole of the whole workflow: ~40 MB of core built
+          # from hundreds of arcade drivers. It gets the same 180-minute
+          # timeout as everyone else because it is the one that needs it, and
+          # because a per-entry timeout would be one more thing to keep in
+          # step with the matrix.
+          - { pin: fbneo,      target: core-fbneo, so: fbneo_libretro.so,             script: build-fbneo-core.sh }
+    steps:
+      - uses: actions/checkout@v4
+
+      # THE CACHE KEY IS THE PINNED COMMIT PLUS THE BUILD RECIPE, and that is
+      # the whole design: those two things decide the bytes of the .so, so a
+      # hit is provably the same core and a miss is provably a different one.
+      # pins.sh is in the hash because it is what does the fetching.
+      - id: key
+        run: |
+          rev=$(awk -v n='${{ matrix.pin }}' '$1 == n { print $3; exit }' scripts/pins.txt)
+          [ -n "$rev" ] || { echo "FAIL: no pin for '${{ matrix.pin }}' in scripts/pins.txt"; exit 1; }
+          recipe=$(cat "scripts/${{ matrix.script }}" scripts/pins.sh scripts/verify-core.sh | sha256sum | cut -c1-16)
+          echo "rev=$rev"       >> "$GITHUB_OUTPUT"
+          echo "recipe=$recipe" >> "$GITHUB_OUTPUT"
+
+      - id: cache
+        uses: actions/cache@v4
+        with:
+          path: dist/${{ matrix.so }}
+          # No restore-keys, on purpose. A partial-key fallback would hand
+          # this job a core built from a DIFFERENT commit and it would ship.
+          # The only acceptable answers here are "the exact same inputs" and
+          # "build it".
+          key: core-${{ matrix.pin }}-${{ steps.key.outputs.rev }}-${{ steps.key.outputs.recipe }}
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: toolchain.tar.xz
+          key: toolchain-gcc-linaro-4.9-2014.09-armhf-1
+          fail-on-cache-miss: true
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Unpack the toolchain
+        run: |
+          mkdir -p "$HOME/tc"
+          tar xf toolchain.tar.xz -C "$HOME/tc"
+          bin=$(find "$HOME/tc" -maxdepth 3 -type d -name bin | head -1)
+          [ -x "$bin/arm-linux-gnueabihf-gcc" ] || {
+            echo "FAIL: no arm-linux-gnueabihf-gcc under $bin"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
+
+      - if: steps.cache.outputs.cache-hit != 'true'
+        name: Build ${{ matrix.so }}
+        run: |
+          arm-linux-gnueabihf-gcc --version | head -1
+          make ${{ matrix.target }}
+
+      # Belt and braces on the cached path too: a cache entry is only as good
+      # as what was stored, and verify-core.sh is cheap. On a hit this is the
+      # only thing standing between a corrupted cache and a shipped core.
+      - name: Verify the dependency closure
+        run: |
+          [ -s "dist/${{ matrix.so }}" ] || { echo "FAIL: dist/${{ matrix.so }} is missing or empty"; exit 1; }
+          if command -v arm-linux-gnueabihf-readelf >/dev/null 2>&1; then
+            READELF=arm-linux-gnueabihf-readelf sh scripts/verify-core.sh "dist/${{ matrix.so }}"
+          else
+            # A cache hit means no toolchain was unpacked. The distro readelf
+            # reads ARM ELF perfectly well; only the cross one is preferred
+            # when it is there.
+            sh scripts/verify-core.sh "dist/${{ matrix.so }}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: core-${{ matrix.pin }}
+          path: dist/${{ matrix.so }}
+          retention-days: 1
+          if-no-files-found: error
+
+  # ------------------------------------------------------------- package
+  package:
+    needs: [check, cores]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/cache/restore@v4
+        with:
+          path: toolchain.tar.xz
+          key: toolchain-gcc-linaro-4.9-2014.09-armhf-1
+          fail-on-cache-miss: true
+
+      - name: Unpack the toolchain
+        run: |
+          mkdir -p "$HOME/tc"
+          tar xf toolchain.tar.xz -C "$HOME/tc"
+          bin=$(find "$HOME/tc" -maxdepth 3 -type d -name bin | head -1)
+          [ -x "$bin/arm-linux-gnueabihf-gcc" ] || { echo "FAIL: no cross gcc"; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
+
+      # FBInk is linked STATICALLY into koboy-arm, so unlike a core it is part
+      # of the emulator binary rather than a file beside it. Cached on its own
+      # pin the same way, and the whole checkout is cached rather than just
+      # libfbink.a because the Makefile also needs its headers (-I$(FBINK_DIR)).
+      - id: fbinkkey
+        run: |
+          rev=$(awk '$1 == "fbink" { print $3; exit }' scripts/pins.txt)
+          [ -n "$rev" ] || { echo "FAIL: no fbink pin"; exit 1; }
+          recipe=$(cat scripts/build-fbink.sh scripts/pins.sh | sha256sum | cut -c1-16)
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+          echo "recipe=$recipe" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/cache@v4
+        with:
+          path: third_party/fbink
+          key: fbink-${{ steps.fbinkkey.outputs.rev }}-${{ steps.fbinkkey.outputs.recipe }}
+
+      # Every core artifact lands straight in dist/ under its shipped name.
+      # The Makefile's core rules are FILE targets with no prerequisites, so a
+      # .so that is already there is already up to date and make does not
+      # rebuild it -- which is the whole reason the matrix above can hand its
+      # work to this job.
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: core-*
+          merge-multiple: true
+          path: dist
+
+      - name: All fourteen cores arrived
+        run: |
+          ls -la dist/
+          n=$(ls dist/*.so 2>/dev/null | wc -l)
+          [ "$n" -eq 14 ] || { echo "FAIL: $n cores in dist/, expected 14"; exit 1; }
+          echo "ok: 14 cores"
+
+      # Builds koboy-arm and koboy-probe-arm (and FBInk under them), then the
+      # two archives. `make dist` is the release; `make probe-dist` is the
+      # probe alone, deployable before the emulator exists, which is how
+      # somebody with an untried Kobo contributes a row to TESTED.md.
+      - name: Build the archives
+        run: |
+          make kobo
+          make dist
+          make probe-dist
+
+      # The packaging contract, on the artefact that actually ships: every
+      # core present by name, nothing outside .adds/koboy/, no KoboRoot.tgz,
+      # no ROM, no BIOS, under the size cap. `make dist` inside it is a no-op
+      # by this point.
+      - name: Packaging contract
+        run: bash tests/test_dist.sh
+
+      - name: What is being released
+        run: |
+          ls -la dist/*.zip
+          unzip -l "dist/koboy-${{ needs.check.outputs.version }}.zip" | tail -3
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: koboy-${{ needs.check.outputs.version }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+      # `gh` rather than a third-party release action: it is preinstalled on
+      # the runner, it needs no pinning of somebody else's code into this
+      # repository's supply chain, and this project's whole position on
+      # dependencies is that fewer is better.
+      #
+      # Skipped for a workflow_dispatch run, which is a dry run by design --
+      # the archives are still uploaded as artifacts above, so you can check a
+      # build without publishing anything.
+      - name: Publish
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          v="${{ needs.check.outputs.version }}"
+          gh release create "${GITHUB_REF#refs/tags/}" \
+            --title "koboy $v" \
+            --notes-file - \
+            "dist/koboy-$v.zip#koboy $v (all fifteen systems)" \
+            "dist/koboy-probe-$v.zip#koboy-probe $v (device profiler only)" <<'NOTES'
+          Unzip the koboy archive below at the root of the drive your Kobo
+          shows up as over USB, put ROMs in `.adds/koboy/roms/`, and launch
+          from NickelMenu. README.md has the rest, including the screen
+          settings -- try `MENU -> MOTION` first, it is the one that stops
+          moving sprites smearing.
+
+          The probe archive is the device profiler on its own, for
+          characterising a Kobo nobody has tried without installing the
+          emulator. See TESTED.md's "How to add a row".
+
+          One archive, ~18.6 MB. 13.6 MB of that is the arcade core; delete
+          `.adds/koboy/fbneo_libretro.so` if you have no arcade romset.
+
+          Verified on a Kobo Libra 2 and nowhere else. Every core is built
+          from source at the commit `scripts/pins.txt` records. koboy is
+          GPL-3; see LICENSES.md for each core's own terms.
+          NOTES

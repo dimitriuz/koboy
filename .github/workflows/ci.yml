@@ -1,0 +1,139 @@
+# The cheap half of the test story, on every push.
+#
+# This workflow deliberately does NOT touch the ARM cross toolchain. The host
+# suite needs a C compiler, GNU make and SDL2 and nothing else, it finishes in
+# a couple of minutes, and it is the thing most likely to catch a regression --
+# `src/platform_if.h` exists precisely so that everything above the platform
+# seam is testable on a machine that has never seen a Kobo. The device build
+# lives in release.yml, where its cost is paid once per tag rather than once
+# per push.
+name: tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SDL2
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libsdl2-dev
+
+      # 26 binaries, ~6000 checks. `make test` also runs the kobo-syntax
+      # target, which type-checks main.c's entire device side with
+      # -DKOBOY_PLATFORM_KOBO and -fsyntax-only -- no fbink.h and no cross
+      # compiler needed. That guard exists because a prototype mismatch
+      # between main.c and platform_kobo.c links cleanly and misbehaves only
+      # on the device.
+      - name: Unit tests
+        run: make test
+
+      # End to end against the stub core, headless via SDL's dummy driver:
+      # ROM loading, the browser, the in-game menu, save states, SRAM, the
+      # failed-load recovery paths and mid-session core switching.
+      - name: Host smoke test
+        run: bash tests/smoke_host.sh
+
+      # Runs its LAUNCHER half only -- the packaging half needs the cross
+      # toolchain and skips itself loudly without it. The launcher assertions
+      # are the ones that matter most here: they guard the environment gate
+      # whose absence has already cost a device a reboot.
+      - name: Packaging and launcher contract
+        run: bash tests/test_dist.sh
+
+      # Nothing in the repository may be a ROM, a BIOS or a core save file.
+      # .gitignore covers all of it, but an ignore rule only helps for a file
+      # nobody has already committed -- five had been, before this existed.
+      - name: No content in the repository
+        run: |
+          bad=$(git ls-files | grep -iE '\.(gb|gbc|gba|mgw|nes|min|ws|wsc|ngp|ngc|a26|col|int|sms|gg|sfc|smc|pce|zip|rom|bin|srm|sav|eep|ngf|flash|hi|fs|nv)$' || true)
+          if [ -n "$bad" ]; then
+            echo "FAIL: these are tracked and must not be:"
+            echo "$bad"
+            exit 1
+          fi
+          echo "ok: no ROM, BIOS or save file is tracked"
+
+      # THE RELEASE MATRIX MUST NOT DRIFT FROM THE MAKEFILE. release.yml
+      # builds each core as its own matrix entry and `package` asserts
+      # fourteen .so files arrived; a core added to the Makefile and not to
+      # the matrix fails that count, and one added to the matrix and not to
+      # the Makefile fails at `make`. Both failures happen at RELEASE time,
+      # which is the worst time to find out. This finds it on the push.
+      #
+      # Grep rather than a YAML parser on purpose: it needs no dependency on
+      # the runner and the matrix rows are written one per line for exactly
+      # this kind of reading.
+      - name: The release matrix covers every core
+        run: |
+          mk=$(grep -oE '^CORE_[A-Z0-9_]*SO[[:space:]]*:=[[:space:]]*dist/[^[:space:]]+' Makefile \
+               | sed 's|.*dist/||' | sort)
+          wf=$(grep -oE '^[[:space:]]*- \{ pin:.*so:[[:space:]]*[^,]+' .github/workflows/release.yml \
+               | sed -E 's/.*so:[[:space:]]*//; s/[[:space:]]*$//' | sort)
+          if [ "$mk" != "$wf" ]; then
+            echo "FAIL: the Makefile's cores and release.yml's matrix disagree."
+            echo "--- in the Makefile ---"; echo "$mk"
+            echo "--- in release.yml ----"; echo "$wf"
+            echo "--- only one side ----"
+            diff <(echo "$mk") <(echo "$wf") || true
+            exit 1
+          fi
+          n=$(echo "$mk" | wc -l)
+          echo "ok: $n cores, and the matrix matches the Makefile exactly"
+
+      # A pin that is not a full 40-hex commit fails at fetch time with "not
+      # our ref", on a contributor's machine rather than here. Cheap to check
+      # here instead.
+      - name: Pin table is well formed
+        run: |
+          rc=0
+          while read -r name url rev; do
+            case "$name" in ''|'#'*) continue ;; esac
+            case "$rev" in
+              [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;;
+              *) echo "FAIL: $name pin '$rev' is not a full 40-hex commit"; rc=1 ;;
+            esac
+            case "$url" in https://*) ;; *) echo "FAIL: $name url '$url' is not https"; rc=1 ;; esac
+          done < scripts/pins.txt
+          if [ "$rc" -eq 0 ]; then echo "ok: every pin is a full commit on an https remote"; fi
+          exit "$rc"
+
+      # Every build script must fetch through the pin table. A bare `git
+      # clone` reintroduces exactly the floating-master problem pins.txt
+      # exists to remove, and it would do so silently.
+      #
+      # Two assertions, because either alone has a hole. "calls
+      # koboy_fetch_pinned" does not stop a script that ALSO clones something
+      # else; "contains no git clone" does not stop a script that fetches
+      # nothing at all. Both were mutant-checked, and the first one is written
+      # UNANCHORED for a reason found that way: the obvious
+      # `grep '^[[:space:]]*git clone'` missed the exact shape the old scripts
+      # used, `[ -d "$SRC" ] || git clone ...`, so the mutant that restored
+      # the old line was caught only by the second assertion. Comments are
+      # stripped first, because every one of these scripts now discusses
+      # `git clone --depth 1` in prose.
+      - name: No build script clones master
+        run: |
+          rc=0
+          for f in scripts/build-*.sh; do
+            if grep -v '^[[:space:]]*#' "$f" | grep -q 'git clone'; then
+              echo "FAIL: $f clones directly instead of using koboy_fetch_pinned"
+              grep -v '^[[:space:]]*#' "$f" | grep -n 'git clone'
+              rc=1
+            fi
+            grep -q 'koboy_fetch_pinned' "$f" \
+              || { echo "FAIL: $f never calls koboy_fetch_pinned"; rc=1; }
+          done
+          if [ "$rc" -eq 0 ]; then echo "ok: every build script fetches through scripts/pins.txt"; fi
+          exit "$rc"
