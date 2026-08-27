@@ -403,7 +403,18 @@ measured: an `.fds` fails `retro_load_game` outright with an empty system
 directory. Supporting it means giving koboy a system directory, which is a
 design decision, not an extension entry.
 
-### 38. Frame pacing is still the Game Boy's for every system
+### 38. ~~Frame pacing is still the Game Boy's for every system~~ CLOSED
+
+**CLOSED**, together with #57. `retro_system_timing.fps` is consumed at load
+and on every mid-run `SET_SYSTEM_AV_INFO`; `koboy_pacer` carries its own frame
+time. The Game Boy is unmoved -- 1e6/59.7275 truncates to exactly the 16742
+`KOBOY_FRAME_US` always was, which is why `pacer_frame_us_from_fps` truncates
+rather than rounds (rounding gives 16743 and the test caught it). A core
+reporting outside [10, 300] fps falls back to the constant.
+
+The original entry follows.
+
+### 38 (original). Frame pacing is still the Game Boy's for every system
 
 `KOBOY_FRAME_US` is 16742 us (59.7275 Hz). fceumm reports 60.0998 fps and
 PokeMini reports 72. Nothing reads `retro_system_timing` (core.c says so at
@@ -624,7 +635,28 @@ are coarser here than on the hardware. Nothing is unplayable; nothing is
 exact either. A touch d-pad that reported an ANGLE rather than a bitmask
 could feed the analog axes, which is a real feature and not a small one.
 
-### 51. Every Atari 2600 title renders about 1.75x too tall
+### 51. ~~Every Atari 2600 title renders about 1.75x too tall~~ CLOSED
+
+**CLOSED.** `video_pixel_aspect` / `video_fit_par` / `config_resolve_profile_par`
+now carry the core's `geometry.aspect_ratio` through the fit. BurgerTime goes
+from 480x630 to 840x630 and PAL Breakout from 480x750 to 1000x750, both 4:3 to
+the pixel. `aspect_ratio` was the signal, as this entry guessed, and
+`base_width / delivered width` was measured to be the WRONG one: it gives 2.0
+where the truth is 1.75.
+
+Two things this entry got wrong, both worth knowing. (a) The 2600 is NOT the
+only affected system -- probed through `scripts/probe_core.c`, fceumm reports
+8:7 for the NES, genesis_plus_gx 8:7 / 6:5 / 32:35 for SMS / Game Gear / Mega
+Drive, and most FinalBurn Neo boards are non-square too; only gambatte,
+gearcoleco, freeintv, pokemini, beetle-wswan, gw and race come out square. All
+of them are honoured now. (b) Fixing the FIT alone is a regression: the
+reserved rect is `max_w * scale` wide and has nowhere to put a widened picture,
+so Super Mario Bros. dropped from 768x720 to 585x480 until the rect learned the
+aspect as well. See #65.
+
+The original entry follows.
+
+### 51 (original). Every Atari 2600 title renders about 1.75x too tall
 
 Found by rendering frames and looking at them, which is the only way it could
 have been found -- every numeric check passes. The 2600's pixels are ~1.6:1,
@@ -712,7 +744,15 @@ measurement; the boards near the top of the range (Tapper at an estimated
 12.7 ms) are close enough to a 16.7 ms frame that the sign of the error
 matters. Re-measure on the device before believing any of them.
 
-### 57. `fps` is per BOARD, and koboy still paces everything at 60
+### 57. ~~`fps` is per BOARD, and koboy still paces everything at 60~~ CLOSED
+
+**CLOSED with #38.** The rate comes from each ROM's own `av_info`, so Tapper
+and Popeye get 33333 us/frame instead of running at nearly double speed, and a
+single core producing both extremes needs nothing special.
+
+The original entry follows.
+
+### 57 (original). `fps` is per BOARD, and koboy still paces everything at 60
 
 `retro_get_system_av_info().timing.fps` varies across the 227 romsets: 150
 report 60, 38 report 59.x, 12 report 58.x, 14 report 55.x, five 54.x, two 50
@@ -817,3 +857,40 @@ two builds differ in a capability. No koboy code path reaches the difference
 -- `.7z` is claimed by neither `config_core_for_rom` nor `romlist_is_rom`,
 and `tests/test_romlist.c` asserts that -- but if `.7z` is ever wanted, the
 device build is where the work is.
+
+### 65. The pixel aspect is honoured but not configurable, and one shape trade is unproven on a panel
+
+Closing #51 changed how EIGHT systems are presented, not one -- NES, Master
+System, Game Gear, Mega Drive, Atari 2600 and most FinalBurn Neo boards now
+render at the aspect their cores report, alongside the four that were already
+square. Every one of those was rendered and looked at on the host and every one
+improved. NONE has been looked at on a panel, and there is no way to turn it
+off: a `pixel_aspect = on/off` ini key would be four lines and was left out
+deliberately rather than guessed at, because the owner has not seen it yet.
+
+Two specific things to look at on the device:
+
+- **The vertical scale stays an integer and only the width carries the ratio.**
+  The alternative (fit the corrected aspect freely into the rect) fills more
+  panel in some cases at the cost of uneven row replication -- a 250-row PAL
+  frame at 2.88x draws rows 2 and 3 times alternately. With the rect now
+  aspect-aware the integer rule wins on size too for everything measured
+  (PAL Breakout is 1000x750, not the 667x500 it was before the rect knew), so
+  there is nothing to change unless a real title shows otherwise.
+- **The reserved rect is now `ceil(max_w * par)` wide.** For the Atari that is
+  NARROWER than before (280 source columns instead of 320) and holds a bigger
+  picture; for the NES it is wider (293 instead of 256). The faceplate is laid
+  out around it, so these are the first systems whose DMG chrome differs in
+  proportion from the Game Boy's. The chrome goldens cover the Game Boy and the
+  LCD layout only.
+
+### 66. A core that changes ONLY its aspect mid-run re-fits; one that changes only its DAR while the fit is already at max does not re-scale the rect twice
+
+`main.c` compares the pixel aspect the profile was resolved with against the
+core's current one and re-resolves the whole rect when it moves, which is
+correct and is exercised by `tests/smoke_host.sh`. What is not exercised is a
+core that announces a new aspect for a geometry that is ALREADY at max in a
+rect resolved for a different aspect: the rebuild path runs, so it should be
+fine, but no core in reach announces an aspect change at all (measured: the
+Game & Watch core, the only one that re-announces anything, reports
+`aspect_ratio = 0` on all 59 titles). Nothing to do until a core does it.
