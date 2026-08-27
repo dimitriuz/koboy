@@ -1266,3 +1266,73 @@ The next device session should prioritise, in order: a NickelMenu playtest
 with real touch input (the takeover, the touch d-pad, `MODE_MENU`'s
 interactive branches, save states), then anything further on
 `video_submit`'s cost now that it is the known bottleneck.
+
+## `present_divisor` above 3, and the first scripted run of `MODE_MENU`
+
+**2026-08-27, Libra 2, `koboy` run directly over ssh with `--frames` (Nickel
+never stopped, so this says nothing about the takeover).** The divisor plan,
+Task 1.
+
+### The range nobody had tried
+
+Darkwing Duck, 600 core frames per run, one run per value, 15 s idle between
+runs. The three values `docs/FOLLOWUPS.md` #26 measured on 2026-08-26 were
+re-run first and came back **identical to the frame**, which is what makes the
+four new rows comparable rather than merely new:
+
+| `present_divisor` | presented | fps | wall (ms) | submit mean |
+|---|---|---|---|---|
+| 1 | 115 | 11.2 | 10263 | 11.7 ms |
+| 2 | 102 | 9.9 | 10255 | 14.5 ms |
+| 3 (shipped) | 76 | 7.4 | 10243 | 15.0 ms |
+| 4 | 67 | 6.5 | 10243 | 17.7 ms |
+| 6 | 49 | 4.8 | 10261 | 18.4 ms |
+| 8 | 39 | 3.8 | 10243 | 25.6 ms |
+| 12 | 31 | 3.0 | 10268 | 24.8 ms |
+
+**Wall clock is flat across a 12x range.** 10243-10268 ms, a spread of 0.24%.
+Whatever this setting costs, it is not emulation speed, at any value.
+
+**The delivered rate is not 1/divisor, and that is what set the menu ladder's
+top at 8.** Requested presents fall as 1/d; delivered ones fall much more
+slowly, because koboy suppresses an unchanged frame and a wider gap means
+fewer of the frames it does present are duplicates. 8 -> 12 halves what is
+requested and removes 8 presented frames in ten seconds. Past 8 the setting
+stops buying what it exists to buy.
+
+`submit`'s mean rises with the divisor for the same reason: each presented
+frame carries more change, so more tiles are dirty. It is still the dominant
+stage at every value (`docs/FOLLOWUPS.md` #23), and `blit` (0.14-0.38 ms) and
+`refresh` (0.18-0.60 ms) are still noise beside it.
+
+**What this does NOT establish, and it is the important half:** nobody has yet
+looked at 4, 6 or 8 in motion on the panel. The numbers say what each value
+costs in frames; they say nothing about whether the reduced smearing is worth
+the choppiness. That judgement is the owner's, it can only be made while
+looking at the game, and MENU -> FRAMES exists so that it can be.
+
+### `MODE_MENU` driven by a script, on the device
+
+The first automated run of an in-game MENU handler on real hardware. A
+`koboy-arm` build carrying the `--ui-script` `menu` verb, run against
+`roms/darkwing-duck.gb` with `menu` + `tap 200 360` (row 4, FRAMES):
+
+```
+koboy: present_divisor 3          <- read back off the live pacer at startup
+koboy: present_divisor = 4        <- the row cycled it
+```
+
+and the ini it was pointed at went from `present_divisor = 3` to
+`present_divisor = 4` with its other keys intact. So on a real panel, with a
+real framebuffer and real geometry, the menu opened, the row was hit, the
+value cycled and it persisted.
+
+**Still not established on hardware:** the takeover (`scripts/koboy.sh` was
+not run and Nickel was never stopped), real TOUCH input into the menu (the
+script bypasses the touch transform and feeds panel coordinates directly),
+and save states -- `MENU_SAVE`/`MENU_LOAD` are now reachable from a script but
+nothing has driven them. See `docs/FOLLOWUPS.md` #76, which is now the
+cheapest way to close the oldest gap in this file.
+
+The temporary binary and ini files were removed afterwards; the device still
+runs the pre-change `koboy` and its `koboy.ini` is untouched.

@@ -133,6 +133,11 @@ deliberately deferred, not a known live bug.
     and `run_list`'s comment no longer claim MODE_MENU coverage they do not
     have.
 
+    **PARTLY CLOSED 2026-08-27** by the `menu` verb -- see #47. The emulator
+    loop does accept scripted input now, and GREYSCALE and FRAMES are driven
+    by `tests/smoke_host.sh` end to end. SAVE, LOAD, CHOOSE ROM and QUIT are
+    reachable through the same hook and are still driven by nothing.
+
 19. **The d-pad horizontal-arm term in `chrome_controls_top` is provably
     dead.** `src/chrome.c:41-42`. `top = min2(top, dcy - arm/2 - 1)` can never
     win against the line immediately before it (`dcy - dr - 1`): with
@@ -248,6 +253,41 @@ not a bug — and the v1 design spec predicted it: "Full-screen scrollers get no
 benefit and hit the worst case."
 
 ### 26. `present_divisor` trades frame rate directly against smearing
+
+**Extended 2026-08-27 (the divisor plan, Task 1): the range above 3 is now
+measured, and the setting is in the in-game MENU.** Same device, same title,
+same method as the original run below -- 1, 2 and 3 reproduced to the frame,
+which is what makes the four new rows comparable:
+
+| `present_divisor` | presented | fps | wall (ms) |
+|---|---|---|---|
+| 1 | 115 | 11.2 | 10263 |
+| 2 | 102 | 9.9 | 10255 |
+| 3 (shipped) | 76 | 7.4 | 10243 |
+| 4 | 67 | 6.5 | 10243 |
+| 6 | 49 | 4.8 | 10261 |
+| 8 | 39 | 3.8 | 10243 |
+| 12 | 31 | 3.0 | 10268 |
+
+Wall clock is flat across a 12x range, so the emulation cost of this setting
+is nil at every value -- what changes is only how many updates the panel gets.
+
+THE CURVE IS NOT 1/d, AND THAT IS WHAT SET THE LADDER'S TOP AT 8. Delivered
+frames fall much more slowly than requested ones, because koboy suppresses an
+unchanged frame and a wider gap means fewer of the frames it does present are
+duplicates: 8 -> 12 halves what is requested and removes only 8 presented
+frames in ten seconds. Past 8 you give up pacing granularity for almost no
+further reduction in panel updates, which is the only thing the setting exists
+to reduce. `submit`'s mean rises with the divisor for the same reason (15.0 ms
+at 3, 25.6 ms at 8): each presented frame carries more change.
+
+**What is still open is the only part a measurement cannot settle.** Nobody
+has yet SEEN 4, 6 or 8 in motion on the panel and said which they prefer. The
+whole point of putting it in MENU -> FRAMES is that this judgement is the
+owner's and has to be made while looking at the game. The numbers above say
+what it costs; they say nothing about whether it looks better.
+
+Original text follows.
 
 Measured 2026-08-26 on Darkwing Duck, 600 core frames, wall clock 10.24 s in
 every case (the core holds 60 Hz regardless):
@@ -576,7 +616,30 @@ Cheapest resolution: load a `.nes` or `.ngc`, open MENU, and step through the
 five. `koboy.log` names the active mapping on every launch, so whatever the
 owner settles on is recoverable from the log.
 
-### 47. The MENU handler for GREYSCALE has no automated coverage
+### 47. ~~The MENU handler for GREYSCALE has no automated coverage~~ -- CLOSED 2026-08-27
+
+Closed the way the original entry argued it should be: with a `--ui-script`
+hook into `MODE_MENU`, not a special case for one row. `uiscript.h` has a
+`menu` verb; it emits one state, marked in a parallel array, which the
+emulator loop consumes itself (`MODE_MENU` is the one screen no tap on a
+previous screen leads to -- it is entered by ASKING), after which the rest of
+the script drives `run_menu` through the cursor every other screen already
+shares.
+
+`tests/smoke_host.sh` now taps GREYSCALE and asserts `balanced -> equal` in
+both the log and the ini, taps FRAMES and asserts `3 -> 4` and `4 -> 6`, and
+taps RESET GAME as a negative control requiring both settings to stay put.
+Confirmed on the device as well as the host: a scripted run of `koboy-arm` on
+the Libra 2 opened the menu on the real panel and cycled `present_divisor`
+3 -> 4, rewriting `koboy.ini` and preserving its other keys.
+
+**Still uncovered, and it is the older half of #18:** `MENU_SAVE`, `MENU_LOAD`
+(and `run_slot_picker` behind them), `MENU_CHOOSE_ROM` and `MENU_QUIT`. All
+four are now REACHABLE from a script -- the hook is general -- but nothing
+scripts them yet. Save states in particular have still never run on hardware
+(see `TESTED.md`), and the hook is now the cheapest way to change that.
+
+Original text follows.
 
 `MENU_GRAY`'s branch in `src/main.c` -- cycle, `video_set_gray_map`,
 `config_save_gray_map` -- is not reachable from any test, for the same reason
@@ -1166,3 +1229,41 @@ today. The LCD strip would add L1/R1, which only six-button boards want (#62).
 Recommendation: not without (a) an on-device FBNeo measurement and (b) an
 answer to the square-max white bands. If the picture size alone is what
 matters, #73's per-system scale is a cheaper lever on the same axis.
+
+## The present_divisor menu entry (added 2026-08-27)
+
+### 75. `present_divisor` is one global key, and the menu now makes that visible
+
+The FRAMES row writes `present_divisor` in `koboy.ini`, which is per-CONFIG
+and not per-system. Cycle it while playing a Game & Watch title and the Game
+Boy's pacing moves too. That was always true of the ini key; what changed is
+that it is now trivially easy to do by accident, from inside a game, with no
+indication that the setting is shared.
+
+#29 and #32 already argue the value wants to be per-core or per-system, and
+for good measured reasons: Game & Watch has no scrolling at all, so the
+smearing #26 trades against cannot occur there and 3 is almost certainly too
+conservative, while the NES and the Neo Geo Pocket are much heavier per frame.
+This entry does not make that worse in behaviour -- it makes it worse in
+discoverability, which is the kind of gap that surfaces as "I changed
+something in one game and another game got choppy".
+
+The cheap fix is a per-system section in the ini (which does not exist yet);
+the cheaper one is a word in the row itself. Neither is worth doing before
+anyone has decided what value they actually want -- see #26's open half.
+
+### 76. Save states are now scriptable on the device, and still have not run there
+
+The `menu` verb (#47) makes every `MODE_MENU` row reachable from
+`--ui-script`, but only GREYSCALE, FRAMES and a RESET-GAME negative control
+are driven by anything. SAVE STATE and LOAD STATE go on to `run_slot_picker`,
+which is an ordinary `run_list` screen and would take the same flat script --
+two more taps.
+
+That matters more than the coverage does. `TESTED.md` has recorded since
+v2-core that save STATES (`state.c`, `safefile.c` -- a different mechanism
+from cartridge SRAM) have never run on a Kobo, because reaching them needed a
+hand on the device. They no longer do: `koboy-arm --rom X --ui-script` with
+`menu`, a tap on SAVE STATE and a tap on slot 1 would write one on the panel,
+unattended, with Nickel still up. This is now the cheapest open item on that
+list.

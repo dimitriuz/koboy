@@ -120,10 +120,10 @@ src/romlist.c         lists ONE directory of rom_dir at a time -- folders
                       two of which ARE the BIOS. `.bin` is deliberately not
                       claimed even though three cores accept it: exec.bin
                       and grom.bin are .bin
-src/uiscript.c        replays a synthetic input script (tap/key/idle) into
-                      the ROM BROWSER only -- --ui-script, for bounded
-                      unattended runs. MODE_MENU is not scripted; a run whose
-                      script selects nothing exits 4.
+src/uiscript.c        replays a synthetic input script (tap/key/idle/menu)
+                      into the ROM BROWSER and, via the `menu` verb, the
+                      in-game MENU -- --ui-script, for bounded unattended
+                      runs. A run whose script selects nothing exits 4.
 src/state.c           save-state paths and slot labels, KOBOY_STATE_SLOTS (3)
                       slots per ROM, 1-based
 src/safefile.c        temp-file/fsync/rename write + all-or-nothing read,
@@ -276,7 +276,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 72 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. |
+| `docs/FOLLOWUPS.md` | 76 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. #47 is CLOSED: `--ui-script` now has a `menu` verb and `MODE_MENU` is driven end to end, which makes #76 (save states, still never run on hardware) newly cheap. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -458,8 +458,11 @@ hiding.
   size instead of destroying it further. See `docs/FOLLOWUPS.md` #3
   (closed) for the numbers. **Save *states*** (`state.c`, `safefile.c` — a
   different mechanism from cartridge SRAM, reached through `MODE_MENU`) are
-  a separate code path and remain untested on hardware: this session drove
-  the ROM browser only, via `--ui-script`, never `MODE_MENU`.
+  a separate code path and remain untested on hardware. `--ui-script` can
+  now open `MODE_MENU` (the `menu` verb, 2026-08-27) and has cycled two of
+  its settings rows on the real panel, so writing a state on the device
+  unattended is two more taps of script — nobody has done it yet. See
+  `docs/FOLLOWUPS.md` #76.
 - **One verified device, and v2-core's UI layer has run on it only partially.**
   The 2026-08-26 session ran the `koboy` binary directly with `--frames` over
   ssh — never through `scripts/koboy.sh`, so Nickel was never stopped and the
@@ -468,7 +471,10 @@ hiding.
   `--ui-script` against a real directory listing, and device identification
   (panel size, stride, waveform) was correct. Still needed: a NickelMenu
   playtest with real touch input, exercising the takeover and `MODE_MENU`.
-  See `TESTED.md`.
+  A 2026-08-27 session added the first scripted `MODE_MENU` run on the panel
+  (MENU -> FRAMES cycling `present_divisor` and persisting it), which covers
+  the handlers but NOT the takeover and not real touch — the script feeds
+  panel coordinates straight past the touch transform. See `TESTED.md`.
 - `refresh_fixed_tiles` ships at a starting guess (40), still not a validated
   value: an on-device sweep (20/40/80/split-off) found 20/40/80
   behaviourally identical on real content, which the measurement method
@@ -479,9 +485,10 @@ hiding.
   `tests/test_input_touch.c` (search `#1`) now asserts the actual distinction
   (a tap anywhere in the pad steers under CROSS; the same tap reports no
   direction under RELATIVE until the origin is set), not just that both modes
-  compile. What is still open, and still the top item in `docs/FOLLOWUPS.md`'s
-  v2 section: `--ui-script`, `MODE_MENU`'s coverage gap, and four smaller
-  chrome/video findings from this plan.
+  compile. `MODE_MENU`'s coverage gap is closed for the settings rows
+  (`docs/FOLLOWUPS.md` #47) and still open for SAVE/LOAD/CHOOSE ROM/QUIT,
+  which the same hook reaches and nothing drives (#76). Four smaller
+  chrome/video findings from that plan are also still open.
 
 ## Conventions
 

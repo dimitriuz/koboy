@@ -15,20 +15,29 @@
    smearing, choppier motion.
 
    3 is the shipped default and the only value a full game has been played at.
-   MEASURED (docs/FOLLOWUPS.md #26, Darkwing Duck, 600 core frames): 3 -> 76
-   presented, 2 -> 102, 1 -> 115, at an unchanged 10.24 s wall clock, and the
-   owner judged 2 "the same or even worse" on the panel. Every value tried
-   before this task was 3 or below; the direction the evidence points is UP,
-   which is why the in-game FRAMES entry offers 4, 6 and 8.
+   MEASURED on a Libra 2, Darkwing Duck, 600 core frames per run, wall clock
+   10.24-10.27 s in every single case -- so this costs nothing in emulation
+   speed at any value:
 
-   The MAX is a usability floor, not a technical one. At 8 the ceiling is 7.5
-   presented frames per second on a 60 Hz core, which is already at the
-   measured presented rate of the shipped default (7.4 fps) -- above it the
-   divisor stops being what limits the picture and video_submit's ~17 ms does
-   (docs/FOLLOWUPS.md #23), so raising it further costs motion and buys
-   nothing. It is also what stops a hand-edited `present_divisor = 100000`
-   from looking exactly like a hang: config_load rejects anything outside
-   [1, MAX] and keeps the default. */
+     divisor    1     2     3     4     6     8    12
+     presented 115   102    76    67    49    39    31
+     fps      11.2   9.9   7.4   6.5   4.8   3.8   3.0
+
+   1, 2 and 3 reproduce docs/FOLLOWUPS.md #26 to the frame; 4 and above had
+   never been run before Task 1 of the divisor plan. The owner judged 2 "the
+   same or even worse" than 3 on the panel, which is why the ladder goes UP.
+
+   THE MAX IS 8 BECAUSE OF THE SHAPE OF THAT TABLE, not because of a limit.
+   The delivered rate falls far more slowly than 1/divisor, because koboy
+   suppresses an unchanged frame and a wider gap means fewer of the frames it
+   does present are duplicates: 8 -> 12 halves what is REQUESTED and removes
+   only 8 presented frames in ten seconds. Past 8 you give up pacing
+   granularity for almost no further reduction in panel updates, which is the
+   only thing the setting exists to reduce.
+
+   The bound also stops a hand-edited `present_divisor = 100000` from looking
+   exactly like a hang: config_load rejects anything outside [1, MAX] and
+   keeps the default. */
 #define KOBOY_PRESENT_DIVISOR_DEFAULT 3
 #define KOBOY_PRESENT_DIVISOR_MAX     8
 /* 16.16 fixed point 1.0. The unit for every aspect ratio this project
