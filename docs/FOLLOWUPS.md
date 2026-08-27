@@ -1671,3 +1671,34 @@ no timestamp around it in `koboy.log` and nobody has watched the panel during
 one. If it turns out to be seconds rather than a moment, the answer is
 probably a progress line on the panel rather than a same-core fast path,
 which is the thing this design deliberately does not have.
+
+### 95. Two unexplained SIGSEGVs, and what a `--frames` run cannot rule out
+
+The owner's `koboy.log` holds three `rc=139` exits on 2026-08-27. One is the
+mid-session core switch, fixed in `2037722`. The other two are not explained:
+
+| time | what preceded it |
+|---|---|
+| 13:19:00 | eight `gray_map` cycles then `present_divisor` 4, 6, 8, in MODE_MENU |
+| 13:20:06 | a fresh launch of Pokemon Emerald that logged every startup line, `present_divisor 8`, then faulted before presenting a frame |
+
+Both involve gpSP. Both sit next to `present_divisor = 8`.
+
+**Attempted reproduction, on the device, and it failed to reproduce:** six runs
+of Emerald at `--frames 600`, three at divisor 8 and three at divisor 3, all
+`rc=0`. The divisor alone does not do it.
+
+What that does NOT rule out, and this is the point of the entry: every run
+available to a remote session goes through `./koboy --frames N` with **Nickel
+up, no takeover, no `EVIOCGRAB`, and no real touch input**. The owner's
+crashes happened under `scripts/koboy.sh`, which stops Nickel, grabs the input
+devices and drives everything from the panel. Running that over ssh is
+forbidden (`docs/device-workflow.md`: it is the one mistake that has already
+cost a reboot), so the code path the crashes actually took cannot be exercised
+remotely at all.
+
+So the honest state is: not the divisor by itself, not reproducible in the
+mode a remote session can run, and the suspicious surface is the takeover and
+input path rather than pacing. The next person with the device in hand should
+try cycling `gray_map` repeatedly under a real takeover, which is what
+preceded the first one.
