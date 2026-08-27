@@ -40,6 +40,50 @@
    keeps the default. */
 #define KOBOY_PRESENT_DIVISOR_DEFAULT 3
 #define KOBOY_PRESENT_DIVISOR_MAX     8
+
+/* AREA-AWARE PRESENT PACING -- the settle model's two measured constants, in
+   milliseconds. pacer_settle_us charges base + full * dirty/whole for every
+   presented frame and holds the next present until it has elapsed.
+   config/koboy.ini carries the measurement and the sanity bracket that
+   confirms it; the short version is that present_divisor alone paces by FRAME
+   COUNT, so a two-tile sprite move and a whole-screen scroll were paced
+   identically although they cost this panel an order of magnitude apart. The
+   scroll therefore had a new full-area update started several times faster
+   than the panel could finish one, and the camera caught a transition that
+   never settled -- the "flashes white on fast scrolling" the owner reported
+   against the 1-bit build that had just fixed sprite smearing.
+
+   MEASURED, 2026-08-27, koboy-probe --coexist on the Libra 2: a full 800x720
+   game rect under the waveform AUTO picks for 1-bit content takes 153.5 ms.
+   The fit across five region sizes spanning 49x in area is 144.4 ms +
+   15.8 ns/px, reproduced to 0.1% on a second run. See config/koboy.ini for
+   the table and Appendix D of the v1 design spec for the method.
+
+   SO WHY IS THE BASE 0 WHEN THE PANEL'S FIXED TERM IS 144 MS? Because this
+   model does not predict how long an update takes -- it decides when starting
+   the next one does VISIBLE harm, and that is not the same quantity. The
+   duration is 94% fixed, but a two-tile rect caught mid-transition is two
+   tiles of artefact that nobody has ever reported, while a full rect caught
+   mid-transition is the washed-out screen in the owner's video. Charging the
+   real 144 ms to every update would pin the whole device to 6.5 fps on static
+   screens as well as scrolls -- measurably worse than what ships today, and
+   no better than the `present_divisor = 8` the owner can already set by hand.
+   The base is a KEY and not a constant precisely so that verdict can be
+   revisited on the panel without a rebuild.
+
+   THE CEILING IS A HANG GUARD, not a capability bound: no waveform on any
+   panel this project has measured comes within a factor of two of a second
+   per update, and a hand-edited settle_full_ms = 100000 would present one
+   frame every hundred seconds, which is indistinguishable from a freeze. */
+#define KOBOY_SETTLE_MS_MAX 1000
+#define KOBOY_SETTLE_BASE_MS_DEFAULT 0
+/* 150 and not the measured 153.5: the third significant figure is below what
+   this device reproduces between sessions (Appendix B records a 2.2x spread
+   across instruments), and 150 lands the first post-hold frame one frame
+   earlier at the shipped divisor. Rounding DOWN is also the safe direction to
+   be wrong in for responsiveness and the unsafe one for flashing, which is
+   the trade the owner is the only judge of -- hence the key. */
+#define KOBOY_SETTLE_FULL_MS_DEFAULT 150
 /* 16.16 fixed point 1.0. The unit for every aspect ratio this project
    carries, and fixed point rather than float for the reason the scaler is:
    the numbers end up in the pixel path, and nothing in the pixel path

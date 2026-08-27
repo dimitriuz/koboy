@@ -394,6 +394,16 @@ echo "ok: menu build runs"
 
 # ------------------------------------------- present_divisor, end to end
 #
+# EVERY ini in this section PINS settle_base_ms/settle_full_ms TO 0, and that
+# is not boilerplate. Area-aware pacing (src/pacing.c) holds the next present
+# until the panel has had time to settle the last one, so with the shipped
+# defaults in play the counts below stop being 120/divisor exactly and start
+# depending on the wall clock -- which would make an exact-count assertion
+# flaky rather than wrong. Pinning them here says out loud what these runs
+# were previously silent about: they are measuring the DIVISOR. The hold has
+# its own end-to-end section further down, which asserts an inequality
+# precisely because it is timing-dependent.
+#
 # TWO separate claims, and they fail independently, so they get two runs each.
 #
 # 1. The ini's value reaches the thing that decides what the panel sees. This
@@ -414,7 +424,7 @@ ini="$(mktemp)"; script="$(mktemp)"
 # --- 1. the divisor reaches the panel path
 for pair in "3 40" "6 20"; do
     want_d=${pair% *}; want_p=${pair#* }
-    printf 'present_divisor = %s\n' "$want_d" > "$ini"
+    printf 'settle_full_ms = 0\nsettle_base_ms = 0\npresent_divisor = %s\n' "$want_d" > "$ini"
     rc=0
     out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
             --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
@@ -442,7 +452,7 @@ echo "ok: present_divisor from the ini reaches the panel (120/d presented frames
 # not be clamped to 1 either -- it keeps the default. Asserted through the
 # PRESENTED COUNT and not only the log line, so a build that logged 3 while
 # pacing at 1 still fails.
-printf 'present_divisor = 0\n' > "$ini"
+printf 'settle_full_ms = 0\nsettle_base_ms = 0\npresent_divisor = 0\n' > "$ini"
 rc=0
 out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
@@ -505,7 +515,7 @@ echo "ok: MENU -> FRAMES cycles the divisor and writes it back to the ini"
 # MENU_FRAMES branch this run presents 120 and everything else about it still
 # passes: the log line and the ini would both say 2.
 printf 'menu\ntap 200 360\n' > "$script"
-printf 'present_divisor = 1\n' > "$ini"
+printf 'settle_full_ms = 0\nsettle_base_ms = 0\npresent_divisor = 1\n' > "$ini"
 rc=0
 out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
@@ -520,6 +530,124 @@ echo "$out" | grep -q '^presented=60$' || {
     echo "FAIL: the FRAMES row did not change the RUNNING pacer (wanted presented=60)"
     rm -rf "$romdir" "$ini" "$script"; exit 1; }
 echo "ok: the FRAMES row takes effect on the running pacer, not only in the ini"
+
+# ----------------------------------------- area-aware pacing, end to end
+#
+# present_divisor paces by FRAME COUNT alone, so a two-tile sprite move and a
+# whole-screen scroll went to the panel at the same rate although they cost it
+# an order of magnitude apart. The settle hold (src/pacing.c) fixes that, and
+# the ONE claim that separates it from "present less often" is that the charge
+# SCALES WITH AREA. So the discriminating test is not one run, it is a pair
+# that differ only in which half of the model carries the same 100 ms:
+#
+#   A: settle_base_ms = 100   -- charged on EVERY present, whatever its area
+#   B: settle_full_ms = 100   -- charged in proportion to the dirty area
+#
+# The stub's walking pixel dirties a handful of tiles, so under B only the
+# first frame (which is full-dirty by construction -- video_create seeds prev
+# to force it) pays anything much. A therefore holds far more frames than B.
+# A build that ignored the area and charged `full` flat would make the two
+# runs identical, and a build with no hold at all would make both zero.
+#
+# Held counts rather than presented counts are what is asserted, because
+# `settle-held` is the only number that distinguishes a hold that never binds
+# from a hold that is not there. Inequalities rather than exact values,
+# because unlike the divisor this IS wall-clock dependent -- see the note at
+# the top of the previous section.
+settle_held_of() { echo "$1" | sed -n 's/.*, \([0-9]*\) settle-held,.*/\1/p'; }
+
+printf 'settle_base_ms = 100\nsettle_full_ms = 0\npresent_divisor = 1\n' > "$ini"
+out_a=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --panel 1264x1680 --frames 240 2>&1) || {
+    echo "FAIL: settle_base run exited nonzero"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+
+printf 'settle_base_ms = 0\nsettle_full_ms = 100\npresent_divisor = 1\n' > "$ini"
+out_b=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --panel 1264x1680 --frames 240 2>&1) || {
+    echo "FAIL: settle_full run exited nonzero"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+
+printf 'settle_base_ms = 0\nsettle_full_ms = 0\npresent_divisor = 1\n' > "$ini"
+out_c=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --panel 1264x1680 --frames 240 2>&1) || {
+    echo "FAIL: settle-disabled run exited nonzero"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+
+held_a=$(settle_held_of "$out_a"); held_b=$(settle_held_of "$out_b")
+held_c=$(settle_held_of "$out_c")
+pres_a=$(echo "$out_a" | sed -n 's/^presented=//p')
+pres_b=$(echo "$out_b" | sed -n 's/^presented=//p')
+pres_c=$(echo "$out_c" | sed -n 's/^presented=//p')
+echo "settle: base-only held=$held_a presented=$pres_a |" \
+     "area-only held=$held_b presented=$pres_b | off held=$held_c presented=$pres_c"
+
+# The summary line has to carry the number at all, or nothing below means
+# anything -- an empty string compares equal to an empty string in `-gt`'s
+# error path and would look like a pass on some shells.
+case "$held_a$held_b$held_c$pres_a$pres_b$pres_c" in
+    *[!0-9]*|"") echo "FAIL: could not read settle-held / presented off the summary lines"
+                 echo "$out_a" | tail -3
+                 rm -rf "$romdir" "$ini" "$script"; exit 1;;
+esac
+
+# 1. Disabled means DISABLED: no holds, and every core frame presented at
+#    divisor 1 (the stub animates, so nothing is suppressed as unchanged).
+[ "$held_c" -eq 0 ] || {
+    echo "FAIL: settle_base_ms = settle_full_ms = 0 still held $held_c frames"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+[ "$pres_c" -eq 240 ] || {
+    echo "FAIL: the disabled run presented $pres_c of 240"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+
+# 2. A flat per-update charge throttles hard: 100 ms against a 16.7 ms frame
+#    means at most about one present in six.
+[ "$held_a" -gt 100 ] || {
+    echo "FAIL: settle_base_ms = 100 held only $held_a of 240 frames"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+[ "$pres_a" -lt 60 ] || {
+    echo "FAIL: settle_base_ms = 100 still presented $pres_a of 240"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+
+# 3. THE AREA CLAIM. The same 100 ms spent on the area term holds an order of
+#    magnitude fewer frames, because the content is small updates. This is the
+#    assertion that fails if pacer_settle_us stops scaling with dirty_px.
+[ "$held_b" -lt 50 ] || {
+    echo "FAIL: the area-scaled charge held $held_b frames on small updates" \
+         "-- it is behaving like a flat charge"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+[ "$held_a" -gt "$held_b" ] || {
+    echo "FAIL: base-only held $held_a and area-only held $held_b;" \
+         "the charge is not scaling with area"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+[ "$pres_b" -gt "$pres_a" ] || {
+    echo "FAIL: the area-scaled run presented $pres_b, no more than the flat run's $pres_a"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+
+# 4. And the model is REPORTED, in the negative case too -- "did the throttle
+#    engage" is the first question any scrolling report asks, and a line that
+#    only appears when it is on cannot answer it.
+echo "$out_c" | grep -q '^koboy: settle model 0 ms + 0 ms/full rect' || {
+    echo "FAIL: the disabled run did not report its settle model"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "$out_a" | grep -q '^koboy: settle model 100 ms + 0 ms/full rect' || {
+    echo "FAIL: the base-only run did not report its settle model"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "ok: the settle hold throttles by AREA, is reported, and switches off cleanly"
+
+# A hand-edited nonsense value must be clamped, not applied: a negative would
+# reach pacer_settle_us' uint32_t parameters as an enormous number and hold
+# the panel for weeks, which is a freeze rather than a slow setting.
+printf 'settle_base_ms = -5\nsettle_full_ms = 999999\npresent_divisor = 1\n' > "$ini"
+out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --panel 1264x1680 --frames 60 2>&1) || {
+    echo "FAIL: clamped-settle run exited nonzero"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "$out" | grep -q '^koboy: settle model 0 ms + 1000 ms/full rect' || {
+    echo "FAIL: settle_base_ms = -5 / settle_full_ms = 999999 was not clamped"
+    echo "$out" | grep 'settle model'
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "ok: out-of-range settle values are clamped to [0, KOBOY_SETTLE_MS_MAX]"
 
 # The SAME hook over the GREYSCALE row, which is what makes this coverage
 # rather than a one-off: docs/FOLLOWUPS.md #47 was filed against MENU_GRAY's

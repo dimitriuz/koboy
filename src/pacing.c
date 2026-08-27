@@ -18,6 +18,13 @@ void pacer_init(koboy_pacer *p, uint64_t now_us, int divisor, uint32_t frame_us)
     p->frames = 0;
     pacer_set_divisor(p, divisor);
     p->frame_us = frame_us ? frame_us : (uint32_t)KOBOY_FRAME_US;
+    p->hold_until_us = 0;
+    p->last_settle_us = 0;
+    p->held = 0;
+    /* 0, so the very first frame of a session presents: it is the one frame
+       that is certain to be full-dirty (video_create seeds prev to force it)
+       and the panel is certain to be idle. */
+    p->next_frame = 0;
 }
 
 /* Contract in pacing.h. start_us is walked BACK by the frames already run, not
@@ -73,9 +80,63 @@ uint64_t pacer_delay_us(const koboy_pacer *p, uint64_t now_us)
     return now_us >= due ? 0 : due - now_us;
 }
 
-bool pacer_tick(koboy_pacer *p)
+/* Contract in pacing.h.
+
+   Integer throughout and in this order: dirty_px is at most a few million and
+   full_us at most a few hundred thousand, so the product fits a uint64_t with
+   forty bits to spare, while dividing first would quantise every update
+   smaller than the game rect to zero. */
+uint32_t pacer_settle_us(uint32_t base_us, uint32_t full_us,
+                         long dirty_px, long whole_px)
 {
-    bool present = (p->frames % (uint64_t)p->divisor) == 0;
+    uint64_t area_us = 0;
+    if (full_us && whole_px > 0 && dirty_px > 0) {
+        /* CLAMPED, and the clamp is live: video_split_dirty may emit rects
+           that overlap (main.c's own comment says so), so a summed dirty area
+           CAN exceed the game rect and would otherwise charge more than a full
+           screen for a screen. */
+        uint64_t d = (uint64_t)dirty_px, w = (uint64_t)whole_px;
+        if (d > w) d = w;
+        area_us = ((uint64_t)full_us * d) / w;
+    }
+    uint64_t total = (uint64_t)base_us + area_us;
+    return total > 0xFFFFFFFFull ? 0xFFFFFFFFu : (uint32_t)total;
+}
+
+/* Contract in pacing.h. */
+void pacer_presented(koboy_pacer *p, uint64_t now_us, uint32_t settle_us)
+{
+    p->last_settle_us = settle_us;
+    p->hold_until_us = settle_us ? now_us + settle_us : 0;
+}
+
+/* Contract in pacing.h.
+
+   THE TWO GATES ARE AND-ED, NOT MAX-ED, and that is what keeps present_divisor
+   a ceiling rather than a target. The divisor sets the minimum gap; the hold
+   vetoes a frame whose panel is still busy, and the next frame after that is
+   the one that gets through. So the delivered rate is never faster than the
+   divisor allows and never faster than the panel can finish -- which is what
+   the owner produced by hand when they raised the divisor to 8, except that
+   here it lasts only as long as the large updates do. */
+bool pacer_tick(koboy_pacer *p, uint64_t now_us)
+{
+    bool present = p->frames >= p->next_frame;
+    if (present && p->hold_until_us && now_us < p->hold_until_us) {
+        present = false;
+        p->held++;
+    }
+    /* Advanced HERE and not in pacer_presented, and the difference is a real
+       bug rather than a preference. main.c does not call pacer_presented for
+       every frame this returns true for: a frame the core marks unchanged
+       produces zero dirty rects and takes an early exit, having sent the panel
+       nothing. If the gate advanced on presentation, a static screen would
+       leave next_frame behind forever and video_submit_rects -- the measured
+       17 ms bottleneck (CLAUDE.md) -- would run on EVERY core frame instead of
+       every divisor-th. The gate is about how often we LOOK, and looking is
+       what costs; the settle hold is about what the panel is doing, and that
+       is what pacer_presented is for. */
+    if (present) p->next_frame = p->frames + (uint64_t)p->divisor;
     p->frames++;
     return present;
 }

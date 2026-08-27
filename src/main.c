@@ -1010,6 +1010,10 @@ int main(int argc, char **argv)
     stats_reset(&stats);
     unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
     unsigned long rects_emitted = 0;
+    /* Run-scoped, like presented and frames_done, because the pacer is
+       per-SESSION: pacer_init zeroes its counters, so reading pace.held at
+       session_end would report only the last game a switching run played. */
+    unsigned long settle_held = 0;
     uint64_t last_sram_us = 0, last_cleanup_us = 0;
     /* --frames N is a budget for the RUN. Each session gets its own pacer
        (a new core reports its own frame rate), and pacer_init zeroes
@@ -1492,6 +1496,18 @@ int main(int argc, char **argv)
        value -- which is the plumbing nothing else can see. It is also the
        only place the clamp inside pacer_set_divisor is observable. */
     say("koboy: present_divisor %d\n", pace.divisor);
+    /* Printed unconditionally, INCLUDING the disabled 0/0 case, because "did
+       the throttle engage" is the first question any report about scrolling
+       will ask and a line that only appears when it is on cannot answer it in
+       the negative. The full-rect figure is spelled out rather than left to
+       be recomputed from the two halves: it is the number that has to be
+       compared against 1000/present_divisor*frame_ms to see whether the
+       throttle can bind at all. */
+    say("koboy: settle model %d ms + %d ms/full rect (%u us at a full %dx%d)\n",
+        cfg.settle_base_ms, cfg.settle_full_ms,
+        pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
+                        (uint32_t)cfg.settle_full_ms * 1000u, 1, 1),
+        prof.game_w, prof.game_h);
 
     /* Re-anchored per session, not reset: both are wall-clock marks for
        "how long since the last flush / cleanup", and a session that starts
@@ -1770,6 +1786,19 @@ int main(int argc, char **argv)
                menu closed. The wall clock does need re-anchoring (the menu may
                have been open for a minute) -- that is all pacer_rebase does. */
             pacer_rebase(&pace, pf->now_us(pf->ctx));
+            /* And charge the redraw_chrome above, which repainted the WHOLE
+               panel. Rebasing does not do this and must not: hold_until_us is
+               an absolute wall-clock mark, so a menu open for thirty seconds
+               leaves it long expired -- correctly, because the panel finished
+               that work thirty seconds ago. What it did NOT finish is the
+               repaint we just issued, and the first frame back from a menu is
+               exactly where a collision would be most visible: everything on
+               screen changed at once. A full-rect charge is a lower bound on a
+               full-PANEL repaint, which is the right direction to be wrong in. */
+            pacer_presented(&pace, pf->now_us(pf->ctx),
+                            pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
+                                            (uint32_t)cfg.settle_full_ms * 1000u,
+                                            1, 1));
             continue;
         }
 
@@ -1927,7 +1956,12 @@ int main(int argc, char **argv)
        4.9 rejects it outright, so dropping this breaks the ARM build only. */
     geometry_done: ;
 
-        bool present = pacer_tick(&pace);
+        /* now_us is read ONCE and handed to pacer_tick rather than letting the
+           pacer call the platform: pacer.c has no platform dependency and must
+           keep none -- it is pure enough to test against a synthetic clock,
+           which is the only way the settle hold can be asserted at all
+           (tests/test_pacing.c). */
+        bool present = pacer_tick(&pace, pf->now_us(pf->ctx));
         if (!present) goto sram_check;
 
         /* A NULL g_frame is the core's can-dupe signal, which video_submit_rects
@@ -2039,6 +2073,34 @@ int main(int argc, char **argv)
         }
         stats_add(&stats, KOBOY_STAGE_BLIT, blit_us);
         stats_add(&stats, KOBOY_STAGE_REFRESH, refresh_us);
+
+        /* AREA-AWARE PACING: charge the panel time this update just cost, so
+           the next divisor-eligible frame is vetoed until the panel has had a
+           chance to finish it.
+
+           Charged from dirty_px -- the SAME sum config_promote_full is given a
+           few lines up -- rather than from the game rect, because that is the
+           whole point: a two-tile sprite move gets base alone and keeps
+           present_divisor's rate exactly, while a full-screen scroll gets
+           base + full and drops to whatever the panel can actually complete.
+           A run where every present is a sprite move is bit-identical to one
+           without this call.
+
+           AFTER the refresh loop, not before it: the hold measures from when
+           the panel was handed the work, and pf->refresh is non-blocking, so
+           `now` here is within a millisecond of the submission it is timing --
+           whereas taking it before the blit would charge the panel for
+           koboy's own blit time as well.
+
+           Note what is NOT here: no band-splitting, no dropping part of a
+           frame. The update that goes out is the whole update; only the NEXT
+           one waits. Splitting a scroll across frames trades a flash for
+           tearing, and tearing on a scroll is worse. */
+        pacer_presented(&pace, pf->now_us(pf->ctx),
+                        pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
+                                        (uint32_t)cfg.settle_full_ms * 1000u,
+                                        dirty_px,
+                                        (long)prof.game_w * (long)prof.game_h));
         presented++;
         rects_emitted += (unsigned long)nrects;
 
@@ -2065,6 +2127,18 @@ int main(int argc, char **argv)
                would disturb chrome that has no reason to change. */
             pf->refresh(pf->ctx, prof.game_x, prof.game_y, prof.game_w, prof.game_h,
                         KOBOY_REFRESH_FULL);
+            /* And charged, because the panel does not care which line of this
+               file asked. A cleanup is by definition a WHOLE-rect update, so
+               it costs the full settle; not charging it would let the next
+               presented frame land on top of the one update in the whole loop
+               that is guaranteed to be the most expensive. This overwrites the
+               charge the presented frame just made rather than adding to it --
+               the panel is doing one thing at a time and the flash is what it
+               is now doing. */
+            pacer_presented(&pace, last_cleanup_us,
+                            pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
+                                            (uint32_t)cfg.settle_full_ms * 1000u,
+                                            1, 1));
         }
 
 sram_check:
@@ -2106,15 +2180,20 @@ sram_check:
     video_destroy(vid);
     input_destroy(in);
     frames_done += pace.frames;
+    settle_held += (unsigned long)pace.held;
 
     if (mode != MODE_MAIN) break;
     }   /* end of the session loop */
 
 session_end:
-    say("koboy: %s, %lu presented frames, %lu game-rect cleanups, "
+    /* `settle-held` is the run's only evidence that area pacing did anything:
+       a build where the hold never binds and a build without the hold at all
+       print the same presented= count, and differ only in this number. It is a
+       running total across every session in the process, like `presented`. */
+    say("koboy: %s, %lu presented frames, %lu settle-held, %lu game-rect cleanups, "
         "%lu large-area full refreshes, %lu rects emitted\n",
-        g_stop ? "stopped by signal" : "stopped", presented, cleanups,
-        big_refreshes, rects_emitted);
+        g_stop ? "stopped by signal" : "stopped", presented,
+        settle_held, cleanups, big_refreshes, rects_emitted);
     /* Always printed, even under --quiet, for the same reason presented= is:
        this is the run's evidence, and a run whose numbers were suppressed is a
        run that has to be done again. */

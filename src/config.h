@@ -36,6 +36,12 @@ typedef struct {
                                      every absolute timing this project has
                                      measured moved by up to a factor of 2.2
                                      between sessions -- see config/koboy.ini. */
+    /* AREA-AWARE PRESENT PACING. settle_base_ms is what any panel update costs
+       regardless of size; settle_full_ms is what the area term ADDS at a rect
+       covering the whole game area. Both 0 disables the throttle and restores
+       pure present_divisor pacing. See pacer_settle_us and config/koboy.ini. */
+    int      settle_base_ms;
+    int      settle_full_ms;
     int      scale_ceiling;      /* auto-fit cap for the loaded system, 0 = none.
                                     Set from config_scale_ceiling_for_rom at the
                                     same point the core is chosen. */

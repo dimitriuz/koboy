@@ -862,6 +862,40 @@ TEST_MAIN({
     CHECK_EQ_INT(c.key_start, 304);
     CHECK_EQ_INT(c.key_select, 305);
 
+    /* THE SETTLE KEYS, and the clamp that stops a hand-edited value from
+       being a freeze rather than a slow setting. pacer_settle_us takes both
+       as uint32_t, so a negative arriving unclamped becomes about 4.29e9
+       microseconds -- an hour and a quarter of hold after a single presented
+       frame, which on the panel is indistinguishable from a hang. The upper
+       bound is the same argument the present_divisor ceiling makes.
+
+       Both directions are asserted on both keys, because one clamp helper
+       serves both and a mistake that reached only one of them would still
+       leave a file that freezes the device. */
+    f = fopen("build/settle.ini", "w");
+    fprintf(f, "settle_base_ms = 34\nsettle_full_ms = 96\n");
+    fclose(f);
+    config_defaults(&c);
+    CHECK(config_load(&c, "build/settle.ini"));
+    CHECK_EQ_INT(c.settle_base_ms, 34);
+    CHECK_EQ_INT(c.settle_full_ms, 96);
+
+    f = fopen("build/settle_bad.ini", "w");
+    fprintf(f, "settle_base_ms = -1\nsettle_full_ms = 100000\n");
+    fclose(f);
+    config_defaults(&c);
+    CHECK(config_load(&c, "build/settle_bad.ini"));
+    CHECK_EQ_INT(c.settle_base_ms, 0);
+    CHECK_EQ_INT(c.settle_full_ms, KOBOY_SETTLE_MS_MAX);
+
+    f = fopen("build/settle_bad2.ini", "w");
+    fprintf(f, "settle_base_ms = 999999\nsettle_full_ms = -7\n");
+    fclose(f);
+    config_defaults(&c);
+    CHECK(config_load(&c, "build/settle_bad2.ini"));
+    CHECK_EQ_INT(c.settle_base_ms, KOBOY_SETTLE_MS_MAX);
+    CHECK_EQ_INT(c.settle_full_ms, 0);
+
     /* a missing file is not an error: defaults stand */
     config_defaults(&c);
     CHECK(config_load(&c, "build/definitely-absent.ini"));

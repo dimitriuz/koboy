@@ -14,6 +14,15 @@
 #include <string.h>
 #include <unistd.h>
 
+/* One clamp for both settle keys, for the reason pacer_set_divisor is one
+   function: two copies of a bound is how one of them eventually loses it. */
+static int clamp_settle_ms(int v)
+{
+    if (v < 0) return 0;
+    if (v > KOBOY_SETTLE_MS_MAX) return KOBOY_SETTLE_MS_MAX;
+    return v;
+}
+
 void config_defaults(koboy_config *c)
 {
     memset(c, 0, sizeof *c);
@@ -91,6 +100,13 @@ void config_defaults(koboy_config *c)
        koboy.log `stages` line and `rects` count at 20/40/80 the first time a
        device is available, and record the result in TESTED.md. */
     c->refresh_fixed_tiles = 40;
+    /* AREA-AWARE PRESENT PACING -- MEASURED, and the measurement is the whole
+       reason these are not a guess. See config/koboy.ini for the numbers and
+       docs/superpowers/specs/2026-08-24-koboy-design.md Appendix D for how
+       they were taken. Setting BOTH to 0 restores pure present_divisor pacing,
+       which is what every build before this one did. */
+    c->settle_base_ms = KOBOY_SETTLE_BASE_MS_DEFAULT;
+    c->settle_full_ms = KOBOY_SETTLE_FULL_MS_DEFAULT;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->gray_map = KOBOY_GRAY_DEFAULT;
     c->grab_input = true;
@@ -1181,6 +1197,15 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
         else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
+        /* Both CLAMPED to [0, KOBOY_SETTLE_MS_MAX], and the clamp is live in
+           both directions. Negative would make pacer_settle_us' uint32_t
+           arguments enormous, which is a freeze rather than a fast setting --
+           the one failure mode a pacing key must not have. The ceiling is the
+           same argument as present_divisor's: a hand-edited 100000 would look
+           exactly like a hang, and no panel this project has measured is
+           within an order of magnitude of a second per update. */
+        else if (!strcmp(k, "settle_base_ms")) c->settle_base_ms = clamp_settle_ms(atoi(v));
+        else if (!strcmp(k, "settle_full_ms")) c->settle_full_ms = clamp_settle_ms(atoi(v));
         else if (!strcmp(k, "refresh_fixed_tiles")) {
             /* Clamped to >= 0, not merely accepted. video_split_dirty's cost
                sum adds fixed_tiles once per candidate rect (src/video.c), so
