@@ -373,6 +373,236 @@ figure exists, the K1/K2 and KEY/TOP discs have never been touched by a real
 finger, the two BIOS files have never been read off a FAT32 partition, and no
 Master System `.srm` has survived a real session.
 
+### Mega Drive, SNES and PC Engine: NOT RUN ON THE DEVICE, 2026-08-27
+
+Systems twelve, thirteen and fourteen, and **none of them has been on a
+Kobo**. The test device was off the LAN for the whole session --- not merely
+port 22 closed, it did not answer ICMP either, from the first probe to the
+last --- so every device figure in this section is EXTRAPOLATED and is marked
+as such. The ARM cores cross-build, strip, and pass `scripts/verify-core.sh`.
+
+The SNES half of this is the part worth reading first, because **the v1
+design spec ruled that system out of scope on CPU grounds** and this section
+exists to answer whether that judgement still holds. It does not.
+
+| | Mega Drive (Genesis Plus GX) | SNES (snes9x2005) | PC Engine (beetle-pce-fast) |
+|---|---|---|---|
+| Extensions claimed | `.md` ONLY | `.sfc`, `.smc` | `.pce` ONLY |
+| Geometry before the first `retro_run` | 256x192 base, **348x240 max** | 256x224 base, **512x512 max** | 256x243 base, **512x243 max** |
+| ...and after | **320x224** --- changes on frame 2 | unchanged | **352x243** on many titles |
+| `SET_GEOMETRY` at runtime | yes, once per title | only for a 512-wide hi-res mode | **yes, repeatedly --- see below** |
+| Display aspect reported | 1.5238 | 1.3333 | 1.2000 |
+| Pixel format | RGB565 | RGB565 | RGB565 |
+| Reported fps | 59.9227, **49.7015 for PAL titles** | 59.9227 | 59.8200 |
+| Asks for a system directory | yes, runs without one | no | no |
+| `RETRO_MEMORY_SAVE_RAM` | `0x10000` at load, **shrinks** | constant, does not move | constant |
+| BIOS required | no | no | no (`.chd` would need one; not claimed) |
+| ARM closure | libm, libc | **libm, libc** | **libm, libc** |
+| ARM size, stripped | 5.9 MB (already shipped) | **445 KB** | 2.4 MB |
+| Host emulation cost, mean | 0.27--0.66 ms/frame | 0.15--0.84 | **0.15--0.26** |
+| Titles that load and run | **3317 / 3317** `.md` | **3762 / 3763** | **661 / 661** |
+
+**The one SNES file that does not load is not a game, and what it does is
+worse than not loading.** `._desire_d-zero_....smc` is a 212-byte macOS
+AppleDouble stub. snes9x2005 does not refuse it --- it divides by zero in
+`LoROMMap` (`% Memory.CalculatedSize`, where `CalculatedSize` rounds the file
+down to whole 8 KB blocks and is therefore 0) and raises SIGFPE inside
+`retro_load_game`, killing the process. Measured: every size from 0 to 1024
+exits 136, 8192 does not. koboy now refuses anything under 8192 bytes for
+`.sfc`/`.smc` before the core sees it (`config_min_rom_bytes`), and the floor
+is SNES-only because an Atari 2600 cartridge is legitimately 2048 bytes.
+
+#### snes9x2005 has SuperFX and SA-1, contrary to the folklore
+
+The received wisdom --- and the brief this core was added under --- is that
+snes9x2005 drops the special-chip titles. At this revision it does not, and
+the check was a RENDER rather than a successful `retro_load_game`:
+
+| Title | Chip | What frame 899--1600 actually shows |
+|---|---|---|
+| Star Fox | SuperFX (GSU-1) | Corneria terrain and a polygonal Arwing. Those polygons ARE the GSU's output; a stubbed SuperFX draws black. |
+| Yoshi's Island | SuperFX2 | Gameplay, Yoshi and Baby Mario, pixel-comparable to the same frame under the full `snes9x`. |
+| Kirby Super Star | SA-1 | Its "Is this your first time playing?" prompt, which is past the SA-1 boot. |
+
+So the compatibility cost of picking the FASTEST SNES core is much smaller
+than expected. It is a property of THIS core at THIS revision: re-render
+those three titles before swapping it.
+
+#### PC Engine switches horizontal resolution mid-game, and the picture does not move
+
+The system-specific worry, exercised deliberately. Titles alternate between
+256 and 352 pixel widths (not 336, which is what the folklore says).
+**Military Madness switches five times in 2500 frames** --- 256 for its title
+screen and transitions, 352 for the map --- and each switch drives main.c's
+`core_geometry_changed()` poll into a full re-fit.
+
+The result is the good one, and it is the pixel-aspect work (`3444be3`)
+paying off on a system it was not written for:
+
+| | 256-wide mode | 352-wide mode |
+|---|---|---|
+| pixel aspect | 1.1391 | 0.8284 |
+| reserved rect | 1168x486 at x=48 | 850x486 at x=207 |
+| **picture presented** | **583x486, centred at x=632** | **583x486, centred at x=632** |
+
+Both modes have the same DISPLAY width, so after aspect correction the
+picture is the same size and in the same place; only its internal detail
+changes. Verified by rendering both (the 256-mode title screen and the
+352-mode map) and looking at them. With `pixel_aspect = false` the escape
+hatch works and the artifact returns: the picture becomes 512x486 in one mode
+and 704x486 in the other, so it JUMPS SIZE every time the game changes scene.
+That is the clearest argument for the correction anywhere in this file.
+
+What it costs: each re-fit destroys and rebuilds the video pipeline, which
+throws away the dirty-rect history, so every switch is a full-rect redraw.
+Five in ~42 seconds of Military Madness. Not measured on a panel.
+
+#### The presentation surprise: SNES and PC Engine are presented SMALLER than the Game Boy
+
+Rendered through koboy's own pipeline on the verified 1264x1680 panel:
+
+| System | core frame | presented | pixels | vs Game Boy |
+|---|---|---|---|---|
+| Game Boy | 160x144 | 800x720 | 576,000 | --- |
+| Mega Drive | 320x224 | **878x672** | 590,016 | 1.02x |
+| PC Engine | 352x243 | **583x486** | 283,338 | **0.49x** |
+| SNES | 256x224 | **597x448** | 267,456 | **0.46x** |
+
+The cause is that the reserved rect is sized from the core's MAX geometry,
+and both of these cores report a max far larger than any frame they deliver:
+snes9x2005 says 512x512 (for an interlaced hi-res mode almost nothing uses)
+against a 256x224 frame, and beetle-pce-fast says 512x243. A 512-tall
+reservation cannot exceed scale 1 under `chrome_controls_top`, so a SNES
+game is presented at 597x448 where sizing from its ACTUAL 256x224 frame would
+allow roughly 896x672 --- about 2.2x the area. Mega Drive is unaffected
+because its max (348x240) is close to its real frame.
+
+This is the same family as `docs/FOLLOWUPS.md` #51 and it is NOT fixed here,
+for the same reason: it is a change to the fitting path in `video.c`, which
+is the one presentation this project has verified on hardware. It is,
+however, the largest single presentation win available on the two new
+systems, and it is worth more than any core-speed optimisation would be.
+
+There is a perverse second-order effect worth naming: because SNES is
+presented small, `video_submit` costs it LESS, so its per-frame CPU budget is
+LARGER than the Mega Drive's. Fixing the rect size would shrink that budget.
+
+#### The benchmark, and it is EXTRAPOLATED
+
+Read `## Reading the fps column with the caution it deserves` first. Then
+read this, which needs more caution than that section asks for.
+
+The host figures below are measurements (`scripts/corebench.c`, 900 frames
+after a 120-frame warmup, x86_64). The device figures are a MODEL, and the
+model is a two-point fit, and the two points disagree with each other under
+the simple hypothesis. Re-measuring the two cores that DO have on-device
+numbers, with this same instrument:
+
+| core | host, corebench | device `core`, TESTED.md | implied ratio |
+|---|---|---|---|
+| gambatte, Zelda | 98.2 us | 2.3 ms | **23.4x** |
+| fceumm, SMB / Kirby | 258.0 us | 4.3--4.6 ms | **17.2x** |
+
+A single multiplier cannot be right for both. A linear fit can, and it has a
+physical reading: koboy's `core` stage includes per-frame front-end work
+(the evdev input poll, the callbacks) that `corebench` does not, and that
+cost is roughly constant per frame rather than proportional to the core.
+
+    device_core_us  ~=  13.45 * host_us  +  979
+
+**This is a two-point fit and it is doing real work in every number below.**
+The additive term alone is ~1 ms; for the cheapest PC Engine titles it is a
+third of the predicted cost. Treat the device columns as an ORDER OF
+MAGNITUDE with a defensible slope, not as a measurement. The earlier arcade
+section used a flat 7x against koboy's own `core` instrument; that figure and
+this one are not comparable, because they measure different things.
+
+The budget each system has to fit into, per core frame, is
+`1e6/fps - (submit + blit + refresh) / present_divisor` at the shipped
+divisor of 3, with `submit` from this file's own `4.7 ms + 20.7 ns/px` model
+against the presented rects in the table above:
+
+| System | presented px | submit (modelled) | budget per core frame |
+|---|---|---|---|
+| Mega Drive | 590,016 | 16.9 ms | **9,884 us** |
+| PC Engine | 283,338 | 10.6 ms | **12,000 us** |
+| SNES | 267,456 | 10.2 ms | **12,109 us** |
+
+| Title | fps | host us | device mean | device p95 | device worst | % speed (mean) | % (worst frame) |
+|---|---|---|---|---|---|---|---|
+| **MEGA DRIVE** | | | | | | | |
+| Sonic The Hedgehog | 59.9 | 317.9 | 5,256 | 6,226 | 6,387 | 100% | 100% |
+| Sonic The Hedgehog 2 | 59.9 | 302.4 | 5,047 | 6,065 | 7,316 | 100% | 100% |
+| Streets of Rage 2 | 59.9 | 271.7 | 4,634 | 5,029 | 8,056 | 100% | 100% |
+| Gunstar Heroes | 59.9 | 291.5 | 4,901 | 5,890 | 7,410 | 100% | 100% |
+| Phantasy Star IV | 59.9 | 290.4 | 4,886 | 5,257 | 5,849 | 100% | 100% |
+| Thunder Force IV (PAL) | **49.7** | 331.2 | 5,435 | 6,562 | 8,392 | 100% | 100% |
+| Golden Axe | 59.9 | 309.7 | 5,146 | 5,701 | 6,239 | 100% | 100% |
+| Virtua Racing (SVP) | 59.9 | 657.8 | 9,829 | 16,653 | 17,797 | 100% | **56%** |
+| **SNES** | | | | | | | |
+| Super Mario World | 59.9 | 261.4 | 4,496 | 5,459 | 6,361 | 100% | 100% |
+| Zelda - A Link to the Past | 59.9 | 244.1 | 4,263 | 5,607 | 6,226 | 100% | 100% |
+| Super Metroid | 59.9 | 154.9 | 3,063 | 5,473 | 5,742 | 100% | 100% |
+| Chrono Trigger | 59.9 | 309.6 | 5,144 | 6,172 | 6,414 | 100% | 100% |
+| F-Zero | 59.9 | 361.2 | 5,838 | 6,065 | 6,414 | 100% | 100% |
+| Donkey Kong Country | 59.9 | 212.3 | 3,835 | 4,975 | 5,715 | 100% | 100% |
+| Star Fox (SuperFX) | 59.9 | 844.5 | 12,341 | 23,434 | 27,901 | **98%** | **43%** |
+| Kirby Super Star (SA-1) | 59.9 | 508.1 | 7,815 | 9,401 | 10,518 | 100% | 100% |
+| Yoshi's Island (SuperFX2) | 59.9 | 241.0 | 4,221 | 5,163 | 115,717 | 100% | see note |
+| **PC ENGINE** | | | | | | | |
+| Bonk's Adventure | 59.8 | 201.2 | 3,686 | 3,845 | 4,638 | 100% | 100% |
+| R-Type | 59.8 | 228.2 | 4,049 | 4,154 | 7,800 | 100% | 100% |
+| Bomberman '94 | 59.8 | 205.7 | 3,746 | 4,033 | 4,289 | 100% | 100% |
+| Blazing Lazers | 59.8 | 222.2 | 3,968 | 4,235 | 4,746 | 100% | 100% |
+| Ninja Spirit | 59.8 | 153.6 | 3,045 | 4,181 | 4,517 | 100% | 100% |
+| Military Madness | 59.8 | 256.1 | 4,424 | 4,652 | 5,244 | 100% | 100% |
+| Dragon's Curse | 59.8 | 178.3 | 3,378 | 3,589 | 4,342 | 100% | 100% |
+| Devil's Crush | 59.8 | 214.0 | 3,858 | 3,966 | 4,410 | 100% | 100% |
+
+**Yoshi's Island's 115,717 us worst frame is the instrument, not the core.**
+Its p95 is 5,163 --- one frame in 900 took 8.5 ms on the host where the
+median took 0.26. That is what the p95 column exists to distinguish, and it
+is the one row in this table where the max should be ignored.
+
+**The verdict, per system.**
+
+- **PC Engine is comfortable and is the clear winner of the three.** Every
+  title sits at a quarter to a third of budget, and the WORST frame measured
+  across eight titles is still inside it. It is the cheapest system koboy has
+  added since the Game Boy.
+- **Mega Drive is comfortable for the ordinary library** --- seven of eight
+  titles use half the budget or less, including the ones people actually
+  name. **Virtua Racing is the exception and the reason to keep the SVP
+  caveat**: its mean fits, but its p95 is 1.7x budget, so it will hitch
+  through the 3D sections rather than run slowly and evenly.
+- **SNES is playable, and the v1 spec's judgement no longer holds.** Six of
+  nine titles sit at a third of budget or less. The two special-chip titles
+  are the honest exceptions: Kirby Super Star (SA-1) fits with room, and
+  **Star Fox does not** --- 98% at the mean, 43% on its worst frame, which is
+  a game that runs but stutters through exactly the moments it should not.
+
+**`present_divisor`, the lever the brief asked about.** Nothing here needs it
+raised. At the shipped 3, every system's mean fits. Raising it to 4 buys
+~1.6 ms on Mega Drive and ~1.1 ms on the other two, which does NOT rescue
+Star Fox or Virtua Racing (both need several ms) and costs a presented frame
+in every title that was already fine. Lowering it to 2 costs ~3.3 ms on Mega
+Drive, which would put Virtua Racing's mean over budget and leave the rest
+still comfortable. **The recommendation is to leave it at 3.**
+
+**What would actually change these numbers** is not the divisor and not the
+cores: it is `video_submit`, still the bottleneck (`docs/FOLLOWUPS.md` #23),
+and for these two systems specifically the oversized reserved rect described
+above --- which is the rare case where fixing the picture and fixing the
+speed pull in opposite directions.
+
+**Not established:** everything device-side. Three ARM cores have not been
+`dlopen`ed on a Kobo, nothing has rendered on the panel, no real
+playable-speed figure exists, the Mega Drive's "A" disc and the SNES's Y/X
+discs have never been touched by a real finger, and no Mega Drive or SNES
+`.srm` has survived a real session. The `.srm` gap matters more here than for
+any previous batch: these are the first two systems koboy has added where
+battery saves are the NORM rather than the exception.
+
 ### Arcade (FinalBurn Neo): NOT RUN ON THE DEVICE, 2026-08-27
 
 The eleventh system, and **it has not been on a Kobo**. The test device was

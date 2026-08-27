@@ -6,14 +6,26 @@ gw-libretro for Game & Watch `.mgw`, fceumm for NES `.nes`, PokeMini for
 Pokemon Mini `.min`, beetle-wswan for WonderSwan and WonderSwan Color
 `.ws`/`.wsc`, RACE for Neo Geo Pocket and Pocket Color `.ngp`/`.ngc`,
 stella2014 for Atari 2600 `.a26`, Gearcoleco for ColecoVision `.col`,
-FreeIntv for Intellivision `.int`, Genesis Plus GX for Master System `.sms`
-and Game Gear `.gg`, FinalBurn Neo for arcade `.zip` --- renders four greys
+FreeIntv for Intellivision `.int`, Genesis Plus GX for Master System `.sms`,
+Game Gear `.gg` and Mega Drive `.md`, snes9x2005 for SNES `.sfc`/`.smc`,
+beetle-pce-fast for PC Engine / TurboGrafx-16 `.pce`, FinalBurn Neo for
+arcade `.zip` --- renders four greys
 straight onto the e-ink panel through FBInk, and reads the page-turn buttons
 and the touchscreen directly from evdev.
 
-Nine of the eleven systems need no BIOS file. **ColecoVision and Intellivision
+Twelve of the fourteen systems need no BIOS file. **ColecoVision and Intellivision
 do**, and neither file ships with koboy because neither is ours to
 distribute --- see "BIOS files" below.
+
+**Three extensions are deliberately not read, and this is the place people
+will look for why.** Mega Drive takes `.md` and **not `.bin` or `.gen`**:
+koboy picks the core from the extension and has no other signal, and `.bin`
+belongs to a dozen systems before it belongs to the Mega Drive --- in the
+author's own collection 723 TI-99/4A files, 234 Odyssey 2 and 119 Atari 5200
+end in `.bin`, as do the two Intellivision BIOS files above. Rename a Mega
+Drive `.bin` to `.md` and it works. PC Engine takes `.pce` and **not `.sgx`**
+(the core cannot emulate a SuperGrafx and would draw one wrongly rather than
+refuse) or `.chd` (CD-ROM, needs a system card).
 
 **Arcade is a separate download.** The FinalBurn Neo core is 41 MB, ten times
 the rest of koboy put together, and most people running a Game Boy on an
@@ -97,7 +109,7 @@ time. Verified on Ms. Pac-Man: after a 220-point game the attract screen reads
 
 ## BIOS files
 
-Two of the eleven systems cannot run without the console's own boot ROM, which
+Two of the fourteen systems cannot run without the console's own boot ROM, which
 is copyrighted and is not distributed here. Put the files in `.adds/koboy/`
 itself --- the directory the `koboy` binary lives in, not `roms/`:
 

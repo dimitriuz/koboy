@@ -148,7 +148,8 @@ void config_defaults(koboy_config *c)
 
 /* ------------------------------------------------------ core by extension
  *
- * koboy ships eleven cores now, and which one a file needs is knowable from
+ * koboy ships thirteen cores for fourteen systems now (Genesis Plus GX
+ * answers for three of them), and which one a file needs is knowable from
  * its name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats
  * .min, beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, stella2014 eats
  * .a26, Gearcoleco eats .col, FreeIntv eats .int, Genesis Plus GX eats

@@ -4,8 +4,8 @@ A retro emulator front-end for modern Kobo e-readers, built Game-Boy-first.
 No C++ of its own. It `dlopen`s a libretro core chosen from the ROM's
 extension — gambatte (.gb/.gbc), gw-libretro (.mgw), fceumm (.nes),
 PokeMini (.min), beetle-wswan (.ws/.wsc), RACE (.ngp/.ngc), stella2014
-(.a26), Gearcoleco (.col), FreeIntv (.int), Genesis Plus GX (.sms/.gg),
-FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
+(.a26), Gearcoleco (.col), FreeIntv (.int), Genesis Plus GX (.sms/.gg/.md),
+snes9x2005 (.sfc/.smc), beetle-pce-fast (.pce), FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
 panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
 **Arcade ships as its own archive.** `dist/fbneo_libretro.so` is 41 MB, ten
@@ -16,7 +16,7 @@ also the ONLY system whose core and content are version-locked: the romset
 must match FBNeo v1.0.0.03 (revision ae41c16e, 2025-07-24), which
 `scripts/build-fbneo-core.sh` pins by SHA and explains at length.
 
-**Two of the eleven systems need a BIOS, and it is the owner's to supply.**
+**Two of the fourteen systems need a BIOS, and it is the owner's to supply.**
 ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
 `grom.bin`. Both go in `.adds/koboy/` (what koboy answers
 `GET_SYSTEM_DIRECTORY` with). Nothing ships them and `tests/test_dist.sh`
@@ -133,7 +133,8 @@ src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
 
 -- multi-system: koboy is no longer Game-Boy-only ------------------------
-Ten cores ship. Extension -> core -> layout, all decided in config.c:
+Thirteen cores ship for FOURTEEN systems -- Genesis Plus GX answers for three
+of them. Extension -> core -> layout, all decided in config.c:
   .gb/.gbc  gambatte_libretro.so         DMG faceplate
   .mgw      gw_libretro.so               LCD strip (the unit draws its own buttons)
   .nes      fceumm_libretro.so           DMG faceplate
@@ -147,9 +148,16 @@ Ten cores ship. Extension -> core -> layout, all decided in config.c:
   .int      freeintv_libretro.so         DMG faceplate + KEY and TOP discs,
                                          and NEEDS exec.bin + grom.bin
   .sms/.gg  genesis_plus_gx_libretro.so  DMG faceplate
+  .md       genesis_plus_gx_libretro.so  DMG faceplate + A and Y discs --
+                                         SAME .so as .sms/.gg. The Mega Drive
+                                         cost NO build at all.
+  .sfc/.smc snes9x2005_libretro.so       DMG faceplate + Y and X discs
+  .pce      mednafen_pce_fast_libretro.so DMG faceplate, NO extra discs
 Adding a system is a build script plus four wiring points: the table in
 config_core_for_rom, romlist_is_rom, a non-phony $(CORE_*_SO) rule in the
-Makefile, and the generated roms/README.txt.
+Makefile, and the generated roms/README.txt. Mega Drive needed only the
+wiring points -- check whether a core you already ship covers the system
+before writing a fifth build script.
 
 scripts/build-gw-core.sh      gw-libretro (Game & Watch)
 scripts/build-fceumm-core.sh  libretro-fceumm (NES). Three non-default make
@@ -185,6 +193,19 @@ scripts/build-gpgx-core.sh    libretro/Genesis-Plus-GX (Master System AND
                       DISQUALIFIED -- it segfaults in retro_load_game calling
                       a null log pointer kept from a refused
                       GET_LOG_INTERFACE, which koboy also refuses.
+scripts/build-snes-core.sh    libretro/snes9x2005 (SNES). Chosen over
+                      snes9x2010 and snes9x by MEASUREMENT, all three
+                      cross-built: fastest by 1.36x/1.58x and pure C. AND THE
+                      COMPATIBILITY FOLKLORE IS FALSE -- this revision HAS
+                      SuperFX and SA-1; Star Fox, Yoshi's Island and Kirby
+                      Super Star all run, RENDERED and looked at rather than
+                      inferred from a successful load.
+scripts/build-pce-core.sh     libretro/beetle-pce-fast-LIBRETRO (PC Engine).
+                      The bare name 404s -- fourth variant of that trap. Its
+                      Makefile links with $(CXX) and -lrt whatever it
+                      compiled, so counting .cpp files predicts the wrong
+                      flags; -Wl,--as-needed is what actually gives the
+                      libm+libc closure. Cartridge .pce ONLY.
 scripts/build-fbneo-core.sh   libretro/FBNeo (arcade). NOT
                       finalburnneo/FBNeo -- a NEW variant of the 404 trap,
                       because BOTH names exist and both are real FBNeo
@@ -196,13 +217,19 @@ scripts/build-fbneo-core.sh   libretro/FBNeo (arcade). NOT
                       exactly like a broken core. 7-Zip support is compiled
                       OUT for the device: lib7z does not build against glibc
                       2.19's headers.
-Six of the eleven are pure C: closure is libm+libc or less. The two
+Nine of the fourteen are pure C: closure is libm+libc or less. The two
 WonderSwan/Neo Geo cores need libc ALONE. FBNeo is the only one that pulls in
 libpthread.
 scripts/probe_core.c  standalone: dlopens ANY core with no koboy code in the
                       way and reports geometry BEFORE and AFTER the first
                       retro_run(). This is how the 128x128 placeholder was
                       found; ask it of every new core.
+scripts/corebench.c   its sibling for SPEED: microseconds per retro_run, with
+                      mean/p50/p95/max, the save-RAM size at load AND after a
+                      warmup, and every distinct frame width seen. Ask it of
+                      every new core too -- "does a frame fit in the budget"
+                      is the question that decides whether a system ships.
+                      Needs -std=c11 to CROSS-build; Linaro 4.9.2 is gnu89.
 src/text.c            the 5x7 bitmap font, lifted out of main.c because v2
                       has three screens that render arbitrary strings
 
@@ -220,7 +247,7 @@ test) and each has a distinct failure if the guard goes -- see the commit and
 test_chrome.c. The bit is always the CORE's choice, read off its input
 descriptors, never picked here.
 
-TWO of the eleven systems have a 12-KEY KEYPAD the faceplate cannot draw, and
+TWO of the fourteen systems have a 12-KEY KEYPAD the faceplate cannot draw, and
 on both of them titles refuse to start without it. Check any new system's real
 control set against what the faceplate offers BEFORE assuming DMG is enough;
 this has now cost a round on Game & Watch, Pokemon Mini, WonderSwan, and both
@@ -249,7 +276,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 64 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: seven of the eleven systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. |
+| `docs/FOLLOWUPS.md` | 64 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -325,6 +352,25 @@ spec's appendices are the record; the short version:
   dirty diff, Galaga changes 67% of the game rect per frame and Galaxian 86%,
   because the STARFIELD scrolls. Dig Dug, Donkey Kong and Ms. Pac-Man are 1.5
   to 2.6%.
+- **A core's MAX geometry, not its real frame, sizes the reserved rect -- and
+  two of the fourteen systems report a max nothing like what they draw.**
+  snes9x2005 says 512x512 against a 256x224 frame and beetle-pce-fast says
+  512x243 against 352x243, so a 512-tall reservation cannot exceed scale 1
+  under chrome_controls_top. Measured on the verified panel: SNES presents at
+  597x448 and PC Engine at 583x486, against the Game Boy's 800x720 -- **less
+  than half its area, on higher-resolution systems**. Sizing from the real
+  frame would give SNES roughly 896x672, about 2.2x. Not fixed (it is the
+  fitting path in video.c, the one presentation verified on hardware) and it
+  is the largest presentation win available. Note the perverse coupling
+  before "fixing" it: a smaller rect costs less video_submit, so these two
+  systems' CPU budgets SHRINK when their pictures grow.
+- **The pixel-aspect correction earns itself on PC Engine, which changes
+  horizontal resolution mid-game.** Titles alternate 256 and 352 wide (not
+  336); Military Madness does it five times in 2500 frames. Both modes have
+  the same DISPLAY width, so with the correction on, the picture is 583x486
+  and centred at x=632 in BOTH -- same size, same place, only the detail
+  changes. With `pixel_aspect = false` it jumps between 512x486 and 704x486
+  every scene change. Verified by rendering both sides and looking.
 - Scale 5 with a procedural faceplate, not full-width 7x.
 - `viewVertOrigin` is **not** a blit offset.
 - "Grab the buttons but not power" is impossible: they share `gpio-keys`.
@@ -352,16 +398,40 @@ hiding.
 
 ## Known unfinished
 
-- **SEVEN OF THE ELEVEN SYSTEMS HAVE NEVER RUN ON A KOBO.** Game Boy and Game
+- **TEN OF THE FOURTEEN SYSTEMS HAVE NEVER RUN ON A KOBO.** Game Boy and Game
   & Watch are verified; NES and Pokemon Mini have run on the device. NOTHING
   device-side exists for WonderSwan, Neo Geo Pocket, Atari 2600,
-  ColecoVision, Intellivision, Master System / Game Gear or ARCADE — every
-  figure in `TESTED.md` for those seven is a host measurement through koboy's
-  own `config.c`/`video.c`/`chrome.c` plus a cross-build that passes
-  `verify-core.sh`. In particular the two BIOS files have never been read off
-  a FAT32 partition, the K1/K2 and KEY/TOP discs have never been touched by a
-  real finger, and **the picture has never been ROTATED on the panel** —
-  which is the difference between Galaga and Galaga sideways.
+  ColecoVision, Intellivision, Master System / Game Gear, ARCADE, MEGA DRIVE,
+  SNES or PC ENGINE — every figure in `TESTED.md` for those ten is a host
+  measurement through koboy's own `config.c`/`video.c`/`chrome.c` plus a
+  cross-build that passes `verify-core.sh`. In particular the two BIOS files
+  have never been read off a FAT32 partition, the K1/K2 and KEY/TOP discs
+  have never been touched by a real finger, and **the picture has never been
+  ROTATED on the panel** — which is the difference between Galaga and
+  Galaga sideways.
+- **Every device speed figure for the three newest systems is EXTRAPOLATED
+  from a TWO-POINT FIT, and the two points disagree under a simple ratio.**
+  Re-measured with `scripts/corebench.c`, gambatte implies 23.4x
+  host-to-device and fceumm implies 17.2x; a linear fit
+  (`device ~= 13.45 * host + 979 us`) reconciles them, and its additive ~1 ms
+  is plausibly koboy's own per-frame front-end work, which `corebench` does
+  not measure and `TESTED.md`'s `core` stage does. It is still a two-point
+  fit doing real work in every number. Do NOT compare those figures with the
+  arcade section's flat 7x: that one scaled koboy's own instrument, this one
+  scales a different one.
+- **Mega Drive and SNES are the first systems koboy has added where a battery
+  save is the NORM rather than the exception, and no `.srm` from either has
+  survived a real session.** GPGX's shrinking save length is already handled
+  (`core_sram`, `1fb3802`); snes9x2005's is constant, measured, so the pin is
+  harmless there rather than load-bearing. Neither has been round-tripped on
+  hardware.
+- **snes9x2005 CRASHES on a short `.sfc`/`.smc` rather than refusing it** —
+  SIGFPE in `LoROMMap`, under 8192 bytes. koboy guards it at the load site
+  (`config_min_rom_bytes` + `load_rom_into`), and the guard is per-system
+  because a 2600 cartridge is legitimately 2048 bytes. The file that found it
+  was a 212-byte macOS `._*.smc` AppleDouble stub, the kind every FAT32 card
+  grows. If another core is ever measured to do worse than refuse bad
+  content, that is where the row goes.
 - **Every Atari 2600 title renders about 1.75x too tall**, found by rendering
   frames and looking at them after every numeric check passed. The 2600 is
   the only non-square-pixel system koboy runs. Not fixed here because the fix
@@ -409,8 +479,12 @@ is not an oversight ("DISABLED BY DEFAULT, and the history matters because 'off'
 looks like an oversight otherwise"). Clamps and guards carry a note saying they
 are live so nobody deletes them as dead code. Match that voice.
 
-ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`, and the eleven extensions the
-other nine systems use) and must never be committed. Neither may a BIOS: two
+ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`, and the extensions the other
+thirteen systems use) and must never be committed. `.md` is the ONE entry in
+that list that is also an everyday non-ROM extension, so it is anchored to
+the roms directories rather than global — an unqualified `*.md` would
+silently stop this file, README.md and all of docs/ from ever being
+committed again. Neither may a BIOS: two
 systems need one now, and `tests/test_dist.sh` asserts no `.rom` or `.bin`
 reaches the package.
 `*.pgm` is marked binary in `.gitattributes` — without it git diffs a golden

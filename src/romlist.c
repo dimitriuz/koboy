@@ -31,7 +31,7 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    /* One list, eleven systems. .mgw is Game & Watch content for gw-libretro,
+    /* One list, fourteen systems. .mgw is Game & Watch content for gw-libretro,
        .nes is a NES cartridge for fceumm, .min is a Pokemon Mini cartridge
        for PokeMini, .ws/.wsc are WonderSwan and WonderSwan Color for
        beetle-wswan, .ngp/.ngc are Neo Geo Pocket and Pocket Color for RACE,

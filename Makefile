@@ -207,7 +207,7 @@ core-pce: $(CORE_PCE_SO)
 # FinalBurn Neo, the arcade core, and THE ONLY CORE THAT IS NOT A PREREQUISITE
 # OF `dist`. Same non-phony reasoning as every core rule above -- delete the .so
 # to force a rebuild -- but a different packaging answer, and the number is the
-# argument: the ten cores above plus the binary, the launcher and the docs come
+# argument: the twelve cores above plus the binary, the launcher and the docs come
 # to a 4 MB zip; this one core is 41 MB on its own, ten times the whole rest of
 # the project. Most people running koboy on a Kobo do not have an arcade romset
 # and would be downloading it for nothing. So it ships as its own archive --

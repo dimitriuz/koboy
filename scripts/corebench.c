@@ -40,10 +40,13 @@
  * and only max is high, the spike is one frame and probably not the core's.
  *
  * GEOMETRY CHANGES ARE COUNTED, not just reported, because PC Engine is in
- * this batch: it switches between 256, 336 and 512-pixel widths mid-game, and
- * koboy re-fits on each change. A title that never changes width and one that
- * changes every scene are different tests of the front-end, and "how many
- * times, and to what" is the only way to tell them apart from out here.
+ * this batch: it switches horizontal resolution mid-game, and koboy re-fits
+ * on each change. MEASURED rather than taken from the folklore, which says
+ * 256/336/512: this core reports 256 and 352, and Military Madness alternates
+ * between them five times in 2500 frames (256 for its title and transitions,
+ * 352 for the map). A title that never changes width and one that changes
+ * every scene are different tests of the front-end, and "how many times, and
+ * to what" is the only way to tell them apart from out here.
  *
  * Usage: corebench [options] <core.so> <content> [<content> ...]
  *   --frames N     frames to measure   (default 600)
@@ -54,7 +57,14 @@
  *   --csv          one machine-readable line per title, for a report table
  *
  * Build:  cc -O2 -o corebench scripts/corebench.c -ldl
- * Cross:  arm-linux-gnueabihf-gcc -O2 -o corebench-arm scripts/corebench.c -ldl
+ * Cross:  arm-linux-gnueabihf-gcc -std=c11 -O2 -march=armv7-a -mfpu=neon \
+ *             -mfloat-abi=hard -o corebench-arm scripts/corebench.c -ldl
+ *
+ * -std=c11 IS REQUIRED FOR THE CROSS BUILD and is not decoration: Linaro
+ * 4.9.2 defaults to gnu89, which rejects a declaration inside a `for`. The
+ * host compiler defaults to something newer and builds this file happily
+ * without it, so the flag is exactly the kind of thing that looks redundant
+ * until the day it is not.
  *
  * The libretro struct layouts below are transcribed from upstream libretro.h
  * (MIT-licensed) and match the subset scripts/probe_core.c already binds.
