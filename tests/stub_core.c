@@ -15,6 +15,23 @@ static retro_audio_sample_batch_t batch_cb;
 #define STUB_FB_MAX (1200 * 900)
 static uint16_t fb[STUB_FB_MAX];
 static uint8_t  sram[8];
+/* KOBOY_STUB_ANIMATE: make every frame differ from every other one.
+
+   OFF by default and it must stay that way -- every other run in the suite
+   depends on the stub frame being static (koboy's dirty-rect diff suppresses
+   an unchanged frame entirely, so a static stub presents exactly once and the
+   existing `presented=` assertions are written against that).
+
+   It exists because present_divisor is otherwise INVISIBLE end to end: it
+   selects which core frames reach the panel, and a core whose frames are all
+   identical reaches the panel once whatever the divisor is. With this on, the
+   presented count is the divisor's own signature, which is what lets
+   tests/smoke_host.sh tell 1 from 8 rather than merely reading a log line
+   back. A WALKING pixel and not a flashing one, deliberately: a two-state
+   flash is identical on every even frame, so a divisor of 2 would present
+   once and the check would report the opposite of the truth. */
+static int      stub_animate = 0;
+static unsigned stub_anim_pos = 0;
 int stub_saw_mix_frames_disabled = 0;
 /* What koboy answered when asked for the two Pokemon Mini options core.c
    overrides. Recorded as the ANSWER, not as a bool, so a test can assert the
@@ -257,6 +274,10 @@ void retro_get_system_info(struct retro_system_info *i)
        per-system scale ceiling, for one) is untestable while the stub is
        stuck at 160x144, because a .sfc and a .gb then resolve identically. */
     {
+        const char *e = getenv("KOBOY_STUB_ANIMATE");
+        stub_animate = (e && *e && *e != '0');
+    }
+    {
         const char *g = getenv("KOBOY_STUB_GEOM");
         if (g && *g) {
             int gw = 0, gh = 0;
@@ -373,6 +394,18 @@ void retro_run(void)
     for (unsigned id = 0; id < 16; id++)
         if (state_cb && state_cb(0, RETRO_DEVICE_JOYPAD, 0, id)) bits |= (uint16_t)(1u << id);
     fb[0] = bits;
+    /* One white pixel, one step further along the buffer each frame, from
+       index 1 so fb[0]'s input signature is left alone. Any two frames fewer
+       than (n-1) apart therefore differ, which is what makes the presented
+       count proportional to 1/present_divisor instead of collapsing to 1. */
+    if (stub_animate) {
+        unsigned n = (unsigned)stub_base_w * (unsigned)stub_base_h;
+        if (n > 2) {
+            fb[1 + stub_anim_pos % (n - 1)] = 0x0000;
+            stub_anim_pos++;
+            fb[1 + stub_anim_pos % (n - 1)] = 0xFFFF;
+        }
+    }
     if (state_cb) {
         stub_ptr_x       = state_cb(2, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_X);
         stub_ptr_y       = state_cb(2, RETRO_DEVICE_POINTER, 0, RETRO_DEVICE_ID_POINTER_Y);

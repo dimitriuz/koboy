@@ -368,12 +368,10 @@ echo "$out" | grep -q "chose $romdir/AAA.gb" \
 rm -rf "$romdir" "$script"
 echo "ok: row 0 still selects normally at the same geometry"
 
-# The menu is reachable only through a live touch (input_take_menu_request is
-# fed by pf->poll_input, and MODE_PLAY's poll loop has no --ui-script hook the
-# way MODE_BROWSE's run_list does), so unlike the browser above this run does
-# NOT open or drive the menu -- it only proves the menu-capable build still
-# runs a normal --rom session end to end. Driving MODE_MENU from a script
-# would need the emulator loop to accept --ui-script too, which is deferred.
+# A plain --rom session with no script at all, which is what almost every user
+# run is: it proves the menu-capable build still starts, plays and exits with
+# nothing driving it. The runs BELOW drive the menu itself, through the
+# --ui-script `menu` verb.
 #
 # Same explicit rc capture and timeout as the browser run above, for the same
 # reason: under `set -e`, a bare `out=$(...)` aborts the script AT THAT LINE
@@ -393,6 +391,190 @@ echo "$out" | grep -q '^presented=' \
     || { echo "FAIL: menu-capable build did not run"; rm -rf "$romdir"; exit 1; }
 rm -rf "$romdir"
 echo "ok: menu build runs"
+
+# ------------------------------------------- present_divisor, end to end
+#
+# TWO separate claims, and they fail independently, so they get two runs each.
+#
+# 1. The ini's value reaches the thing that decides what the panel sees. This
+#    is the one that needed KOBOY_STUB_ANIMATE: koboy suppresses an unchanged
+#    frame outright, so the stub's normally-static frame presents exactly once
+#    whatever the divisor is, and `presented=` -- the only end-to-end handle
+#    there is -- would read 1 for every value. With the walking pixel on, every
+#    frame differs and the count becomes 120/divisor exactly. That is an
+#    assertion that can tell 3 from 6, which is the whole point: a check whose
+#    expected value is also what a broken build produces is not a check.
+#
+# 2. The in-game MENU's FRAMES row cycles the value and writes it back. That
+#    needs the `menu` verb, and this is the first automated coverage the
+#    MODE_MENU handlers in src/main.c have ever had (docs/FOLLOWUPS.md #47).
+romdir="$(mktemp -d)"; : > "$romdir/AAA TEST.gb"
+ini="$(mktemp)"; script="$(mktemp)"
+
+# --- 1. the divisor reaches the panel path
+for pair in "3 40" "6 20"; do
+    want_d=${pair% *}; want_p=${pair#* }
+    printf 'present_divisor = %s\n' "$want_d" > "$ini"
+    rc=0
+    out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+            --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+            --config "$ini" --panel 1264x1680 --frames 120 2>&1) || rc=$?
+    echo "$out" | grep -E 'present_divisor|^presented='
+    if [ "$rc" -ne 0 ]; then
+        echo "FAIL: divisor $want_d run exited $rc"
+        rm -rf "$romdir" "$ini" "$script"; exit 1
+    fi
+    # 120 core frames / divisor, and the two divisors give two DIFFERENT
+    # numbers -- which is what separates "the divisor was honoured" from "the
+    # run presented some frames".
+    echo "$out" | grep -q "^presented=$want_p\$" || {
+        echo "FAIL: present_divisor $want_d presented $(echo "$out" | grep '^presented=')," \
+             "wanted presented=$want_p"
+        rm -rf "$romdir" "$ini" "$script"; exit 1; }
+    # And the pacer itself agrees, read back off the LIVE pacer by main.c.
+    echo "$out" | grep -q "koboy: present_divisor $want_d\$" || {
+        echo "FAIL: log did not report present_divisor $want_d off the live pacer"
+        rm -rf "$romdir" "$ini" "$script"; exit 1; }
+done
+echo "ok: present_divisor from the ini reaches the panel (120/d presented frames)"
+
+# A hand-edited nonsense value must not divide by zero in pacer_tick, and must
+# not be clamped to 1 either -- it keeps the default. Asserted through the
+# PRESENTED COUNT and not only the log line, so a build that logged 3 while
+# pacing at 1 still fails.
+printf 'present_divisor = 0\n' > "$ini"
+rc=0
+out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --panel 1264x1680 --frames 120 2>&1) || rc=$?
+echo "$out" | grep -E 'present_divisor|^presented='
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: present_divisor = 0 exited $rc (136 would be the SIGFPE this guards)"
+    rm -rf "$romdir" "$ini" "$script"; exit 1
+fi
+echo "$out" | grep -q '^presented=40$' || {
+    echo "FAIL: present_divisor = 0 did not fall back to the default 3"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "ok: present_divisor = 0 keeps the default rather than dividing by zero"
+
+# --- 2. the MENU row cycles it, and the choice lands in the ini
+#
+# Row geometry is the same 1264x1680 derivation as every browser tap above
+# (row_h=64, row r's centre is 8 + 64 + r*64 + 32), against the MENU's own
+# order in src/main.c: 0 SAVE STATE, 1 LOAD STATE, 2 RESET GAME,
+# 3 GREYSCALE, 4 FRAMES, 5 CHOOSE ROM, 6 RESUME, 7 QUIT.
+#   menu         -- open the in-game MENU from inside the emulator loop
+#   tap 200 360  -- row 4, FRAMES
+#
+# TWO starting values, and that is the discriminating part: a handler wired to
+# a constant, or one that ignored the ini and started from the default, would
+# pass a single 3 -> 4 check. 3 -> 4 and 4 -> 6 together pin both that the
+# starting value was read and that the LADDER (1,2,3,4,6,8) is what steps it.
+printf 'menu\ntap 200 360\n' > "$script"
+for pair in "3 4" "4 6"; do
+    from=${pair% *}; to=${pair#* }
+    printf '# keep me\npresent_divisor = %s\n' "$from" > "$ini"
+    rc=0
+    out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+            --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+            --config "$ini" --ui-script "$script" \
+            --panel 1264x1680 --frames 60 2>&1) || rc=$?
+    echo "$out" | grep -E 'present_divisor'
+    if [ "$rc" -ne 0 ]; then
+        echo "FAIL: scripted FRAMES run from $from exited $rc"
+        rm -rf "$romdir" "$ini" "$script"; exit 1
+    fi
+    echo "$out" | grep -q "koboy: present_divisor = $to\$" || {
+        echo "FAIL: FRAMES did not cycle $from -> $to"
+        rm -rf "$romdir" "$ini" "$script"; exit 1; }
+    # PERSISTED, not merely applied: the menu and the ini key are one setting.
+    grep -q "^present_divisor = $to\$" "$ini" || {
+        echo "FAIL: the ini does not say present_divisor = $to after the menu"
+        cat "$ini"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+    # ...and the rest of the file survived the rewrite.
+    grep -q '^# keep me$' "$ini" || {
+        echo "FAIL: saving the divisor destroyed the rest of the ini"
+        cat "$ini"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+done
+echo "ok: MENU -> FRAMES cycles the divisor and writes it back to the ini"
+
+# LIVE ON THE RUNNING PACER, not merely written to a file for next launch --
+# which is the half of the promise the ini check above cannot see. Starting
+# from 1, the row cycles to 2, and the 120 core frames that follow present 60
+# times instead of 120. Without the pacer_set_divisor call in main.c's
+# MENU_FRAMES branch this run presents 120 and everything else about it still
+# passes: the log line and the ini would both say 2.
+printf 'menu\ntap 200 360\n' > "$script"
+printf 'present_divisor = 1\n' > "$ini"
+rc=0
+out=$(KOBOY_STUB_ANIMATE=1 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --ui-script "$script" \
+        --panel 1264x1680 --frames 120 2>&1) || rc=$?
+echo "$out" | grep -E 'present_divisor|^presented='
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: live-pacer run exited $rc"
+    rm -rf "$romdir" "$ini" "$script"; exit 1
+fi
+echo "$out" | grep -q '^presented=60$' || {
+    echo "FAIL: the FRAMES row did not change the RUNNING pacer (wanted presented=60)"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "ok: the FRAMES row takes effect on the running pacer, not only in the ini"
+
+# The SAME hook over the GREYSCALE row, which is what makes this coverage
+# rather than a one-off: docs/FOLLOWUPS.md #47 was filed against MENU_GRAY's
+# handler, and until the `menu` verb existed no test could reach it.
+#   tap 200 296  -- row 3, GREYSCALE
+printf 'menu\ntap 200 296\n' > "$script"
+printf 'gray_map = balanced\n' > "$ini"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --ui-script "$script" \
+        --panel 1264x1680 --frames 60 2>&1) || rc=$?
+echo "$out" | grep -E 'gray_map'
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: scripted GREYSCALE run exited $rc"
+    rm -rf "$romdir" "$ini" "$script"; exit 1
+fi
+# balanced is entry 2 of luma/bright/balanced/equal/value, so "next" is equal
+# -- a value that is neither the default nor entry 0, so neither "the handler
+# did nothing" nor "the handler reset to the first entry" can pass this.
+echo "$out" | grep -q 'koboy: gray_map = equal$' || {
+    echo "FAIL: GREYSCALE did not cycle balanced -> equal"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+grep -q '^gray_map = equal$' "$ini" || {
+    echo "FAIL: the ini does not say gray_map = equal after the menu"
+    cat "$ini"; rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "ok: MENU -> GREYSCALE cycles the mapping and writes it back (closes #47)"
+
+# A NEGATIVE control for both of the above, and it is the check that stops the
+# two runs before it from being self-fulfilling. The same script, aimed at a
+# row that is neither settings row (row 2, RESET GAME): if the taps were
+# landing anywhere at all -- or if the handler fired regardless of which row
+# was chosen -- this run would move a setting too. Neither key may change.
+printf 'menu\ntap 200 232\n' > "$script"
+printf 'present_divisor = 3\ngray_map = balanced\n' > "$ini"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
+        --core build/stub_core.so --rom "$romdir/AAA TEST.gb" \
+        --config "$ini" --ui-script "$script" \
+        --panel 1264x1680 --frames 60 2>&1) || rc=$?
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: scripted RESET GAME run exited $rc"
+    rm -rf "$romdir" "$ini" "$script"; exit 1
+fi
+echo "$out" | grep -q 'koboy: present_divisor = ' && {
+    echo "FAIL: tapping RESET GAME changed present_divisor"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+echo "$out" | grep -q 'koboy: gray_map = ' && {
+    echo "FAIL: tapping RESET GAME changed gray_map"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+grep -q '^present_divisor = 3$' "$ini" || {
+    echo "FAIL: the ini's present_divisor moved without being asked"
+    rm -rf "$romdir" "$ini" "$script"; exit 1; }
+rm -rf "$romdir" "$ini" "$script"
+echo "ok: tapping a different MENU row moves neither setting"
 
 # ------------------------------------------------- core chosen by extension
 #

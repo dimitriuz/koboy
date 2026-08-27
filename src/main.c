@@ -153,7 +153,8 @@ static void usage(const char *argv0)
         "  --quiet           suppress everything but the presented= counter\n"
         "  --rom-dir PATH    directory the ALL GAMES list scans\n"
         "  --ui-script PATH  replay synthetic UI input into the startup flow\n"
-        "                    (MAIN MENU, then RECENT or ALL GAMES);\n"
+        "                    (MAIN MENU, then RECENT or ALL GAMES) and, via\n"
+        "                    the `menu` verb, the in-game MENU;\n"
         "                    exits 4 if the script selects nothing\n",
         argv0, DEFAULT_INI);
 }
@@ -692,9 +693,13 @@ int main(int argc, char **argv)
     }
 
     static koboy_input_state ui_script[UISCRIPT_MAX];
+    /* Parallel to ui_script, never inside it -- see uiscript.h for why the
+       marker must not be a field of koboy_input_state. */
+    static unsigned char ui_script_menu[UISCRIPT_MAX];
     int ui_script_n = 0;
     if (ui_script_path) {
-        ui_script_n = uiscript_load(ui_script_path, ui_script, UISCRIPT_MAX);
+        ui_script_n = uiscript_load(ui_script_path, ui_script, ui_script_menu,
+                                    UISCRIPT_MAX);
         if (ui_script_n < 0) {
             fatal("cannot read ui script %s", ui_script_path);
             pf->shutdown(pf->ctx);
@@ -1248,11 +1253,33 @@ int main(int argc, char **argv)
            50ms of latency on top of the panel's own. */
         pf->poll_input(pf->ctx, in);
 
-        if (input_take_menu_request(in)) {
+        /* The in-game MENU is the one screen no tap on a previous screen leads
+           to: it is entered by ASKING, and the ask is a touch zone this loop
+           polls. So --ui-script gets a verb of its own for it, and this is
+           where that verb is consumed -- the emulator loop, not run_list.
+
+           This closes docs/FOLLOWUPS.md #47, which was filed against
+           MENU_GRAY's handler and applies word for word to every other branch
+           below it: each one was verified by READING, because the scripted
+           path -- the only path an automated test can take -- could not get
+           here at all. That is the v1 first-run-deadlock shape exactly ("every
+           automated test took the one path that could not reach the bug"), and
+           it had already collected five inhabitants.
+
+           The real request is tested FIRST and the marker only consumed if it
+           did not fire, so a scripted run that somehow also sees a live MENU
+           tap spends one, not both. */
+        bool want_menu = input_take_menu_request(in);
+        if (!want_menu && ui_scr && script_i < ui_script_n &&
+            ui_script_menu[script_i]) {
+            script_i++;
+            want_menu = true;
+        }
+        if (want_menu) {
             size_t ssz = core_state_size(core);
             int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
                                (koboy_gray_map)cfg.gray_map, cfg.present_divisor,
-                               NULL, NULL, 0);
+                               ui_scr, ui_scr_i, ui_script_n);
 
             if (act == MENU_SAVE || act == MENU_LOAD) {
                 int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
