@@ -27,15 +27,13 @@ void core_set_frame_cb(koboy_core *c,
    (KOBOY_BTN_* bits, matching libretro's RETRO_DEVICE_ID_JOYPAD_* by bit position). */
 void core_set_input_fn(koboy_core *c, uint16_t (*fn)(void *ud), void *ud);
 
-/* Installs the function polled once per frame, alongside the joypad one
-   above, to obtain the libretro POINTER state a Game & Watch title needs: it
-   draws its own buttons into its artwork, so a touch has to reach the core as
-   a position rather than as a button. x/y are libretro-normalised (-0x7fff at
-   the left/top edge of the displayed frame, +0x7fff at the right/bottom).
-
-   Optional and additive: leave it unset and every POINTER query answers 0,
-   which is exactly what a core that never asks (gambatte) already saw. It
-   does not touch the joypad path in either direction. */
+/* Polled once per frame alongside the joypad function, for the libretro
+   POINTER state a Game & Watch title needs: it draws its own buttons into its
+   artwork, so a touch must reach the core as a position. x/y are
+   libretro-normalised (-0x7fff at the left/top edge of the displayed frame,
+   +0x7fff at the right/bottom).
+   Optional and ADDITIVE: unset, every POINTER query answers 0, which is what a
+   core that never asks already saw. */
 void core_set_pointer_fn(koboy_core *c,
                          void (*fn)(void *ud, int16_t *x, int16_t *y, bool *pressed),
                          void *ud);
@@ -49,119 +47,87 @@ uint8_t *core_sram(koboy_core *c, size_t *len);
 /* The pixel format the core settled on via SET_PIXEL_FORMAT. */
 koboy_pixfmt core_pixfmt(const koboy_core *c);
 
-/* Geometry: base_width/height is what the core is rendering right now;
-   max_width/height is the upper bound any single video_refresh frame will
-   report without it calling RETRO_ENVIRONMENT_SET_GEOMETRY or
-   RETRO_ENVIRONMENT_SET_SYSTEM_AV_INFO first (both handled in core.c's
-   env_cb). Seeded from retro_get_system_av_info right after
-   retro_load_game, then kept live by those two environ calls for as long as
-   the ROM stays loaded -- NOT "queried once and trusted for the session,"
-   which was this project's first answer to the open question in the
-   multi-system design doc §3 and was WRONG, caught only once a real core
-   was measured: the Game & Watch core reports a 128x128 placeholder from
-   retro_get_system_av_info called immediately after retro_load_game, on
-   every one of 59 measured titles, and only resolves the real canvas
-   (Parachute 658x395, Mario Bros. 973x532, Donkey Kong 606x748, ...) from
-   INSIDE its first retro_run(), via exactly the two environ calls above.
-   So this function's answer can legitimately change between two calls with
-   no retro_load_game in between -- core_geometry_changed(), below, is how a
-   caller finds out without diffing four ints itself on every frame.
-   Per-frame width/height *within* whatever the current max is can still
-   vary frame to frame by the ordinary libretro contract even without a new
-   environ call, which is why video_submit takes w/h from the frame callback
-   itself rather than from this query for the actual pixel work -- this
-   query exists to size the buffer and lay out the chrome BEFORE that frame
-   arrives, not to duplicate what the frame callback already reports.
-   Returns false, and leaves the outputs untouched, if no ROM has been loaded
-   yet -- there is no honest geometry to report before retro_load_game has
-   run.
+/* Geometry: base is what the core renders NOW, max the upper bound any single
+   video_refresh frame reports without first calling SET_GEOMETRY or
+   SET_SYSTEM_AV_INFO. Seeded from retro_get_system_av_info right after
+   retro_load_game, then kept LIVE by those two environ calls -- NOT "queried
+   once and trusted", which was this project's first answer and was WRONG:
+   gw-libretro reports a 128x128 placeholder from retro_get_system_av_info on
+   all 59 titles and only resolves the real canvas (Parachute 658x395, Mario
+   Bros. 973x532, Donkey Kong 606x748) from INSIDE its first retro_run().
 
-   ROTATION IS ALREADY APPLIED to the numbers this returns. A core may ask,
-   through RETRO_ENVIRONMENT_SET_ROTATION, for its frames to be turned a
-   quarter of a turn before they are shown -- every golden-age arcade board
-   whose monitor was mounted on its side does, because FinalBurn Neo renders
-   Galaga into a 288x224 buffer that is meant to be seen as 224x288. This
-   function reports the PRESENTED size (224x288), not the buffer size, so
-   that nothing downstream has to remember the difference. core_rotation
-   below is how a caller finds out that a difference exists at all. */
+   So this answer can change between two calls with no retro_load_game between
+   -- core_geometry_changed() below is how a caller finds out without diffing
+   four ints every frame. Per-frame w/h WITHIN the current max can still vary
+   by the ordinary libretro contract, which is why video_submit takes w/h from
+   the frame callback: this query exists to size buffers and lay out chrome
+   BEFORE that frame arrives.
+
+   Returns false and leaves the outputs untouched before retro_load_game.
+
+   ROTATION IS ALREADY APPLIED: a core may ask through SET_ROTATION for a
+   quarter turn -- every arcade board with a sideways monitor does, because
+   FBNeo renders Galaga into a 288x224 buffer meant to be seen as 224x288.
+   This reports the PRESENTED size, so nothing downstream has to remember the
+   difference. core_rotation is how a caller learns one exists. */
 bool core_get_geometry(const koboy_core *c, int *base_w, int *base_h,
                        int *max_w, int *max_h);
 
-/* What the core says its frames should be SHOWN at, and how fast.
+/* What the core says its frames should be SHOWN at, and how fast. Both come
+   from retro_system_av_info.
 
-   Both come from retro_system_av_info and both were parsed and thrown away
-   until this task: src/core.c's SET_SYSTEM_AV_INFO handler used to carry a
-   comment saying as much.
-
-   core_display_aspect() returns the DISPLAY aspect ratio -- the width:height
-   the whole picture wants, not the shape of one pixel -- as a 16.16 fixed
-   point number, because nothing downstream of this may touch a float (the
-   scaler is 16.16 throughout). KOBOY_ASPECT_ONE is 1:1.
-
-   Three things this handles, all measured rather than assumed:
+   core_display_aspect() returns the DISPLAY aspect -- the width:height the
+   whole picture wants, not the shape of one pixel -- in 16.16, because nothing
+   downstream may touch a float. KOBOY_ASPECT_ONE is 1:1. Three cases, all
+   MEASURED:
      - `aspect_ratio <= 0` is libretro's "assume base_width/base_height", and
-       one shipped core (gearcoleco) really does report 0. That fallback is
-       computed here, in exact integer arithmetic from the PRESENTED base
-       geometry, so video.c never sees an absent aspect.
-     - The value is already in PRESENTED orientation for a rotated board:
-       FBNeo reports 0.75 for Galaga while rendering into a 288x224 landscape
-       buffer, i.e. the number only makes sense after the quarter turn. So it
-       is NOT transposed here, unlike core_get_geometry's base/max.
+       gearcoleco really does report 0. The fallback is computed here in exact
+       integer arithmetic from the PRESENTED base geometry, so video.c never
+       sees an absent aspect.
+     - The value is ALREADY in presented orientation for a rotated board: FBNeo
+       reports 0.75 for Galaga while rendering a 288x224 landscape buffer. So
+       it is NOT transposed here, unlike core_get_geometry's base/max.
      - A nonsense float (0, negative, NaN, absurd) falls back rather than
-       propagating into a cast, exactly as the fps bound does below.
+       propagating into a cast.
 
-   core_fps() returns the raw reported rate, 0.0 when no ROM is loaded. It is
-   deliberately UNVALIDATED: what counts as a plausible frame rate is pacing
-   policy, it lives in pacer_frame_us_from_fps (src/pacing.h), and main.c logs
-   the raw number alongside the microseconds it resolved to so a wrong-speed
-   report on a device is diagnosable from koboy.log. */
+   core_fps() returns the RAW reported rate, 0.0 with no ROM loaded, and is
+   deliberately UNVALIDATED: what counts as plausible is pacing policy
+   (pacer_frame_us_from_fps), and main.c logs the raw number beside the
+   microseconds it resolved to so a wrong-speed report is diagnosable from
+   koboy.log. */
 uint32_t core_display_aspect(const koboy_core *c);
 double   core_fps(const koboy_core *c);
 
-/* Quarter turns counter-clockwise the core has asked for, 0..3. Per GAME,
-   not per core: FBNeo answers 3 for Galaga and 0 for Donkey Kong Jr. out of
-   the same .so, and core_unload_rom clears it so a ROM loaded through a
-   handle that has already had one starts from none. main.c no longer does
-   that -- every game gets a core opened for its own extension -- but the
-   clear is what makes the API safe for a caller that would. The one caller that needs it is main.c,
-   which hands it to video_set_rotation -- video.c is where the turn actually
-   happens. */
+/* Quarter turns counter-clockwise the core asked for, 0..3. Per GAME, not per
+   core: FBNeo answers 3 for Galaga and 0 for Donkey Kong Jr. out of the same
+   .so, and core_unload_rom clears it so a second ROM through one handle starts
+   from none. main.c hands this to video_set_rotation; video.c does the turn. */
 unsigned core_rotation(const koboy_core *c);
 
 /* True the first time this is called since a SET_GEOMETRY/SET_SYSTEM_AV_INFO
-   environ call last changed core_get_geometry's answer, and false on every
-   call in between (read-and-clear, so two callers polling independently is
-   not a supported shape today; koboy has exactly one caller, main.c's
-   per-frame loop). Deliberately NOT set for the initial, load-time query
-   itself (see core_load_rom): the caller that wants that initial answer
-   already calls
-   core_get_geometry directly right after core_load_rom returns, and does
-   not need a "changed" flag to tell it something it is about to read
-   unconditionally anyway. What this exists for is everything AFTER that:
-   main.c calls this once per retro_run() and, when it fires, re-resolves
-   the game rect and rebuilds the video buffer against the real numbers --
-   which is what makes "a core does not know its geometry at load time" a
-   handled case instead of a silently-wrong 128x128 render. */
+   call changed core_get_geometry's answer; READ-AND-CLEAR, so two independent
+   pollers is not a supported shape (koboy has one: main.c's per-frame loop).
+   Deliberately NOT set for the initial load-time query -- that caller reads
+   core_get_geometry unconditionally right after core_load_rom. This exists for
+   everything AFTER, and is what makes "a core does not know its geometry at
+   load time" a handled case instead of a silently-wrong 128x128 render. */
 bool core_geometry_changed(koboy_core *c);
 
-/* Unloads the current game but keeps the shared object open and initialised,
-   so another ROM can be loaded through the same handle.
-
-   main.c does NOT use it that way any more, and the reason is worth the two
-   lines: sharing one handle across games meant sharing everything ELSE
-   derived from the first ROM's extension too -- the layout, the buttons, the
-   ceiling, the .srm path -- and a Mega Drive ROM reaching the Game Boy
-   Advance core through it killed a device. A switch closes the core and
-   opens the one the new extension asks for. core_close calls this on the way
-   out, which is the only path that reaches it today. */
+/* Unloads the game but keeps the .so open and initialised, so another ROM can
+   load through the same handle. main.c does NOT use it that way: sharing one
+   handle across games meant sharing everything else derived from the first
+   ROM's extension -- layout, buttons, ceiling, .srm path -- and a Mega Drive
+   ROM reaching the GBA core through it killed a device. A switch closes the
+   core and opens the one the new extension asks for. core_close is the only
+   path that reaches this today. */
 bool core_unload_rom(koboy_core *c);
 
 /* retro_reset. */
 bool core_reset(koboy_core *c);
 
 /* Save-state support. core_state_size returns 0 when the core does not export
-   the serialisation symbols -- a capability answer, not an error. The menu
-   greys the entries out; the game still plays. */
+   the serialisation symbols -- a CAPABILITY answer, not an error: the menu
+   greys the entries out and the game still plays. */
 size_t core_state_size(koboy_core *c);
 
 /* Both refuse a buffer shorter than core_state_size rather than truncating:
