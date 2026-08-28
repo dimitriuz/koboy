@@ -625,13 +625,14 @@ TEST_MAIN({
     {
         const int geo[][2] = { {160,144},{256,240},{284,240},{320,256},{224,224},
                                {292,292},{288,288},{96,64},{348,240},{160,152} };
-        int misses = 0, first_par = 0, first_g = -1;
+        int misses = 0, first_par = 0, first_g = -1, swept = 0;
         for (size_t g = 0; g < sizeof geo / sizeof geo[0]; g++)
             for (uint32_t par = 32768u; par <= 196608u; par += 1373u) {
                 koboy_profile p;
                 if (!config_resolve_profile_par(&p, &c, 1264, 1680,
                                                 geo[g][0], geo[g][1],
                                                 geo[g][0], geo[g][1], par)) continue;
+                swept++;
                 int fs, dw, ox, oy;
                 video_fit_par(&p, geo[g][0], geo[g][1], par, &fs, &dw, &ox, &oy);
                 if (fs != p.scale) {
@@ -642,6 +643,20 @@ TEST_MAIN({
                    within the one pixel the ceiling adds. */
                 if (fs == p.scale && dw > p.game_w) misses++;
             }
+        /* THE SWEEP MUST ACTUALLY HAVE SWEPT, and without this line it did
+           not have to. All three assertions below are satisfied by the
+           INITIALISERS, so a config_resolve_profile_par that returned false
+           for every combination took the `continue` 1200 times, ran the body
+           zero times and passed on three checks -- the file's own comment
+           above even states the counts it expects and never asserted one.
+           tests/test_chrome.c (search `checked > 1000`) and
+           tests/test_video_pipeline.c (`shrunk > 0`) already carry exactly
+           this guard; this sweep was the sibling without it.
+           1000 rather than the exact 1200: ten geometries times the 120
+           `par` steps in [32768, 196608] is the count today, and pinning it
+           exactly would make adding a geometry to the table look like a
+           regression. The number that matters is "not zero, and not three". */
+        CHECK(swept > 1000);
         CHECK_EQ_INT(misses, 0);
         CHECK_EQ_INT(first_g, -1);
         CHECK_EQ_INT(first_par, 0);

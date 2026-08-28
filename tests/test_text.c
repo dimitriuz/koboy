@@ -76,11 +76,12 @@ TEST_MAIN({
            purpose (asserted above), so 'a' colliding with 'A' is the
            designed behaviour, not the bug this test exists to catch. */
     {
-        int collisions = 0;
+        int collisions = 0, inked = 0;
         for (int a = 0x20; a <= 0x7E; a++) {
             if (a >= 'a' && a <= 'z') continue;
             uint64_t sig_a = glyph_signature((char)a);
             if (sig_a == 0) continue;
+            inked++;
             for (int b = a + 1; b <= 0x7E; b++) {
                 if (b >= 'a' && b <= 'z') continue;
                 uint64_t sig_b = glyph_signature((char)b);
@@ -92,6 +93,18 @@ TEST_MAIN({
                 }
             }
         }
+        /* THE SWEEP MUST HAVE HAD SOMETHING TO COMPARE, and without this it
+           did not. `collisions` is asserted against its own initialiser, and
+           BOTH loops skip a signature of 0 -- so a font table that had gone
+           blank makes every character take the `continue`, runs the
+           comparison zero times, and passes on a check that reads as if it
+           had examined 95 glyphs. Found while adding `make coverage`; it is
+           the same shape as tests/test_video_aspect.c's `swept` guard and
+           the review that named that one did not name this one.
+           50 rather than the exact count, for the same reason as there:
+           adding a glyph to the table must not look like a regression. The
+           number that matters is "the font is not empty". */
+        CHECK(inked > 50);
         CHECK_EQ_INT(collisions, 0);
     }
 

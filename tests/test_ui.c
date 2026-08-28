@@ -208,14 +208,35 @@ TEST_MAIN({
         ui_list_feed(&t, &r, &idx);
     }
     int last_rows = ui_list_rows(&t);
+    int last_page = t.page;
+    /* THE LOOP HAS TO HAVE SELECTED SOMETHING, and until this counter existed
+       it did not have to. The only assertion in the body is gated on
+       `a2 == UI_SELECT`, so a ui_list_feed that stopped returning UI_SELECT
+       for every row ran all last_rows iterations, executed ZERO checks and
+       passed green -- the exact shape tests/test_chrome.c (search
+       `checked > 1000`) and tests/test_video_pipeline.c (`shrunk > 0`)
+       already guard against, missing here alone.
+       The two counters are asserted against numbers DERIVED from the list
+       rather than typed in: on the last page the live rows are the items
+       left over after the full pages (count - page*rows), and every row
+       after those is dead by construction. Deriving them is what makes this
+       a check on ui.c instead of a check on this file's arithmetic. */
+    int selected = 0, dead = 0;
     for (int r = 0; r < last_rows; r++) {
         koboy_input_state d = touch_at(t.x + t.w / 2, row_y(&t, r));
         int got = -1;
         ui_action a2 = ui_list_feed(&t, &d, &got);
         koboy_input_state rel = released();
         ui_list_feed(&t, &rel, &got);
-        if (a2 == UI_SELECT) CHECK(got >= 0 && got < N);
+        if (a2 == UI_SELECT) { selected++; CHECK(got >= 0 && got < N); }
+        else                   dead++;
     }
+    int live = N - last_page * last_rows;
+    if (live > last_rows) live = last_rows;
+    if (live < 0)         live = 0;
+    CHECK_EQ_INT(selected, live);
+    CHECK_EQ_INT(dead, last_rows - live);
+    CHECK(selected > 0);           /* the loop swept; see above */
 
     /* A touch outside the list region selects nothing. Primed with a
        release first so this genuinely exercises the out-of-bounds check,
@@ -797,14 +818,21 @@ TEST_MAIN({
                         (int)cases[i].d, (int)cases[i].w, lab);
         }
 
-        /* Six distinct strings from six distinct pairs. A label that named
-           only the dither half would collapse these to two, and every
-           per-case check above would still pass if the table were rewritten
-           to match it -- this is the check that says the two halves are
-           independently visible. */
+        /* Six distinct labels from six distinct pairs -- READ OFF
+           ui_motion_label, not off the table above. That distinction is the
+           whole check. It used to compare `cases[i].want` with
+           `cases[j].want`, which are string literals typed twenty lines
+           further up: no change to any file in src/ could make that fail, so
+           what it asserted was that the author had typed six different
+           strings. Taking the six from `got[]` instead means a label that
+           named only one of the two halves collapses them to two and this
+           goes red, which is what the comment always claimed it did. */
+        char got[sizeof cases / sizeof cases[0]][64];
+        for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++)
+            ui_motion_label(got[i], sizeof got[i], cases[i].d, cases[i].w);
         for (size_t i = 0; i < sizeof cases / sizeof cases[0] - 1; i++)
             for (size_t j = i + 1; j < sizeof cases / sizeof cases[0] - 1; j++)
-                CHECK(strcmp(cases[i].want, cases[j].want) != 0);
+                CHECK(strcmp(got[i], got[j]) != 0);
 
         /* The ini's own vocabulary, uppercased -- so a photo of the panel and
            a hand-edited koboy.ini can be compared without a translation
