@@ -31,44 +31,29 @@ static bool ends_with_ci(const char *s, const char *suffix)
 bool romlist_is_rom(const char *name)
 {
     if (!name || !*name) return false;
-    /* One list, fifteen systems. .mgw is Game & Watch content for gw-libretro,
-       .nes is a NES cartridge for fceumm, .min is a Pokemon Mini cartridge
-       for PokeMini, .ws/.wsc are WonderSwan and WonderSwan Color for
-       beetle-wswan, .ngp/.ngc are Neo Geo Pocket and Pocket Color for RACE,
-       .a26 is an Atari 2600 cartridge for stella2014, .col is a ColecoVision
-       one for Gearcoleco, .int an Intellivision one for FreeIntv, and
-       .sms/.gg are Master System and Game Gear for Genesis Plus GX, and .zip
-       is an arcade romset for FinalBurn Neo; none of them is a Game Boy ROM. The browser lists them all because the core is
-       chosen from the extension at load time (config_core_for_rom, whose
-       table this list must stay in step with), so a mixed roms/ directory is
-       one list, not two.
+    /* ONE LIST FOR EVERY SYSTEM, because the core is chosen from the
+       extension at load time (config_core_for_rom, whose table this must stay
+       in step with), so a mixed roms/ directory is one list, not two.
 
-       Case-insensitive, and not hypothetically: the device partition is
-       FAT32, and the author's own Game Gear directory carries BOTH .gg and
-       .GG -- 38 of one and 15 of the other, in one folder. Any of these can
-       arrive in any case.
+       CASE-INSENSITIVE, and not hypothetically: the device partition is FAT32,
+       and the author's Game Gear directory carries BOTH .gg and .GG -- 38 of
+       one and 15 of the other, in one folder.
 
-       What is NOT here matters as much as what is. A real NES collection
-       carries .pal palette files beside the ROMs (262 of them in the
-       author's, against 5263 .nes); a Pokemon Mini one carries boot.rom;
-       BOTH a WonderSwan and a Neo Geo Pocket collection carry boot.rom and
-       boot1.rom (five such files across the author's four directories); and
-       an Intellivision one carries boot0.rom through boot3.rom, two of which
-       ARE the BIOS this project asks the owner to install by hand. None is
-       content, all would list as selectable "games", and all are excluded by
-       this being an allowlist of extensions rather than a blocklist of the
-       ones seen so far.
+       WHAT IS NOT HERE MATTERS AS MUCH. A real NES collection carries .pal
+       files beside the ROMs (262 against 5263 .nes); a Pokemon Mini one
+       carries boot.rom; WonderSwan and Neo Geo Pocket ones carry boot.rom and
+       boot1.rom; an Intellivision one carries boot0-boot3.rom, two of which
+       ARE the BIOS the owner installs by hand. None is content, all would list
+       as selectable "games", and all are excluded by this being an ALLOWLIST
+       rather than a blocklist of what has been seen so far.
 
-       An arcade directory is the one place that allowlist gets less
-       protective rather than more, and it is worth saying so: a real FBNeo
-       set carries device and BIOS zips beside the games -- the author's has
-       neogeo.zip, midssio.zip, nmk004.zip, namcoc69/70/75.zip, ym2608.zip,
-       cchip.zip -- and every one of them is a .zip, so every one of them
-       lists as a row. They are not games and selecting one gets an error.
-       They are also NOT removable: FBNeo looks for them beside the game it is
-       loading (tapper does not run without midssio.zip). So a handful of
-       unplayable rows is the cost of the sets being complete, which is the
-       right way round. */
+       ARCADE is where the allowlist gets LESS protective: a real FBNeo set
+       carries device and BIOS zips beside the games (neogeo.zip, midssio.zip,
+       nmk004.zip, namcoc69/70/75.zip, ym2608.zip, cchip.zip), every one a
+       .zip, so every one lists as a row that errors when selected. They are
+       NOT removable -- FBNeo looks for them beside the game it is loading
+       (tapper needs midssio.zip) -- so a handful of unplayable rows is the
+       cost of complete sets. */
     return ends_with_ci(name, ".gb") || ends_with_ci(name, ".gbc")
         || ends_with_ci(name, ".mgw")
         || ends_with_ci(name, ".nes")
@@ -79,69 +64,54 @@ bool romlist_is_rom(const char *name)
         || ends_with_ci(name, ".col")
         || ends_with_ci(name, ".int")
         || ends_with_ci(name, ".sms") || ends_with_ci(name, ".gg")
-        /* Mega Drive, SNES and PC Engine -- the fourteen-system batch. Each
-           claims the NARROWEST extension set that covers its library, and in
-           all three cases what is left out is the interesting half:
+        /* Each system claims the NARROWEST extension set covering its
+           library, and what is left out is the interesting half:
 
-           .md and NOTHING ELSE for the Mega Drive. Not .bin: counted across
-           the author's collection, .bin is the extension of 723 TI-99/4A
-           files, 234 Odyssey 2, 119 Atari 5200 and eight other systems
-           before it is the extension of 36 Mega Drive files -- and two of
-           the ones ahead of it are exec.bin and grom.bin, the Intellivision
-           BIOS this project asks the owner to supply. Not .gen either, which
-           is unambiguous but is five files; one system, one extension is a
-           rule a reader can hold. 36 of the owner's 1777 Mega Drive files do
-           not list, and roms/README.txt says so on the device.
+           .md ALONE for the Mega Drive. Not .bin: counted across the author's
+           collection, .bin belongs to 723 TI-99/4A files, 234 Odyssey 2, 119
+           Atari 5200 and eight other systems before 36 Mega Drive ones -- and
+           two ahead of it are exec.bin and grom.bin, the Intellivision BIOS.
+           Not .gen either (unambiguous, but five files); one system, one
+           extension is a rule a reader can hold. 36 of 1777 do not list, and
+           roms/README.txt says so on the device.
 
-           .sfc and .smc for the SNES, which is the WonderSwan pattern -- one
-           cartridge, two dumping conventions, and .smc's 512-byte copier
-           header is the core's problem, not the browser's. The mixed case is
-           real again: 47 .smc and 11 .SMC in one directory.
+           .sfc and .smc for the SNES: one cartridge, two dumping conventions,
+           and .smc's 512-byte copier header is the core's problem. Mixed case
+           again: 47 .smc and 11 .SMC in one directory.
 
            .pce ALONE for PC Engine. Not .sgx (SuperGrafx, 7 files):
            beetle-pce-fast implements neither the second VDC nor the priority
-           mixer, so it would render one WRONGLY rather than refuse, and a
-           second core for seven titles is not a trade. Not .chd or the other
-           CD extensions (48 files): they need a system-card BIOS nobody
-           ships. Both are argued in scripts/build-pce-core.sh.
+           mixer, so it would render one WRONGLY rather than refuse. Not .chd
+           or the CD extensions (48 files): they need a system-card BIOS nobody
+           ships. Both argued in scripts/build-pce-core.sh.
 
-           ONE HAZARD THIS ALLOWLIST DOES NOT CATCH, recorded because it is
-           the kind that looks handled: a name ending .smc is not necessarily
-           a cartridge. The author's collection carries
-           `._desire_d-zero_....smc`, a 212-byte macOS AppleDouble stub, and
-           snes9x2005 does not refuse such a file -- it divides by zero and
-           takes the process with it. Nothing here can tell, because this
-           function sees a NAME and never a size. The floor that stops it
-           lives at the load site (config_min_rom_bytes, and load_rom_into in
-           main.c); this comment exists so nobody adds the check here, where
-           it would cost a stat() per directory entry and still be the wrong
+           ONE HAZARD THIS ALLOWLIST DOES NOT CATCH: a name ending .smc is not
+           necessarily a cartridge. The author's collection has a 212-byte
+           macOS AppleDouble stub, and snes9x2005 divides by zero on it rather
+           than refusing. Nothing here can tell -- this function sees a NAME
+           and never a size. The floor lives at the load site
+           (config_min_rom_bytes, load_rom_into); DO NOT add the check here,
+           where it would cost a stat() per entry and still be the wrong
            layer. */
         || ends_with_ci(name, ".md")
         || ends_with_ci(name, ".sfc") || ends_with_ci(name, ".smc")
         || ends_with_ci(name, ".pce")
-        /* .gba, the Game Boy Advance, and it is the least contested extension
-           in this whole list: 1693 files in the owner's tree and every one of
-           them ends .gba. No copier convention like the SNES's .smc, no
-           container fight like the Mega Drive's .bin, nothing left out. The
-           only reason it needs a comment at all is that the rest of this list
-           needed one. */
+        /* .gba is the least contested extension here: 1693 files in the
+           owner's tree, every one ending .gba. Nothing left out. */
         || ends_with_ci(name, ".gba")
-        /* .zip is the one entry here that is a CONTAINER rather than a
-           system, and it is listed for exactly one reason: nothing else koboy
-           ships can open a zip, so there is no file this row could steal.
-           config_core_for_rom's matching entry carries the full argument and
-           the cost. What it means in practice is that a zipped Game Boy ROM
-           now appears in the browser as a selectable row that fails to load,
-           where before it was invisible -- the browser and the core map agree
-           about that, which is the property this list exists to keep. */
+        /* .zip is a CONTAINER rather than a system, listed because nothing
+           else koboy ships can open a zip, so there is no file this row could
+           steal (config_core_for_rom carries the full argument). In practice a
+           zipped Game Boy ROM now lists as a row that fails to load, where
+           before it was invisible -- the browser and the core map AGREE about
+           it, which is the property this list keeps. */
         || ends_with_ci(name, ".zip");
 }
 
-/* Row order, in one place: kind first (the enum's own order -- ".." above
-   subdirectories above ROMs, see romlist.h), then case-insensitively by
-   name. Sorting by kind is what puts folders at the top, and it is also what
-   keeps the ".." row at index 0 without a special case anywhere else: it is
-   the only ROMLIST_UP entry, and ROMLIST_UP is 0. */
+/* Row order, in one place: kind first (the enum's own order), then
+   case-insensitively by name. Sorting by kind puts folders at the top AND
+   keeps ".." at index 0 with no special case: it is the only ROMLIST_UP
+   entry, and ROMLIST_UP is 0. */
 static int entry_cmp(const void *a, const void *b)
 {
     const koboy_romlist_entry *ea = (const koboy_romlist_entry *)a;
@@ -151,12 +121,10 @@ static int entry_cmp(const void *a, const void *b)
 }
 
 /* ---------------------------------------------------------- test overrides
-   Both caps default to values no real ROM collection should reach (see
-   romlist.h), which makes them impractical to exercise honestly in a test
-   that has to actually create that many files. These let a test dial a cap
-   down to something a tmpdir can hold in milliseconds while leaving the
-   shipped defaults alone. Read once per scan, not cached: cheap, and it
-   means a test can flip the env var between two scans. */
+   Both caps default past what any real collection reaches, so exercising them
+   honestly would mean creating that many files. These dial a cap down to what
+   a tmpdir holds in milliseconds. Read once per scan, NOT cached, so a test
+   can flip the env var between two scans. */
 static int env_or_default(const char *var, int fallback)
 {
     const char *s = getenv(var);
@@ -176,10 +144,10 @@ static int visit_cap(void)
 }
 
 /* ------------------------------------------------------------- the listing
-   Collects one directory's entries into a growable buffer. The cap is NOT
-   applied here: applying it during the readdir loop is exactly the original
-   bug (readdir order decides who gets dropped). It is applied once, in
-   scan_at, after the whole listing is sorted. */
+   Collects one directory's entries into a growable buffer. THE CAP IS NOT
+   APPLIED HERE: applying it during the readdir loop is the original bug
+   (readdir order decides who gets dropped). scan_at applies it after the
+   sort. */
 typedef struct {
     koboy_romlist_entry *ent;
     int   count;
@@ -237,41 +205,30 @@ static void scan_one_dir(scan_acc *acc, const char *dir)
         snprintf(full, sizeof full, "%s/%s", dir, e->d_name);
 
         struct stat st;
-        /* lstat, never stat: a symlinked directory is exactly how a
-           collection can loop back on itself. lstat reports the LINK's own
-           type, never resolving it, so a symlink -- to a file or a
-           directory -- is never S_ISDIR or S_ISREG below and so is silently
-           skipped by the dispatch itself; there is deliberately no separate
-           `if (S_ISLNK(...)) continue`, because with stat swapped in for
-           lstat such a line would look like it was still doing its job while
-           actually doing nothing (stat's result is never S_ISLNK either --
-           it also resolves through the link). Real ROM collections do not
-           need symlinks here. The one-directory-at-a-time listing does not
-           itself recurse, but a browser that follows links can still be
-           walked into a cycle one tap at a time, so this stays. */
+        /* lstat, NEVER stat: a symlinked directory is how a collection loops
+           back on itself. lstat reports the LINK's own type without resolving
+           it, so a symlink is never S_ISDIR or S_ISREG and the dispatch skips
+           it. Deliberately NO separate `if (S_ISLNK(...)) continue` -- with
+           stat swapped in, such a line would look like it was working while
+           doing nothing (stat's result is never S_ISLNK either). A browser
+           that follows links can be walked into a cycle one tap at a time,
+           so this stays. */
         if (lstat(full, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            /* Dot-directories are skipped, and this is new with folder rows:
-               while the scan was recursive they contributed nothing visible
-               (a .Trashes or .Spotlight-V100 holds no ROMs, so it produced no
-               rows), but a directory is now a row of its own, and an SD card
-               that has been in a Mac or a Windows box grows several of these.
-               They are metadata, not collections, and putting them at the top
-               of the list -- above every real folder, since dirs sort first --
-               would be the first thing the user sees. Files are deliberately
-               NOT filtered this way: that would change which ROMs are listed,
-               which is the one thing this task must not do. */
+            /* DOT-DIRECTORIES are skipped: an SD card that has been in a Mac
+               or a Windows box grows several (.Trashes, .Spotlight-V100), and
+               since dirs sort first they would be the first thing the user
+               sees. FILES are deliberately NOT filtered this way -- that would
+               change which ROMs are listed. */
             if (e->d_name[0] == '.') continue;
             /* A directory row carries a trailing '/' so it reads as a folder
                on the panel. It is a DISPLAY marker and not part of the path:
                romlist_enter strips it before joining, which is unambiguous
                because '/' cannot occur inside a directory entry's name. */
             /* 300, not ROMLIST_NAME + 2: a dirent name is at most 255 bytes,
-               so this buffer cannot truncate, and acc_push is then the ONE
-               place that decides an oversized name is skipped rather than
-               stored short. Two places deciding that is how a half-truncated
-               name reaches the list. */
+               so this cannot truncate and acc_push stays the ONE place that
+               decides an oversized name is skipped rather than stored short. */
             char label[300];
             snprintf(label, sizeof label, "%s/", e->d_name);
             acc_push(acc, label, ROMLIST_DIR);
@@ -294,9 +251,8 @@ void romlist_free(koboy_romlist *rl)
 }
 
 /* The one place a listing is produced. `root` and `sub` are copied to locals
-   FIRST because they are usually rl->root and rl->sub themselves, and the
-   memset below is about to erase them -- reading a source string out of the
-   struct being cleared is the kind of aliasing bug that only shows up on the
+   FIRST because they are usually rl->root and rl->sub themselves and the
+   memset below erases them -- an aliasing bug that only shows up on the
    second navigation. */
 static int scan_at(koboy_romlist *rl, const char *root, const char *sub)
 {
@@ -347,11 +303,9 @@ static int scan_at(koboy_romlist *rl, const char *root, const char *sub)
     }
     rl->hidden = acc.hidden + extra_hidden;
     if (rl->hidden > 0)
-        /* Not just to the log: a user on a device with no terminal will
-           never see koboy.log, so the ONLY diagnostic they get for a
-           truncated listing is a row on the panel -- see the overflow
-           row appended to item_ptr below. This stderr line is the extra
-           detail a developer with SSH access still gets. */
+        /* The user's only diagnostic for a truncated listing is the overflow
+           ROW appended to item_ptr below -- they never see koboy.log. This
+           line is the extra detail a developer with SSH gets. */
         fprintf(stderr, "koboy: %d entr%s not shown (%s)\n",
                 rl->hidden, rl->hidden == 1 ? "y" : "ies", rl->dir);
 

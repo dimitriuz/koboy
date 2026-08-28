@@ -28,20 +28,17 @@
    fit to EXACTLY the available width reads as touching the boundary. */
 #define UI_LABEL_GAP (TEXT_ADVANCE * UI_TEXT_PX)
 
-/* UI_MAX_ROWS went from 10 to 24 (measured against the shipped browser
-   geometry, 1264x1680 panel minus KOBOY_CHROME_MARGIN on every side, which
-   is a 1664px-tall region): 10 rows meant 138px-tall rows carrying 21px
-   text, and a 300-ROM collection needed 23+ pages reachable only by the
-   footer arrows. 24 rows divides that region into exactly 64px rows -- still
-   3x the 21px glyph height ui_list_init's own clamp requires -- and turns 23
-   pages into 13. Verified by rendering: tests/golden/romlist_dense.pgm. */
+/* 24, not 10, MEASURED against the shipped browser geometry (1264x1680 minus
+   KOBOY_CHROME_MARGIN: a 1664 px region). 10 rows meant 138 px rows carrying
+   21 px text, and a 300-ROM collection needed 23+ pages. 24 divides the region
+   into exactly 64 px rows -- still 3x the glyph height ui_list_init's clamp
+   requires -- and turns 23 pages into 13.
+   Verified by rendering: tests/golden/romlist_dense.pgm. */
 
 /* ------------------------------------------------------- letter buckets
-   Bucket 0 is '#' (anything that doesn't start with a letter -- a digit, a
-   symbol, or an empty string), buckets 1..26 are A..Z. Kept as a small
-   integer rather than the raw char so it doubles as a bit index into
-   letter_present and an array index for iteration, and 27 fits comfortably
-   in the uint32_t the bitmap uses. */
+   Bucket 0 is '#' (a digit, a symbol, or an empty string), 1..26 are A..Z. A
+   small integer rather than the raw char so it doubles as a bit index into
+   letter_present and an array index, and 27 fits the uint32_t bitmap. */
 #define UI_BUCKETS 27
 
 static int bucket_of(const char *s)
@@ -63,14 +60,12 @@ static int first_index_of_bucket(const koboy_ui_list *u, int b)
     return -1;
 }
 
-/* Nearest bucket that actually has an item, searching forward (wrapping
-   after Z back to '#') from `from`. With allow_self, `from` itself counts if
-   it is occupied -- the touch strip's "land on what I tapped, or the next
-   thing after it" behaviour. Without allow_self, `from` is never returned --
-   the hardware jump's "always move to a DIFFERENT letter" behaviour, so
-   holding the combo on a list where every entry shares one starting letter
-   is a no-op instead of reporting a jump that changed nothing.
-   Returns -1 only if letter_present is entirely empty (an empty list). */
+/* Nearest occupied bucket, searching forward (wrapping after Z to '#') from
+   `from`. allow_self counts `from` itself -- the touch strip's "land on what I
+   tapped, or the next thing after". Without it `from` is never returned -- the
+   hardware jump's "always move to a DIFFERENT letter", so the combo on a list
+   whose entries share one starting letter is a no-op rather than a jump that
+   changed nothing. Returns -1 only for an entirely empty list. */
 static int nearest_present_bucket(const koboy_ui_list *u, int from, bool allow_self)
 {
     if (u->letter_present == 0) return -1;
@@ -92,17 +87,13 @@ void ui_list_init(koboy_ui_list *u, const char *title,
     u->count = count < 0 ? 0 : count;
     u->x = x; u->y = y; u->w = w; u->h = h;
 
-    /* A freshly created list assumes a finger may ALREADY be down, and so
-       requires a release before it will accept its first tap.
-
-       Without this, chaining screens breaks: selection happens on touch-down,
-       a real tap lasts ~100ms, and building the next screen takes far less
-       than that -- so the same still-down finger selects the same row index on
-       the new list. Measured consequence: SAVE STATE overwrote slot 1 with no
-       picker ever shown, and CHOOSE ROM loaded the 4th ROM after unloading the
-       current game.
-
-       Costs one poll cycle when no finger is down, which is imperceptible. */
+    /* A fresh list assumes a finger may ALREADY be down and requires a release
+       before its first tap. Without this, chaining screens breaks: selection
+       happens on touch-down, a real tap lasts ~100 ms and building the next
+       screen takes far less, so the same still-down finger selects the same
+       row on the new list. MEASURED: SAVE STATE overwrote slot 1 with no
+       picker shown, and CHOOSE ROM loaded the 4th ROM after unloading the
+       current game. Costs one poll cycle when no finger is down. */
     u->prev_touch = true;
 
     /* One title row plus one footer row, so the divisor is rows + 2. Clamped
@@ -169,12 +160,11 @@ void ui_gray_label(char *out, size_t outsz, koboy_gray_map map)
     out[i] = '\0';
 }
 
-/* The general English ordinal rule, not the single-digit shortcut, even though
-   the clamp (config_present_divisor_ok) means only 1..8 can reach here from
-   the menu today. ui_divisor_label takes an int and tests/test_ui.c calls it
-   with 11, 12, 13 and 21 directly, so this branch is reachable and failable by
-   a test -- which the shortcut's 11 -> "11ST" would not have been, and which
-   is the whole difference between a guard and a comment. */
+/* The GENERAL English ordinal rule, not the single-digit shortcut, even
+   though the clamp means only 1..8 reach here from the menu.
+   ui_divisor_label takes an int and tests/test_ui.c calls it with 11, 12, 13
+   and 21, so this branch is reachable and failable -- the shortcut's
+   11 -> "11ST" would not have been. */
 static const char *ordinal_suffix(int n)
 {
     int last2 = n % 100, last1 = n % 10;
@@ -189,11 +179,9 @@ static const char *ordinal_suffix(int n)
 void ui_divisor_label(char *out, size_t outsz, int divisor)
 {
     if (!out || outsz == 0) return;
-    /* "EVERY 1ST" is not English, and a divisor of 1 is the one value whose
-       meaning a reader is most likely to want stated outright. Anything at or
-       below 1 lands here, so a nonsense value cannot print a nonsense ordinal
-       -- config_load already rejects those, but this function is public and
-       takes an int. */
+    /* "EVERY 1ST" is not English. Anything at or below 1 lands here, so a
+       nonsense value cannot print a nonsense ordinal -- config_load rejects
+       those, but this function is public and takes an int. */
     if (divisor <= 1) { snprintf(out, outsz, "FRAMES: EVERY FRAME"); return; }
     snprintf(out, outsz, "FRAMES: EVERY %d%s", divisor, ordinal_suffix(divisor));
 }
@@ -203,11 +191,10 @@ void ui_motion_label(char *out, size_t outsz, bool dither, koboy_wfm_policy wfm)
 {
     if (!out || outsz == 0) return;
     /* "4 GREYS" and not "4-LEVEL": the row is read by someone holding the
-       device, and greys are what they are looking at. config_wfm_policy_name
-       never returns NULL -- an out-of-range policy names the default -- so
-       there is no null branch here to leave untested, and the waveform half
-       is spelled with the SAME vocabulary the ini uses, uppercased, so a
-       photo of the panel and a hand-edited file can be compared directly. */
+       device. config_wfm_policy_name never returns NULL, so there is no null
+       branch to leave untested, and the waveform half uses the SAME vocabulary
+       as the ini, uppercased, so a photo of the panel and a hand-edited file
+       compare directly. */
     const char *w = config_wfm_policy_name(wfm);
     char up[8];
     size_t i = 0;
@@ -234,12 +221,11 @@ void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
     if (px < 1) px = 1;
     if (outsz > (size_t)INT_MAX) outsz = (size_t)INT_MAX; /* keeps the casts below sane */
 
-    /* The FULL name, extension included. An earlier version stripped
-       .gb/.gbc (and later .mgw) on the theory that the extension told the
-       reader nothing. The device owner asked for it back, and they are
-       right: with two systems in one tree the extension is exactly what
-       says which system a row is, and a folder is not always a reliable
-       substitute -- nothing stops a .gb sitting beside a .mgw. */
+    /* The FULL name, extension included. An earlier version stripped it on
+       the theory that it told the reader nothing; the owner asked for it back
+       and is right -- with several systems in one tree the extension is what
+       says which system a row is, and nothing stops a .gb sitting beside a
+       .mgw. */
     size_t len = strlen(s);
     if (len >= outsz) len = outsz - 1;      /* defensive; UI_LABEL_BUF dwarfs any real name */
 
@@ -265,12 +251,9 @@ void ui_fit_label(const char *s, int avail_px, int px, char *out, size_t outsz)
         return;
     }
 
-    /* Split what is left after the ellipsis between head and tail. Tail gets
-       the larger (or equal) half on purpose: the head is the title, which a
-       user can usually recognise from a prefix, but for a No-Intro name the
-       PART THAT DISTINGUISHES two otherwise-identical entries is almost
-       always the trailing parenthetical -- "(USA)" vs "(Europe)" -- so it is
-       the tail that most needs the room. */
+    /* Split what is left after the ellipsis. THE TAIL GETS THE LARGER HALF:
+       a head is recognisable from a prefix, but what distinguishes two
+       otherwise-identical No-Intro names is the trailing parenthetical. */
     int remain = max_chars - ell_chars;
     int head_chars = remain / 2;
     int tail_chars = remain - head_chars;
@@ -292,11 +275,10 @@ void ui_path_title(char *out, size_t outsz, const char *head, const char *sub)
     int len  = (int)strlen(sub);
     if (room >= len) { snprintf(out, outsz, "%s%s%s", head, SEP, sub); return; }
 
-    /* Not even room for the marker plus a character of `sub`: the head alone
-       is still true and still fits, which beats a title that is nothing but
-       punctuation. Unreachable at any shipped geometry (UI_TITLE_CHARS is 40
-       and the head is "ALL GAMES"), and here because a caller with a longer
-       head must not get a garbage title. */
+    /* No room for the marker plus a character of `sub`: the head alone is
+       still true and beats a title that is nothing but punctuation.
+       Unreachable at any shipped geometry, and here because a caller with a
+       longer head must not get a garbage title. */
     if (room <= 3) { snprintf(out, outsz, "%s", head); return; }
     snprintf(out, outsz, "%s%s...%s", head, SEP, sub + len - (room - 3));
 }
@@ -317,14 +299,11 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
     text_draw(fb, stride, W, H, u->x + u->row_h / 2, u->y + u->row_h / 4,
               u->title, UI_TEXT_PX + 1, UI_INK);
 
-    /* The X a row label may not cross: the letter strip's divider when the
-       strip is on, otherwise the widget's own right edge. Computed once,
-       here, and reused below by both the label-fitting loop and the strip's
-       own geometry, so the two can never disagree about where the strip
-       starts -- they used to be two separate computations (this one and the
-       one inside `if (u->alpha_jump)` below), and a label fit against one
-       while the strip drew at the other is exactly how a fitted label could
-       still end up half-covered or with a visible gap. */
+    /* The X a row label may not cross: the letter strip's divider when on,
+       otherwise the widget's right edge. Computed ONCE and reused by both the
+       label fit and the strip's geometry, so the two cannot disagree about
+       where the strip starts -- as two computations, a label fit against one
+       while the strip drew at the other ended up half-covered. */
     int strip_x = u->x + u->w - strip_w(u);
     if (strip_x < u->x) strip_x = u->x;      /* degenerate/tiny region guard */
     int text_right = u->alpha_jump ? strip_x : (u->x + u->w);
@@ -335,11 +314,9 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
         int ry = u->y + u->row_h + r * u->row_h;
         int text_x = u->x + u->row_h;
         /* Fit to what is actually free, not the panel edge: without this a
-           long ROM name ran past the widget's own right edge and, with the
-           strip on, straight underneath it -- invisible, and for a
-           No-Intro collection that invisible tail is usually the ONLY thing
-           distinguishing two rows ("(USA)" vs "(Europe)"). See
-           ui_fit_label's own comment for why elision keeps both ends. */
+           long ROM name ran past the widget's right edge and, with the strip
+           on, underneath it -- invisible, and that invisible tail is usually
+           the ONLY thing distinguishing two No-Intro rows. */
         char label[UI_LABEL_BUF];
         ui_fit_label(u->items[i], text_right - text_x - UI_LABEL_GAP,
                     UI_TEXT_PX, label, sizeof label);
@@ -354,20 +331,16 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
         }
     }
 
-    /* Letter index strip, drawn LAST (after every row above) so its opaque
-       background covers any row text that ran into its column. The fitting
-       above already keeps a label from reaching this column at all, but the
-       strip still paints over the full body height rather than trusting
-       that: title text (drawn above, not put through ui_fit_label) and any
-       future row kind that skips the fit are still covered defensively.
+    /* Letter index strip, drawn LAST so its opaque background covers any row
+       text that ran into its column. The fitting above already keeps a label
+       out, but the title (not put through ui_fit_label) and any future
+       fit-skipping row kind are covered defensively.
 
-       Its background fill goes to W, the true buffer edge, NOT to
-       u->x + u->w like every other fill in this function: a row label can
-       overrun the widget's own right edge (the same "clips to the panel,
-       not the row" fact above) into whatever margin the caller left outside
-       u->w, and that margin never gets background-cleared by anything else
-       -- measured on tests/golden/romlist_dense.pgm, whose longest title
-       left ink stray in exactly that margin before this widened to W. */
+       Its background fill goes to W, THE TRUE BUFFER EDGE, not u->x + u->w
+       like every other fill here: a row label can overrun the widget's right
+       edge into whatever margin the caller left outside u->w, and nothing else
+       clears that margin -- measured on tests/golden/romlist_dense.pgm, whose
+       longest title left stray ink there before this widened to W. */
     if (u->alpha_jump) {
         int sx = strip_x;
         int body_top = u->y + u->row_h;
@@ -389,12 +362,10 @@ void ui_list_render(const koboy_ui_list *u, uint8_t *fb, int stride,
         if (band_h < 1) band_h = 1;
         for (int b = 0; b < UI_BUCKETS; b++) {
             char glyph[2] = { (char)(b == 0 ? '#' : 'A' + (b - 1)), 0 };
-            /* Present letters draw in full ink; empty ones draw dim (reusing
-               UI_RULE's tone rather than a new constant) so the strip still
-               shows the whole alphabet for spatial consistency -- like an
-               address book -- while making clear which taps land exactly
-               where they say and which will fall through to the nearest
-               occupied letter (see nearest_present_bucket). */
+            /* Present letters in full ink, empty ones dim (reusing UI_RULE's
+               tone), so the strip still shows the whole alphabet for spatial
+               consistency while saying which taps land where they say and
+               which fall through to the nearest occupied letter. */
             uint8_t ink = (u->letter_present & (1u << b)) ? UI_INK : UI_RULE;
             int gy = body_top + b * band_h + (band_h - TEXT_GLYPH_H * UI_TEXT_PX) / 2;
             int gx = sx + (strip_w(u) - TEXT_GLYPH_W * UI_TEXT_PX) / 2;
@@ -440,12 +411,10 @@ static void page_by(koboy_ui_list *u, int delta)
     u->page = p;
 }
 
-/* Jumps to the first item of bucket `b`'s page. `b` must already be a
-   PRESENT bucket (from nearest_present_bucket) -- this does not itself
-   handle "no such bucket", callers do. Returns the index jumped to, or -1 if
-   the bucket turned out to be empty after all (defensive; should not happen
-   given the invariant above, but a jump that fails must still be UI_NONE
-   rather than silently teleport the page). */
+/* Jumps to the first item of bucket `b`'s page. `b` must already be PRESENT
+   (from nearest_present_bucket); callers handle "no such bucket". Returns the
+   index, or -1 if the bucket was empty after all -- defensive, but a jump that
+   fails must be UI_NONE rather than silently teleport the page. */
 static int jump_to_bucket(koboy_ui_list *u, int b)
 {
     int idx = first_index_of_bucket(u, b);
@@ -470,14 +439,11 @@ ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
     bool tap = touching && !u->prev_touch;
     u->prev_touch = touching;
 
-    /* A+B TOGETHER, checked before either alone: the hardware-only letter
-       jump. Two physical page-turn buttons cannot spell a letter, but they
-       can advance through the letters the list actually has, wrapping
-       around -- which is real navigation once "the next occupied letter"
-       instead of "the next page" is 300 ROMs away from where you are. Must
-       be tested BEFORE the single-button checks below, or a rising A+B would
-       always be consumed as PAGE_PREV first (checked here first is what
-       makes the two distinguishable; see tests/test_ui.c). */
+    /* A+B TOGETHER: the hardware-only letter jump. Two page-turn buttons
+       cannot spell a letter but can advance through the letters the list has,
+       wrapping -- real navigation when the next occupied letter is 300 ROMs
+       away. MUST be tested BEFORE the single-button checks below, or a rising
+       A+B is always consumed as PAGE_PREV first (tests/test_ui.c). */
     if (u->alpha_jump && (rising & (KOBOY_BTN_A | KOBOY_BTN_B))
                        == (KOBOY_BTN_A | KOBOY_BTN_B)) {
         int top = u->count > 0 ? u->page * u->rows : -1;
@@ -513,12 +479,10 @@ ui_action ui_list_feed(koboy_ui_list *u, const koboy_input_state *st,
     int foot_top = u->y + u->h - u->row_h;
     int body_top = u->y + u->row_h;
 
-    /* Letter strip: the narrow right-edge column, body rows only (never the
-       title row above it or the footer row below it, which keeps this from
-       ever competing with the footer arrows for the same pixels). Checked
-       before both the footer-arrow test and the row hit-test below, so a tap
-       inside the strip's column can never fall through to either -- it is
-       always claimed here first. */
+    /* Letter strip: the right-edge column, BODY ROWS ONLY -- never the title
+       above or the footer below, so it cannot compete with the footer arrows
+       for the same pixels. Checked before both the footer-arrow test and the
+       row hit-test, so a tap in the strip's column never falls through. */
     if (u->alpha_jump && tx >= u->x + u->w - strip_w(u) &&
         ty >= body_top && ty < foot_top) {
         int band_h = (foot_top - body_top) / UI_BUCKETS;

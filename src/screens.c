@@ -1,9 +1,6 @@
-/* The full-panel UI screens. See screens.h for why they are not in main.c.
- *
+/* The full-panel UI screens; screens.h says why they are not in main.c.
  * Everything below drives ui.c's one list widget through the koboy_platform
- * vtable, and every comment here came with its function out of main.c
- * unedited except for the six function names, which grew a `screen_` prefix
- * when they stopped being static. */
+ * vtable. */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
 
@@ -23,32 +20,22 @@ volatile sig_atomic_t koboy_stop;
    the user quit, the run was stopped, or a script ran out.
 
    `script`/`script_n` make the startup flow reachable in a bounded unattended
-   run. Without them every automated test would pass --rom and skip every
-   list screen entirely -- the same blind spot that hid v1's first-run
-   deadlock through twenty reviews. MODE_MENU joined them with the `menu`
-   verb: screen_menu is scripted, and so is everything CHOOSE ROM opens
-   underneath it. screen_slot_picker is the one screen nothing drives yet -- it
-   is wired for a script (see its own comment) but no test walks into it, and
-   saying otherwise here would overclaim coverage the suite does not have.
+   run. Without them every automated test passes --rom and skips every list
+   screen -- the blind spot that hid v1's first-run deadlock through twenty
+   reviews. The `menu` verb extends that to screen_menu and everything CHOOSE
+   ROM opens under it. screen_slot_picker is wired for a script but nothing
+   walks into it yet.
 
    `script_i`, when not NULL, is a CURSOR shared across every screen one
-   --ui-script run drives (MAIN MENU, then RECENT or ALL GAMES; then, past a
-   `menu` verb, the in-game MENU and the same two lists again) -- a pointer
-   rather than a local index so a script written as one flat sequence of taps
-   can walk through several screen_list calls in a row, each screen picking up
-   exactly where the previous one's last consumed state left off. Every call
-   still primes with one synthetic released state regardless of the cursor's
-   position (see the `primed` logic below): each fresh koboy_ui_list demands
-   its own release before its first tap, independent of what the PREVIOUS
-   screen's script tap left the finger doing. Callers that never script
-   (screen_menu, screen_slot_picker) pass NULL here, same as they pass NULL for
-   `script`.
+   --ui-script run drives, so a script written as one flat sequence of taps
+   walks through several screen_list calls, each picking up where the last
+   consumed state left off. Every call still primes with one synthetic RELEASED
+   state regardless of the cursor position (see `primed` below): each fresh
+   koboy_ui_list demands its own release before its first tap.
 
-   `disabled_index`, when not -1, is a row that SELECTS nothing: the ROM
-   browser's synthetic "+N MORE ROMS NOT SHOWN" row uses this so a tap on it
-   cannot be handed to romlist_path as if it were a real ROM (which would try
-   to load a file that does not exist). The loop just keeps polling instead
-   of breaking, the same as any other no-op input. */
+   `disabled_index`, when not -1, is a row that SELECTS nothing -- the ROM
+   browser's "+N MORE" row uses it so a tap cannot reach romlist_path as if it
+   were a real ROM. The loop keeps polling, like any other no-op input. */
 int screen_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
                 uint8_t *panel, int stride, int pw, int ph,
                 const koboy_input_state *script, int *script_i, int script_n,
@@ -73,17 +60,14 @@ int screen_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
         const koboy_input_state *st;
         koboy_input_state synth;
         if (script) {
-            /* One RELEASED state before the script's first entry, always.
-               ui_list_init sets prev_touch = true (a fresh list demands a
-               release before it accepts a tap, so a still-down finger cannot
-               carry a selection in from the previous screen), so a script
-               whose first verb is `tap` had its press swallowed and its
-               release consumed as the priming edge -- selecting nothing and
-               exiting 0, i.e. a green CI run that tested nothing. Confirmed
-               on hardware with `printf 'tap 300 300\n'`.
-               Primed here rather than documented in uiscript.h: a note relies
-               on every future author reading it, and the scripted path is
-               precisely the one nobody's tests exercise honestly. */
+            /* One RELEASED state before the script's first entry, ALWAYS.
+               ui_list_init sets prev_touch = true, so a script whose first
+               verb is `tap` had its press swallowed and its release consumed
+               as the priming edge -- selecting nothing and exiting 0, a green
+               CI run that tested nothing. Confirmed on hardware with
+               `printf 'tap 300 300\n'`. Primed HERE rather than documented in
+               uiscript.h, because a note relies on every future author
+               reading it. */
             if (!primed) {
                 primed = true;
                 memset(&synth, 0, sizeof synth);
@@ -95,11 +79,9 @@ int screen_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
             }
         } else {
             pf->poll_input(pf->ctx, in);
-            /* NOT input_state(): the faceplate's A/B touch zones stay live
-               under a full-panel list, and their synthesised joypad bits are
-               eaten by ui_list_feed as page-turns before any row hit-test
-               runs. input_ui_state passes the hardware keys and the touch
-               coordinates and drops the synthesised bits -- see input.h. */
+            /* NOT input_state(): the faceplate's A/B zones stay live under a
+               full-panel list and ui_list_feed eats their synthesised bits as
+               page-turns before any row hit-test. See input.h. */
             input_ui_state(in, &synth);
             st = &synth;
         }
@@ -116,11 +98,10 @@ int screen_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
 }
 
 /* Returns the chosen MENU_* action, or MENU_RESUME if the user backed out.
-   `has_states` greys nothing out visually -- the label says so instead, which
-   is cheaper on a panel with no colour and no hover. `map` is likewise shown
-   in the row rather than behind it: on a panel with no hover and no second
-   screen, a setting you cannot read without opening something is a setting
-   nobody knows the value of. */
+   `has_states` greys nothing out visually -- the LABEL says so, cheaper on a
+   panel with no colour and no hover. `map` is likewise IN the row: with no
+   hover and no second screen, a setting you cannot read without opening
+   something is one nobody knows the value of. */
 int screen_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                 int stride, int pw, int ph, bool has_states,
                 koboy_gray_map map, int divisor,
@@ -180,22 +161,21 @@ int screen_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                  KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                  pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
 
-    /* The same shared cursor screen_menu uses. Wired even though nothing scripts
-       SAVE/LOAD yet, because the alternative is a TRAP: this screen is one
-       tap past a row a script can now reach, and an unscripted screen_list with
-       no live input does not exit -- it polls until the run is killed. A
-       script that tapped SAVE STATE would hang rather than fail. */
+    /* The same shared cursor screen_menu uses. Wired even though nothing
+       scripts SAVE/LOAD, because the alternative is a TRAP: this screen is one
+       tap past a row a script can reach, and an unscripted screen_list with no
+       live input never exits -- a script tapping SAVE STATE would HANG rather
+       than fail. */
     int pick = screen_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
     if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
     return pick + 1;
 }
 
 
-/* Returns the chosen MAIN_* action, or -1 if the run was stopped (signal, or
-   should_quit()) or a script ran out before choosing anything. Unlike
-   screen_menu/screen_slot_picker, THIS screen IS scripted -- it is the new first
-   screen of the startup flow, in front of both the ROM browser and the
-   RECENT picker, so a --ui-script run has to navigate it to reach either. */
+/* Returns the chosen MAIN_* action, or -1 if the run was stopped or a script
+   ran out. THIS screen IS scripted: it is the first screen of the startup
+   flow, in front of both the ROM browser and the RECENT picker, so a
+   --ui-script run must navigate it to reach either. */
 int screen_main_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                      int stride, int pw, int ph,
                      const koboy_input_state *script, int *script_i, int script_n)
@@ -210,19 +190,14 @@ int screen_main_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
     return screen_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
 }
 
-/* Returns the chosen index into `rc` (0-based), or -1 if the user backed out
-   by tapping BACK.
+/* Returns the chosen index into `rc`, or -1 if the user tapped BACK.
 
-   BACK is a real, always-present trailing row -- the same device
-   screen_slot_picker uses -- rather than "no cancel gesture" the way the
-   top-level MAIN MENU and the ROM browser both get away with (their only
-   ways out are picking something or the whole app quitting, which is fine
-   because THEY are reachable only by deliberate user choice already). A
-   RECENT list can be genuinely empty on a first run or right after clearing
-   history, and staring at a screen with nothing to tap and no way back is a
-   worse first experience than one more row. When `rc` is empty, a single
-   disabled placeholder row explains why, using screen_list's disabled_index the
-   same way the ROM browser's "+N MORE ROMS" overflow row does. */
+   BACK is a real trailing row, unlike the MAIN MENU and the ROM browser, which
+   have no cancel gesture (they are reachable only by deliberate choice). A
+   RECENT list can be genuinely EMPTY on a first run or after clearing history,
+   and a screen with nothing to tap and no way back is a worse first experience
+   than one more row. When `rc` is empty a disabled placeholder row explains
+   why, using screen_list's disabled_index. */
 int screen_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                          int stride, int pw, int ph, const koboy_recent *rc,
                          const koboy_input_state *script, int *script_i, int script_n)
@@ -261,31 +236,26 @@ int screen_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
 }
 
 /* ------------------------------------------------------------- the browser
-   One directory at a time, not the whole tree flattened. The flatten was
-   fine for a hundred ROMs in one folder and unreadable for a real collection:
-   59 Game & Watch titles under roms/Game and Watch/ produced 59 rows whose
-   first 15 characters were identical, and ui_fit_label's middle ellipsis then
-   spent the row's width on that shared prefix and ate the actual title.
+   ONE DIRECTORY AT A TIME, not the whole tree flattened. The flatten was fine
+   for a hundred ROMs in one folder and unreadable for a real collection: 59
+   Game & Watch titles produced 59 rows whose first 15 characters were
+   identical, and ui_fit_label's middle ellipsis then spent the row's width on
+   that shared prefix and ate the title.
 
-   The header says where you are, so a folder you descended into is not a
-   mystery -- ui_path_title builds it (and owns the truncation rule), because
-   how much a title row can carry is the list widget's fact, not the
-   browser's. "ALL GAMES" rather than the old "CHOOSE A GAME" so the header
-   names the MAIN MENU row that got you here, and the breadcrumb below it
-   reads as a path. */
+   The header says where you are; ui_path_title builds it and owns the
+   truncation rule, because how much a title row carries is the list widget's
+   fact. "ALL GAMES" names the MAIN MENU row that got you here, and the
+   breadcrumb below reads as a path. */
 #define BROWSER_TITLE_HEAD "ALL GAMES"
 
 /* Drives the ROM browser until the user picks a ROM, backs out of the root, or
    the run ends. Returns a BROWSE_*; on BROWSE_PICKED it writes the ROM's full
-   path into out_path. It used to hand back the row's TEXT as well, for the
-   RECENT list to store; the row text is the path's last component and
-   recent.c derives it (recent_name_from_path), so a second output that could
-   disagree with the first no longer exists.
+   path into out_path -- and NOT the row text as well, because recent.c derives
+   that from the path (recent_name_from_path) and a second output could
+   disagree with the first.
 
-   Both entry points -- startup ALL GAMES and the in-game MENU's CHOOSE ROM --
-   call this. They used to carry a hand-copied browser each, which was already
-   two copies of the scan/geometry/alpha-strip setup before navigation added a
-   loop to each of them. */
+   Both entry points -- startup ALL GAMES and MENU -> CHOOSE ROM -- call
+   this. */
 
 int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                    int stride, int pw, int ph, const char *rom_dir,
@@ -301,12 +271,11 @@ int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
 
     int n = romlist_scan(&rl, rom_dir);
     if (n < 0) { romlist_free(&rl); return BROWSE_ERR_DIR; }
-    /* rl.count, not n: n also counts the synthetic overflow row when
-       rl.hidden > 0, and a rom_dir holding nothing but one oversized-name ROM
-       (hidden > 0, count == 0) must still report "no roms" rather than open a
-       browser whose only row selects nothing. count rather than rl.roms
-       because a root with no loose ROMs but a folder full of them is a
-       perfectly good collection -- it just needs one tap first. */
+    /* rl.count, NOT n: n counts the synthetic overflow row too, and a rom_dir
+       holding one oversized-name ROM (hidden > 0, count == 0) must report "no
+       roms" rather than open a browser whose only row selects nothing. count
+       rather than rl.roms because a root with no loose ROMs but a folder full
+       of them is a good collection -- it just needs one tap first. */
     if (rl.count == 0) { romlist_free(&rl); return BROWSE_ERR_EMPTY; }
 
     int result = BROWSE_NONE;
@@ -331,13 +300,10 @@ int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
                             script, script_i, script_n,
                             rl.hidden > 0 ? rl.count : -1);
         if (pick < 0) {
-            /* Stopped (signal or should_quit) or the script ran out. This
-               leaves the BROWSER, from whatever directory it happened to be
-               in -- it does not walk back up one level per iteration, which
-               would make a Ctrl-C in a nested folder take several passes to
-               notice. Backing out of the ROOT is the same thing and therefore
-               still behaves exactly as it did before navigation existed; the
-               ".." row is what goes up one level. */
+            /* Stopped, or the script ran out. Leaves the BROWSER from whatever
+               directory it is in rather than walking up one level per
+               iteration, which would make a Ctrl-C in a nested folder take
+               several passes to notice. The ".." row is what goes up. */
             result = BROWSE_NONE;
             break;
         }

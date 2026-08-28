@@ -129,12 +129,10 @@ static bool in_rect_xywh(int x, int y, const koboy_rect *r)
 
 /* One axis of the libretro pointer: a panel offset `d` inside a `span`-wide
    rect becomes -0x7fff at the first pixel and +0x7fff at the last.
-
-   65534, not 65536, and (span - 1), not span, so BOTH ends are exact: the
-   core divides straight back by 65534 (third_party/gw/gwlua/functions.c), so
-   a mapping that only got the left edge right would leave the rightmost
-   column of artwork -- where several titles put a button -- permanently
-   unreachable. */
+   65534 and (span - 1), NOT 65536 and span, so BOTH ends are exact: the core
+   divides straight back by 65534, so getting only the left edge right leaves
+   the rightmost artwork column -- where several titles put a button --
+   permanently unreachable. */
 static int16_t pointer_axis(int d, int span)
 {
     if (span < 2) return 0;      /* LIVE GUARD: a 1px rect has no gradient */
@@ -143,18 +141,15 @@ static int16_t pointer_axis(int d, int span)
     return (int16_t)((long)d * 65534 / (span - 1) - 32767);
 }
 
-/* The touch d-pad, for a cross drawn at (dcx, dcy) with arms of half-length
-   dr. BOTH layouts call this: the Game & Watch strip draws the same cross
-   chrome.c draws for the DMG faceplate (draw_dpad, shared for the same
-   reason), and a title that binds up/down/left/right is steered exactly the
-   same way. Extracted rather than copied so the deadzone, the hysteresis and
-   the CROSS-vs-RELATIVE origin have one implementation -- v1 already learned
-   that a drawn absolute cross has to be steered absolutely, and a second copy
-   is a second chance to get that wrong.
+/* The touch d-pad, for a cross at (dcx, dcy) with arms of half-length dr. BOTH
+   layouts call it -- the strip and the DMG faceplate draw the same cross
+   (draw_dpad) -- so the deadzone, the hysteresis and the CROSS-vs-RELATIVE
+   origin have ONE implementation. v1 learned that a drawn absolute cross must
+   be steered absolutely; a second copy is a second chance to get it wrong.
 
-   Owns in->pad_active / pad_slot / pad_ox / pad_oy / held_dirs, and must be
-   called exactly ONCE per recompute: the claim-on-touch-down and
-   release-on-lift below are edge logic, not a query. */
+   Owns pad_active/pad_slot/pad_ox/pad_oy/held_dirs and must be called exactly
+   ONCE per recompute: claim-on-touch-down and release-on-lift are EDGE logic,
+   not a query. */
 static uint16_t dpad_bits(koboy_input *in, int dcx, int dcy, int dr)
 {
     /* claim a pad slot on touch-down inside the pad region */
@@ -184,32 +179,26 @@ static uint16_t dpad_bits(koboy_input *in, int dcx, int dcy, int dr)
     return d;
 }
 
-/* The LCD layout's input model, in full: hardware keys, a FULL RETROPAD drawn
-   into the bottom strip, one MENU zone, and the pointer.
+/* The LCD layout's input model: hardware keys, a FULL RETROPAD in the bottom
+   strip, one MENU zone, and the pointer.
 
-   The retropad is the correction this layout needed. Its first version drew
-   and hit-tested nothing but MENU, on the theory that a Game & Watch title
-   exposes its own on-artwork buttons to a pointer. Measured against the
-   shipped .mgw collection, it does not: those files route through gwlua's
-   compat init, which has no pointer handling at all -- a pointer press
-   anywhere on the artwork changes ZERO pixels, a joypad press changes 211k.
-   Every one of these titles is driven by per-title retropad bindings that
-   koboy cannot know in advance (Mickey Mouse: up/down/x/b for four diagonals,
-   l1/r1 for GAME A / GAME B; Donkey Kong: the full cross plus b for JUMP), so
-   the whole set is exposed rather than a guessed subset.
+   The retropad is the correction this layout needed. Its first version
+   hit-tested nothing but MENU, on the theory that a Game & Watch title exposes
+   its own on-artwork buttons to a pointer. MEASURED false: the shipped .mgw
+   files route through gwlua's compat init, which has no pointer handling -- a
+   pointer press anywhere on the artwork changes ZERO pixels, a joypad press
+   changes 211k. These titles use per-title retropad bindings koboy cannot know
+   in advance, so the whole set is exposed.
 
-   Every zone below comes out of chrome_lcd_layout -- the SAME struct
-   chrome.c draws from -- so a drawn control and its live zone cannot drift.
+   Every zone comes out of chrome_lcd_layout -- the SAME struct chrome.c draws
+   from -- so a drawn control and its live zone cannot drift.
 
-   MENU is tested FIRST and its slot is excluded from everything after it, and
-   a slot that pressed any control is excluded from the pointer scan. At the
-   shipped geometry none of these zones can overlap (the controls are in the
-   strip, the pointer rect is the artwork above it) -- but "cannot overlap
-   today" is a property of numbers in two files, and the consequence of it
-   lapsing is a MENU tap that also fires a button, or a button press that also
-   clicks the artwork. Ordering makes it structural instead, and
-   tests/test_input_touch.c overlaps the zones deliberately (through
-   input_set_pointer_rect) so the ordering is an assertion and not a comment. */
+   ORDERING IS STRUCTURAL: MENU is tested FIRST and its slot excluded from
+   everything after, and a slot that pressed any control is excluded from the
+   pointer scan. At the shipped geometry none of these zones overlap, but that
+   is a property of numbers in two files, and the consequence of it lapsing is
+   a MENU tap that also fires a button. tests/test_input_touch.c overlaps the
+   zones deliberately so the ordering is an assertion, not a comment. */
 static void recompute_lcd(koboy_input *in, uint16_t b)
 {
     chrome_lcd_controls c;
@@ -236,28 +225,21 @@ static void recompute_lcd(koboy_input *in, uint16_t b)
         if (in->pad_active && s == in->pad_slot) continue; /* steering, not a button */
         int x = in->st.touch[s].x, y = in->st.touch[s].y;
 
-        /* The face buttons. WHERE they are is per system (chrome.h's
-           koboy_lcd_face) and WHICH BIT each reports is not: c.x_cx is always
-           the disc that sends KOBOY_BTN_X, whether that is the diamond's top
-           or the six-button grid's top-middle, so these four lines are
-           unchanged by the arrangement.
+        /* The face buttons. WHERE they sit is per system; WHICH BIT each
+           reports is not -- c.x_cx is always the disc that sends KOBOY_BTN_X,
+           whichever arrangement is drawn.
 
-           The two shoulder bits are the ones that MOVE: discs in the grid
-           (the Mega Drive's X and Z, which the console puts on its face) and
+           The two SHOULDER bits are what moves: discs in the grid under ROWS6,
            pills in the lower band under the diamond. Tested from the same
-           struct chrome.c drew from, so a drawn control and its live zone
-           cannot disagree about which of the two it is -- and the unused
-           form is inert twice over, since chrome_lcd_layout zeroes the pills
-           under ROWS6 and in_rect_xywh cannot match a zero-width rect. */
+           struct chrome.c drew from, and the unused form is inert twice over
+           (chrome_lcd_layout zeroes the pills under ROWS6, and in_rect_xywh
+           cannot match a zero-width rect). */
         uint16_t hit = 0;
-        /* GATED ON face_n, NOT ON THE ZERO. PAIR2 (a Game Boy Advance) leaves
-           x_* and y_* at the origin because that machine has no third and
-           fourth face button -- and unlike an absent PILL, an absent DISC is
-           not inert on its own: in_circle(x, y, 0, 0, face_r) matches every
-           touch within face_r of the panel's top-left corner, which is inside
-           the game rect on every panel koboy supports. The same hazard
-           koboy.h's koboy_extra_btn note records for r == 0, from the other
-           direction. */
+        /* GATED ON face_n, NOT ON THE ZERO. PAIR2 leaves x_* and y_* at the
+           origin, and unlike an absent PILL an absent DISC is NOT inert:
+           in_circle(x, y, 0, 0, face_r) matches every touch within face_r of
+           the panel's top-left corner, which is inside the game rect on every
+           supported panel. */
         if (c.face_n >= 4) {
             if (in_circle(x, y, c.x_cx, c.x_cy, c.face_r)) hit |= KOBOY_BTN_X;
             if (in_circle(x, y, c.y_cx, c.y_cy, c.face_r)) hit |= KOBOY_BTN_Y;
@@ -275,13 +257,11 @@ static void recompute_lcd(koboy_input *in, uint16_t b)
         if (in_rect_xywh(x, y, &c.start))  hit |= KOBOY_BTN_START;
         if (hit) { b |= hit; continue; }        /* a drawn control wins the touch */
 
-        /* Otherwise it may be a pointer press. Written as one condition
-           rather than as two early-outs so the loop ALWAYS reaches every
-           remaining slot: an early `break` once the pointer is claimed reads
-           as an optimisation and behaves identically in every case a test can
-           reach with two fingers, while silently dropping a third finger's
-           button press. `!pressed` keeps the first live touch as the owner --
-           there is one touchscreen and one pointer. */
+        /* One condition rather than two early-outs so the loop ALWAYS reaches
+           every remaining slot: an early `break` once the pointer is claimed
+           reads as an optimisation, behaves identically with two fingers, and
+           silently drops a third finger's button press. `!pressed` keeps the
+           first live touch as the owner -- one touchscreen, one pointer. */
         if (!pressed && in_rect_xywh(x, y, &in->ptr_rect)) {
             in->st.pointer.x = pointer_axis(x - in->ptr_rect.x, in->ptr_rect.w);
             in->st.pointer.y = pointer_axis(y - in->ptr_rect.y, in->ptr_rect.h);
@@ -290,15 +270,13 @@ static void recompute_lcd(koboy_input *in, uint16_t b)
     }
     /* MUST be assigned every pass, not only when something is down: a core
        that never sees PRESSED go false holds the artwork's button forever.
-       The COORDINATES are deliberately left where they were -- that is what a
-       real pointer device reports on release, and the core reads PRESSED to
-       decide a press, not the position.
+       The COORDINATES are deliberately left where they were -- what a real
+       pointer device reports on release.
 
-       The pointer stays even though the shipped titles ignore it: it is
-       additive, koboy's side of it is verified end to end, and a title using
-       gwlua's NEW init path (18 of the games in third_party/gw/games/ already
-       do) reads it. It is not dead code -- it is code the CONTENT in this
-       collection happens not to exercise. */
+       The pointer stays even though the shipped titles ignore it: 18 of the
+       games in third_party/gw/games/ use gwlua's NEW init path and read it.
+       Not dead code -- code this collection's CONTENT happens not to
+       exercise. */
     in->st.pointer.pressed = pressed;
 
     in->st.buttons = b;
@@ -314,11 +292,10 @@ static void recompute(koboy_input *in)
        page-turn button, and none of those sources should shadow another. */
     uint16_t b = in->key_bits | in->hat_bits;
 
-    /* The page-turn keys and a gamepad keep working in BOTH layouts -- they
-       are folded in above the split, not inside the DMG branch. Several Game
-       & Watch titles bind ordinary retropad buttons as well as their drawn
-       ones, and a device with hardware buttons should not lose them just
-       because the faceplate stopped drawing any. */
+    /* The page-turn keys and a gamepad work in BOTH layouts -- folded in above
+       the split, not inside the DMG branch: several Game & Watch titles bind
+       ordinary retropad buttons too, and a device with hardware buttons should
+       not lose them because the faceplate stopped drawing any. */
     if (in->prof.layout_mode == KOBOY_LAYOUT_LCD) { recompute_lcd(in, b); return; }
 
     b |= dpad_bits(in, perm(l->dpad_cx, W), perm(l->dpad_cy, H), perm(l->dpad_r, W));
@@ -329,15 +306,12 @@ static void recompute(koboy_input *in)
         int x = in->st.touch[s].x, y = in->st.touch[s].y;
         if (in_circle(x, y, perm(l->a_cx, W), perm(l->a_cy, H), perm(l->a_r, W))) b |= KOBOY_BTN_A;
         if (in_circle(x, y, perm(l->b_cx, W), perm(l->b_cy, H), perm(l->b_r, W))) b |= KOBOY_BTN_B;
-        /* The extra discs. Which BIT each one reports is the CORE's decision,
-           not one made here -- the Pokemon Mini core binds its C to
-           RETRO_DEVICE_ID_JOYPAD_R and beetle-wswan binds the WonderSwan's
-           A and B to JOYPAD_L / JOYPAD_R in its rotated key map -- so the bit
-           travels in the layout beside the geometry (koboy.h) and this loop
-           just reports it. Guarded on r the same way chrome.c's draw is: an
-           empty slot would otherwise be a zero-radius circle at (0,0), and
-           in_circle's <= would report a hit for a touch at exactly the panel
-           origin, which is a real coordinate a real finger can produce. */
+        /* The extra discs. Which BIT each reports is the CORE's decision, so
+           the bit travels in the layout beside the geometry (koboy.h) and this
+           loop just reports it. LIVE GUARD on r, as chrome.c's draw has: an
+           empty slot is a zero-radius circle at (0,0), and in_circle's <=
+           would report a hit for a touch at exactly the panel origin -- a real
+           coordinate a real finger can produce. */
         for (int e = 0; e < KOBOY_MAX_EXTRA_BTNS; e++)
             if (l->extra[e].r > 0 &&
                 in_circle(x, y, perm(l->extra[e].cx, W), perm(l->extra[e].cy, H),
@@ -394,15 +368,12 @@ void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
         }
         if (e->type != KOBOY_EV_ABS) continue;
         switch (e->code) {
-        /* The hat needs no deadzone and no hysteresis, unlike the touch
-           thumb-pad above: the kernel already reports a clean three-state
-           axis (-1/0/+1, measured on a real Xbox Wireless Controller,
-           2026-08-26), so there is nothing left to filter. Copying the touch
-           pad's axis_bits() machinery onto it would only add latency a
-           digital switch does not have. Updated here, immediately, the same
-           way apply_transform() updates touch position immediately below --
-           both wait for the shared recompute() at SYN to become visible in
-           st.buttons. */
+        /* The hat needs NO deadzone and NO hysteresis, unlike the touch
+           thumb-pad: the kernel already reports a clean three-state axis
+           (-1/0/+1, MEASURED on a real Xbox Wireless Controller, 2026-08-26),
+           so copying axis_bits() onto it would only add latency a digital
+           switch does not have. Updated immediately here; both this and touch
+           position wait for recompute() at SYN to reach st.buttons. */
         case KOBOY_ABS_HAT0X:
             in->hat_bits &= (uint16_t)~(KOBOY_BTN_LEFT | KOBOY_BTN_RIGHT);
             if (e->value < 0) in->hat_bits |= KOBOY_BTN_LEFT;
@@ -413,16 +384,14 @@ void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
             if (e->value < 0) in->hat_bits |= KOBOY_BTN_UP;
             else if (e->value > 0) in->hat_bits |= KOBOY_BTN_DOWN;
             break;
-        /* ABS_X/ABS_Y (codes 0x00/0x01, the analog stick) are deliberately
-           NOT handled -- and not even named as constants, the same rule
-           in.h explains. MEASURED: the stick streams at ~100Hz even at rest
-           (fuzz 255, flat 4095 around a centred 32768), so decoding it here
-           would flood input_feed with noise for no gain -- the hat above is
-           already the d-pad a Game Boy needs. They fall through to `default`
-           and are silently ignored. Stick support, if ever added, needs the
-           measured `flat` value applied as a deadzone; it must NOT reuse
-           axis_bits() untouched, because that deadzone is in raw touch
-           pixels, not the stick's 0..65535 range. */
+        /* ABS_X/ABS_Y (0x00/0x01, the analog stick) are deliberately NOT
+           handled, and not even named as constants. MEASURED: the stick
+           streams at ~100 Hz even at rest (fuzz 255, flat 4095 around a
+           centred 32768), so decoding it would flood input_feed with noise for
+           no gain -- the hat is already the d-pad. They fall through to
+           `default`. Stick support, if added, needs the measured `flat` as a
+           deadzone and must NOT reuse axis_bits() untouched, whose deadzone is
+           in raw touch pixels, not 0..65535. */
         case KOBOY_ABS_MT_SLOT:
             if (e->value >= 0 && e->value < KOBOY_MAX_TOUCH) in->slot = e->value;
             break;
