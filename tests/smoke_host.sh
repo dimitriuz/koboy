@@ -1011,7 +1011,9 @@ echo "ok: MENU -> SCREENSHOT writes a real PNG of the GAME, numbered across rela
 #   tap 200 104  -- the slot picker's row 0, slot 1
 #
 # It also makes the FIRST automated save state this project has ever written.
-# docs/FOLLOWUPS.md #76: the device half is still not done.
+# The device half is done too -- the owner has since written and reloaded a
+# state by hand on the Libra 2 -- but by hand is not a regression test, which
+# is what this run is for.
 romdir="$(mktemp -d)"; : > "$romdir/AAA TEST.gb"
 savedir="$(mktemp -d)"; script="$(mktemp)"
 printf 'menu\ntap 200 104\ntap 200 104\n' > "$script"
