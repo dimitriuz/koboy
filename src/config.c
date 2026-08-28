@@ -27,108 +27,79 @@ void config_defaults(koboy_config *c)
 {
     memset(c, 0, sizeof *c);
     c->scale = 5;
-    /* SHIPPED BUTTON DEFAULTS, and the history matters because a zero here looks
-       harmless. calib_needed() treats 0 as "not calibrated", the memset above
-       makes both keys 0, and the calibration loop only advances on a hardware key
-       press -- so a first run on a touch-only Kobo (Clara family, Nia, Elipsa,
-       all supported by spec §3) sat on "press the button you want as A" forever
-       with nothing but the power button doing anything. Spec §7 mandates built-in
-       defaults as a starting guess that calibration then overrides; this is that
-       guess, and shipping the sentinel instead was the bug.
-       The codes are the two page-turn buttons MEASURED on the Libra 2's gpio-keys
-       node (spec §12 and the input-device table). Never default either of them to
-       KOBOY_KEY_POWER: the buttons share that node with it and power is the quit
-       key. */
+    /* SHIPPED BUTTON DEFAULTS, and a zero here looks harmless but is not:
+       calib_needed() treats 0 as "not calibrated" and the calibration loop only
+       advances on a hardware key press, so a first run on a touch-only Kobo
+       (Clara family, Nia, Elipsa) sat on "press the button you want as A"
+       forever. Spec §7 mandates built-in defaults as the starting guess
+       calibration overrides. The codes are the Libra 2's two page-turn buttons,
+       MEASURED off its gpio-keys node (spec §12). Never default either to
+       KOBOY_KEY_POWER: they share that node with it and power is the quit key. */
     c->key_a = KOBOY_KEY_PAGE_F23;
     c->key_b = KOBOY_KEY_PAGE_F24;
-    /* key_start/key_select have no page-turn-button equivalent to fall back
-       on the way key_a/key_b do -- a Kobo has exactly two hardware buttons,
-       already spent above. So unlike key_a/key_b, THIS default is a GUESS,
-       not a measurement of correctness: BTN_TL/BTN_TR (Xbox LB/RB) are a
-       reasonable pair because they are two buttons distinct from A/B/the
-       d-pad on the one real pad this project has measured (spec Appendix A,
-       2026-08-26), but nothing says every gamepad's user wants shoulder
-       buttons for Start/Select. Config-overridable, and first-run
-       calibration exists for exactly this reason -- see KOBOY_KEY_BTN_TL's
-       comment in koboy.h. On a touch-only or two-button Kobo with no pad,
-       these two codes simply never arrive and Start/Select stay reachable
-       only through the drawn faceplate, same as they always were. */
+    /* A GUESS, unlike key_a/key_b above: a Kobo has exactly two hardware
+       buttons and they are already spent. BTN_TL/BTN_TR (Xbox LB/RB) are
+       distinct from A/B/d-pad on the one pad this project has measured (spec
+       Appendix A, 2026-08-26); nothing says every user wants shoulders for
+       Start/Select. Overridable, and calibration exists for this -- see
+       KOBOY_KEY_BTN_TL in koboy.h. With no pad these codes never arrive and
+       Start/Select stay reachable through the drawn faceplate. */
     c->key_start = KOBOY_KEY_BTN_TL;
     c->key_select = KOBOY_KEY_BTN_TR;
     c->present_divisor = KOBOY_PRESENT_DIVISOR_DEFAULT;
-    /* Ghosting mitigation, DISABLED BY DEFAULT, and the history matters
-       because "off" looks like an oversight otherwise.
-
-       Both this and full_refresh_permille below were written for a forced-DU4
-       pipeline. DU4 is a non-flashing waveform that cannot erase, so residue
-       accumulated on every update and only a flashing GC16 cleared it; a
-       periodic cleanup and a "large dirty area" promotion were the two ways of
-       scheduling that flash. Then the fast waveform became AUTO, and AUTO hands
-       the choice to the EPDC, which inspects the actual pixel transitions in
-       each region and already picks something capable of erasing when a region
-       is erasing. That made both mitigations redundant.
-
-       MEASURED on the Libra 2, from a refresh trace: 35 AUTO refreshes on small
-       rects, none of which flashed, against 21 GC16 flashes -- every single one
-       of them a large region tripping the 450-permille threshold below. Zero
-       scheduled cleanups fired in the whole run. So the threshold was causing
-       all of the flashing the user complained about and the cleanup was doing
-       nothing at all.
-
-       With both off, a full game of Tetris played with no flashing whatever and
-       only slight ghosting, which is the trade the user preferred. Raise
-       cleanup_interval (presented frames) or cleanup_max_ms (wall clock) if you
-       want the periodic flash back; the wall-clock ceiling exists because the
-       dirty-rect pass suppresses unchanged frames, so a presented-frame counter
-       is a poor clock -- 70s of measured gameplay presented only 45 frames. */
+    /* Ghosting mitigation, DISABLED BY DEFAULT -- not an oversight.
+       This and full_refresh_permille below were written for forced DU4, which
+       cannot erase, so only a periodic flashing GC16 cleared residue. AUTO
+       hands that choice to the EPDC, which already picks an erasing waveform
+       when a region erases, making both redundant. MEASURED on the Libra 2 from
+       a refresh trace: 35 AUTO refreshes on small rects, none flashing, against
+       21 GC16 flashes -- every one a large region tripping the old 450-permille
+       threshold. Zero scheduled cleanups fired. So the threshold caused all the
+       flashing the user complained about and the cleanup did nothing.
+       With both off, a full game of Tetris played with no flashing and only
+       slight ghosting -- the trade the user preferred. Raise cleanup_interval
+       (presented frames) or cleanup_max_ms (wall clock) to get the periodic
+       flash back; the wall-clock ceiling exists because the dirty-rect pass
+       suppresses unchanged frames, so presented frames are a poor clock -- 70 s
+       of measured gameplay presented only 45. */
     c->cleanup_interval = 0;
     c->cleanup_max_ms = 0;
-    /* 1000 permille, i.e. the promotion fires only when the dirty rect covers
-       the game rect corner to corner. That is reachable -- the dirty rect is a
-       single merged bounding box, so a full-screen wipe or a scene transition
-       produces exactly it -- but normal gameplay essentially never does, and
-       when the whole rect really has changed a flashing refresh is what you
-       want anyway. Only *exceeding* the rect is impossible.
-       See the note above: this threshold, not the cleanup, was the measured
-       source of the flashing. Lower it (450 was the old default) to force a
-       flash on large scene changes, which is worth having only if the driver's
-       own choice leaves residue you can see. */
+    /* 1000 permille: the promotion fires only on a corner-to-corner dirty
+       rect. Reachable (the dirty rect is one merged bounding box, so a
+       full-screen wipe produces exactly it) but rare in play, and when the
+       whole rect really changed a flash is wanted anyway. This threshold, not
+       the cleanup, was the measured source of the flashing -- see above. 450
+       was the old default. */
     c->full_refresh_permille = 1000;
-    /* UNVALIDATED ON HARDWARE: this default is a starting guess, not a
-       measurement -- unlike full_refresh_permille above, no device run has
-       tuned it yet (that is Task 13's deferred Step 10). Pick it from a
-       koboy.log `stages` line and `rects` count at 20/40/80 the first time a
-       device is available, and record the result in TESTED.md. */
+    /* A STARTING GUESS, not a measurement. An on-device 20/40/80 sweep found
+       the three behaviourally identical on real content; the in-process timer
+       cannot see the panel-side cost this is meant to amortise. See
+       docs/FOLLOWUPS.md #24 and TESTED.md. */
     c->refresh_fixed_tiles = 40;
-    /* AREA-AWARE PRESENT PACING -- MEASURED, and the measurement is the whole
-       reason these are not a guess. See config/koboy.ini for the numbers and
-       docs/superpowers/specs/2026-08-24-koboy-design.md Appendix D for how
-       they were taken. Setting BOTH to 0 restores pure present_divisor pacing,
-       which is what every build before this one did. */
+    /* AREA-AWARE PRESENT PACING -- MEASURED. Numbers in config/koboy.ini,
+       method in the v1 design spec's Appendix D. BOTH 0 restores pure
+       present_divisor pacing. */
     c->settle_base_ms = KOBOY_SETTLE_BASE_MS_DEFAULT;
     c->settle_full_ms = KOBOY_SETTLE_FULL_MS_DEFAULT;
-    /* 1-BIT OUTPUT ON BY DEFAULT, and it is a deliberate reversal.
-       It shipped off through v1 and most of v2 because nobody had judged it
-       on a panel. When someone did, it fixed the motion smearing that had
-       been the oldest open defect in the project: the panel's fast waveforms
-       are two-level, so four-level content asks them for states they cannot
-       reach and lands between, leaving a stale ghost AND overshoot brighter
-       than the background. Confirmed by the device owner playing NES Super
-       Mario Bros., 2026-08-27 -- see TESTED.md.
-       AUTO stays the waveform: measured on 1-bit content it already selects
-       DU to within 0.5 ms at three region sizes, so forcing DU buys nothing
-       and forcing DU4 is the four-level variant this fix exists to avoid. */
+    /* 1-BIT OUTPUT ON BY DEFAULT -- a deliberate reversal. It shipped off
+       until someone judged it on a panel; it fixes the motion smearing that
+       was the project's oldest open defect, because the fast waveforms are
+       two-level and four-level content asks them for states they cannot reach,
+       landing between and leaving a ghost plus overshoot. Confirmed by the
+       owner on NES Super Mario Bros., 2026-08-27 (TESTED.md).
+       AUTO stays the waveform: on 1-bit content it already selects DU to
+       within 0.5 ms at three region sizes, so forcing DU buys nothing and DU4
+       is the four-level variant this fix exists to avoid. */
     c->force_dither = true;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->gray_map = KOBOY_GRAY_DEFAULT;
     c->grab_input = true;
-    /* CROSS, because the faceplate chrome draws an absolute four-way cross and
-       the drawn UI has to agree with the input model -- the drawing is the part
-       a user trusts. Relative mode steers from wherever the finger first landed,
-       which needs a drag that a drawn cross gives no hint of: the user could not
-       steer at all in relative mode and could immediately in cross mode. Set
-       dpad_mode = relative for the thumb-pad behaviour. */
     c->pixel_aspect = true;
+    /* CROSS, because the faceplate draws an absolute four-way cross and the
+       drawing is what a user trusts. Relative mode steers from wherever the
+       finger first landed, which needs a drag a drawn cross gives no hint of:
+       the user could not steer in relative mode and could immediately in
+       cross. `dpad_mode = relative` for the thumb-pad behaviour. */
     c->dpad_mode = KOBOY_DPAD_CROSS;
     c->dpad_deadzone = 24;
     c->dpad_hysteresis = 10;
@@ -147,26 +118,23 @@ void config_defaults(koboy_config *c)
                        .b_cx = 660, .b_cy = 760, .b_r = 85,
                        .start_cx = 610, .start_cy = 920, .start_w = 200, .start_h = 55,
                        .select_cx = 390, .select_cy = 920, .select_w = 200, .select_h = 55,
-                       /* MENU sits on the Start/Select row, not in the open band
-                          below the game rect -- that band LOOKS free but is not:
-                          chrome_controls_top is bound by whichever control sits
-                          highest, and a zone placed at 540 permille (mid-panel)
-                          measured lower than Start/Select's 920 on every panel
-                          shorter than the Libra 2, dragging the auto-fit scale
-                          down with it. Measured: on the 1072x1448 Clara panel,
-                          chrome_controls_top went from 879 to 742 with the zone
-                          there, which knocked the shipped scale from 5 (800x720)
-                          down to 4 (640x576) -- a 36% area loss, and not only at
-                          scale = 0, because config_resolve_profile's fitting loop
-                          demotes an explicit configured scale too. The design spec's
-                          promise that 5x fits every supported panel depends on
-                          nothing lowering chrome_controls_top below the scale-5
-                          rect, so this is not a cosmetic choice.
-                          The Start/Select row is already reserved by two other
-                          controls, so a third one costs nothing there. Verified
-                          clear of both at scale 5 on every panel, no overlap
-                          with Start and clear of the B disc, right margin well
-                          past KOBOY_CHROME_MARGIN:
+                       /* MENU sits on the Start/Select row, NOT in the open
+                          band below the game rect. That band looks free and is
+                          not: chrome_controls_top is bound by the highest
+                          control, and a zone at 540 permille measured lower
+                          than Start/Select's 920 on every panel shorter than
+                          the Libra 2. Measured on Clara 1072x1448,
+                          chrome_controls_top 879 -> 742, knocking the shipped
+                          scale from 5 (800x720) to 4 (640x576), a 36% area
+                          loss -- and not only at scale = 0, because
+                          config_resolve_profile's fitting loop demotes an
+                          explicit scale too. The spec's promise that 5x fits
+                          every supported panel depends on nothing lowering
+                          chrome_controls_top below the scale-5 rect.
+                          The Start/Select row is already reserved by two
+                          controls, so a third costs nothing. Verified at scale
+                          5 on every panel -- gap to Start, clearance of B,
+                          right margin past KOBOY_CHROME_MARGIN:
                             Clara  1072x1448  x[804..1018] y[1293..1371]  gap-to-Start 44px  clear-of-B 102px  right-margin 54px
                             Libra2 1264x1680  x[948..1200] y[1499..1591]  gap 51  clear 116  right-margin 64
                             Elipsa 1404x1872  x[1053..1333] y[1671..1773] gap 57  clear 130  right-margin 71
@@ -177,21 +145,15 @@ void config_defaults(koboy_config *c)
 
 /* ------------------------------------------------------ core by extension
  *
- * koboy ships thirteen cores for fourteen systems now (Genesis Plus GX
- * answers for three of them), and which one a file needs is knowable from
- * its name alone: gw-libretro eats .mgw, fceumm eats .nes, PokeMini eats
- * .min, beetle-wswan eats .ws/.wsc, RACE eats .ngp/.ngc, stella2014 eats
- * .a26, Gearcoleco eats .col, FreeIntv eats .int, Genesis Plus GX eats
- * .sms/.gg, FinalBurn Neo eats .zip, and gambatte eats everything else this
- * project lists. The browser hands
- * main.c a path long after the config was read, so this cannot live in
- * config_load -- it is a pure function of the ROM name, called at load time.
+ * Which core a file needs is knowable from its name alone; the table below is
+ * the whole mapping. The browser hands main.c a path long after the config was
+ * read, so this cannot live in config_load -- it is a pure function of the ROM
+ * name, called at load time.
  *
- * Its own case-insensitive suffix match rather than strcasecmp, and rather
- * than borrowing romlist.c's: config is the lower layer of the two (romlist
- * includes nothing of config's and must keep it that way), and <strings.h>
- * is the kind of host-dependent header this project keeps out of portable
- * code. Six lines is cheaper than either coupling.
+ * Its own case-insensitive suffix match rather than strcasecmp or romlist.c's:
+ * config is the LOWER layer (romlist includes nothing of config's and must
+ * keep it that way), and <strings.h> is a host-dependent header this project
+ * keeps out of portable code.
  */
 static bool ends_with_ext(const char *s, const char *ext)
 {
@@ -208,70 +170,57 @@ static bool ends_with_ext(const char *s, const char *ext)
     return true;
 }
 
-/* A table rather than a chain of ifs, because the chain is what silently
-   grows a hole: every new system needs an entry in BOTH this map and
-   romlist_is_rom, and a table makes the pair reviewable side by side.
-   Extensions are lowercase because ends_with_ext lowercases only the
-   candidate, not the pattern. */
-/* `ceiling` caps the auto-fitted scale for this system, 0 meaning no cap. In
-   KOBOY_LAYOUT_LCD, where the fit is fractional and has no integer step, it
-   caps the picture at `ceiling` times the source instead -- same number, same
-   meaning, see config_resolve_profile_par.
+/* A table rather than a chain of ifs: every new system needs an entry in BOTH
+   this map and romlist_is_rom, and a table makes the pair reviewable side by
+   side. Extensions are lowercase because ends_with_ext lowercases only the
+   candidate, not the pattern.
 
-   IT EXISTS BECAUSE A BIGGER PICTURE COSTS REAL, MEASURED SPEED, and the
-   pipeline that spends it (video_submit) is this project's bottleneck on
-   every system. Sizing the rect from the frame a core really draws (ae03e76)
-   quadrupled SNES's picture and cost its heaviest titles: Star Fox
-   93%->67%, Kirby Super Star 96%->78%, while Mario World and Zelda stayed at
-   98%.
+   `ceiling` caps the auto-fitted scale for this system, 0 = no cap. In
+   KOBOY_LAYOUT_LCD, where the fit is fractional, it caps the picture at
+   `ceiling` times the source instead -- see config_resolve_profile_par.
 
-   FOUR SYSTEMS CARRY ONE NOW, and every number is a device measurement, not
-   arithmetic. Kobo Libra 2, 1264x1680, `--frames 900` against an ideal
-   15,024 ms, ten seconds of idle between runs, the presented-frame count
-   identical across each system's own sweep so the rows are comparable:
+   IT EXISTS BECAUSE A BIGGER PICTURE COSTS REAL, MEASURED SPEED, and
+   video_submit is this project's bottleneck on every system. Sizing the rect
+   from the frame a core really draws (ae03e76) quadrupled SNES's picture and
+   cost its heaviest titles: Star Fox 93%->67%, Kirby Super Star 96%->78%,
+   while Mario World and Zelda stayed at 98%.
+
+   FOUR SYSTEMS CARRY ONE, every number a device measurement: Kobo Libra 2,
+   1264x1680, `--frames 900` against an ideal 15,024 ms, ten seconds idle
+   between runs, presented-frame count identical within each sweep:
 
      .sfc/.smc  SNES         3   Star Fox 67% -> 79%, Kirby 78% -> 95%
      .sms       Master Sys.  3   Sonic Chaos 1172x768 83% -> 879x576 98%
      .gg        Game Gear    5   Sonic Chaos 1152x864 79% -> 960x720
      .md        Mega Drive   3   Sonic 1264x966 -> 879x672
 
-   The three Sega rows are the same finding twice over: THE THREE LARGEST
-   RECTS koboy PRODUCES WERE ALL SEGA, all over 900k pixels, and all reported
-   as slow in play. Master System's 1172x768 and Game Gear's 1152x864 are 1.6x
-   and 1.7x the Game Boy's 800x720, on frames that are SMALLER than the Game
-   Boy's or the same size.
+   THE THREE LARGEST RECTS koboy PRODUCES WERE ALL SEGA, all over 900k pixels,
+   all reported slow in play -- 1.6x and 1.7x the Game Boy's 800x720 on frames
+   the same size or smaller.
 
-   THE GAME GEAR IS THE INSTRUCTIVE ONE. Its frame is 160x144 -- byte for
-   byte the Game Boy's -- and TESTED.md recorded for months that it "lands on
-   exactly 800x720, the Game Boy's scale-5 picture, by arithmetic, so it needs
-   no exemption". That was true, and then `pixel_aspect` made the rect 192
-   columns wide, the auto-fit went from 5 to 6, and the picture became
-   1152x864 with nothing watching. Its ceiling is 5 because 5 is the number
-   that was MEASURED for a 160x144 frame on this panel in the first place --
-   the Game Boy's -- and the widened 960x720 is that picture with the pixel
-   aspect the correction added. Sub-scale steps do not exist, so 4 (768x576,
-   smaller than the Game Boy) is the only alternative and it gives up picture
-   for speed that 5 already has.
+   THE GAME GEAR IS THE INSTRUCTIVE ONE: its frame is 160x144, byte for byte
+   the Game Boy's, and TESTED.md recorded for months that it "needs no
+   exemption" because it lands on exactly 800x720 by arithmetic. True until
+   `pixel_aspect` made the rect 192 columns wide, the auto-fit went 5 -> 6 and
+   the picture became 1152x864 with nothing watching. Its ceiling is 5 because
+   5 is the number MEASURED for a 160x144 frame on this panel; 960x720 is that
+   picture with the added pixel aspect. Sub-scale steps do not exist, so the
+   only alternative is 4 (768x576, smaller than the Game Boy).
 
-   NOBODY HAS MEASURED THE OTHER NINE. The honest version of this table
-   measures each system's heaviest title at each scale it can reach; see
-   docs/FOLLOWUPS.md #73. A row here without a number beside it in this
-   comment is a guess and should be treated as one.
+   NOBODY HAS MEASURED THE OTHER NINE -- docs/FOLLOWUPS.md #73. A row with no
+   number beside it here is a guess.
 
-   A per-system number rather than a global one because the global `scale` is
-   shared with systems that pay nothing for their fit, and an explicit
-   `scale =` in the ini still overrides this. The shipped ini's `scale = 5`
-   is NOT explicit -- see KOBOY_SCALE_LEGACY_DEFAULT -- so these ceilings are
-   what a real device runs. */
+   Per-system rather than global because the global `scale` is shared with
+   systems that pay nothing for their fit. An explicit `scale =` overrides
+   this; the shipped ini's `scale = 5` is NOT explicit (see
+   KOBOY_SCALE_LEGACY_DEFAULT), so these ceilings are what a device runs. */
 static const struct { const char *ext; const char *core; int ceiling; } g_core_by_ext[] = {
     { ".mgw", "gw_libretro.so", 0 },   /* Game & Watch, gw-libretro   */
     { ".nes", "fceumm_libretro.so", 0 },   /* NES, libretro-fceumm        */
-    /* Pokemon Mini caps at 8, and the number is the Game Boy's own size.
-       Its native frame is 96x64 -- the smallest koboy runs -- so auto-fitting
-       takes it to scale 13, a 1248x832 rect that fills the panel edge to edge.
-       The owner played it and said "it is full width now and looks huge and
-       slow", which the device agrees with. Measured, 300 frames each, their
-       own settings:
+    /* Pokemon Mini caps at 8, and the number is the Game Boy's own size. Its
+       96x64 frame is the smallest koboy runs, so auto-fit reaches scale 13 --
+       1248x832, edge to edge; the owner called it "huge and slow". Measured,
+       300 frames each:
 
            auto (13)  1248x832   submit 22.3 ms
            12         1152x768          20.0
@@ -279,20 +228,17 @@ static const struct { const char *ext; const char *core; int ceiling; } g_core_b
            8           768x512          11.9   <- this row
            6           576x384           9.0
 
-       The Game Boy at its verified scale 5 is 800x720 and costs 15.4 ms, so
-       scale 8 puts a Pokemon Mini at 768 px wide against the Game Boy's 800 --
-       the same presence on the panel, for three quarters of the cost. Chosen
-       for that rather than for the timing: a handheld whose real screen was
-       96x64 has no business being the largest picture on the device. */
+       The Game Boy at its verified scale 5 is 800x720 for 15.4 ms, so scale 8
+       gives the same presence on the panel for three quarters of the cost.
+       Chosen for the presence, not the timing. */
     { ".min", "pokemini_libretro.so", 8 },   /* Pokemon Mini, libretro/PokeMini */
-    /* One core per SYSTEM FAMILY, not per extension: beetle-wswan reports
-       `ws|wsc|pc2` and RACE reports `ngp|ngc|ngpc|npc`, so the mono and the
-       Color halves of each family are the same .so. Two rows each rather
-       than a prefix match, because this table is the thing a reviewer reads
-       against romlist_is_rom's list and a wildcard would break that
-       correspondence. .pc2/.ngpc/.npc are left out for the same reason .fds
-       is: no evidence anyone's collection uses them, and an extension the
-       browser lists but nobody has ever loaded is an untested claim. */
+    /* One core per SYSTEM FAMILY: beetle-wswan reports `ws|wsc|pc2`, RACE
+       reports `ngp|ngc|ngpc|npc`, so mono and Color are the same .so. Two rows
+       each rather than a prefix match, because a reviewer reads this table
+       against romlist_is_rom's list and a wildcard breaks that correspondence.
+       .pc2/.ngpc/.npc are left out for the reason .fds is: nobody's collection
+       here uses them, and an extension nobody has loaded is an untested
+       claim. */
     { ".ws",  "mednafen_wswan_libretro.so", 0 }, /* WonderSwan, beetle-wswan */
     { ".wsc", "mednafen_wswan_libretro.so", 0 }, /* WonderSwan Color         */
     { ".ngp", "race_libretro.so", 0 },  /* Neo Geo Pocket, libretro/RACE */
@@ -300,147 +246,110 @@ static const struct { const char *ext; const char *core; int ceiling; } g_core_b
     { ".a26", "stella2014_libretro.so", 0 },  /* Atari 2600, stella2014      */
     { ".col", "gearcoleco_libretro.so", 0 },  /* ColecoVision, drhelius/Gearcoleco */
     { ".int", "freeintv_libretro.so", 0 },  /* Intellivision, libretro/FreeIntv */
-    /* The second family after WonderSwan and Neo Geo Pocket where one .so
-       covers two systems, and the first where the two are not a mono/colour
-       pair: a Master System and a Game Gear are the same VDP behind a
-       different viewport, so Genesis Plus GX runs both from one binary. Two
-       rows, not a wildcard, for the reason above. .sg (SG-1000, which this
-       core also accepts) and the whole Mega Drive list it advertises are
-       deliberately absent: nobody's collection here has them, and an
-       extension the browser lists but nobody has loaded is an untested
-       claim. */
+    /* Master System and Game Gear are the same VDP behind a different
+       viewport, so Genesis Plus GX runs both from one binary. Two rows, not a
+       wildcard, for the reason above. .sg (SG-1000, also accepted) is absent:
+       nobody's collection here has it. */
     { ".sms", "genesis_plus_gx_libretro.so", 3 }, /* Master System -- ceiling above */
     { ".gg",  "genesis_plus_gx_libretro.so", 5 }, /* Game Gear, same core, own cap */
-    /* MEGA DRIVE, and it is the SAME .so as the two rows above -- Genesis
-       Plus GX is natively a Mega Drive core and always was; the comment
-       above used to say the Mega Drive list was "deliberately absent"
-       because nobody had loaded one. Somebody has now, so one extension of
-       that list is claimed and the rest still are not.
+    /* MEGA DRIVE -- the SAME .so as the two rows above; Genesis Plus GX is
+       natively a Mega Drive core.
 
-       .MD ONLY. NOT .bin, NOT .gen, and that is the owner's decision rather
-       than an oversight, so here is what it costs and why it is right.
-       Their Mega Drive tree is 1736 .md, 31 .bin and 5 .gen; the 36 files
-       this row does not claim are homebrew and demoscene releases, and they
-       will not appear in the browser at all.
+       .MD ONLY. NOT .bin, NOT .gen, deliberately. The owner's tree is 1736
+       .md, 31 .bin, 5 .gen; the 36 unclaimed files are homebrew and demoscene.
 
        .bin is refused because koboy picks the core FROM THE EXTENSION AND
        NOTHING ELSE, and .bin is the most contested extension in retro
-       computing. Counted across the owner's own collection rather than
-       argued from memory: 723 TI-99/4A, 234 Odyssey 2, 119 Atari 5200, 72
-       Arcadia 2001, 71 Vectrex, 68 Astrocade, 56 VC 4000, 38 Jaguar, 36
-       Mega Drive, 34 Channel F, 33 CreatiVision, 28 Intellivision. The Mega
-       Drive is the NINTH largest claimant of .bin in this one tree, and two
-       of the files ahead of it (exec.bin and grom.bin) are literally the
-       BIOS koboy asks the owner to install by hand. A row here would route
-       every one of those to a 68000 emulator.
-       .gen is unambiguous but is five files, and it is left out to keep the
-       rule a reader can hold in their head: one system, one extension.
-       roms/README.txt says so on the device, which is where somebody
-       wondering why a file is missing will actually look. */
+       computing. COUNTED across the owner's collection: 723 TI-99/4A, 234
+       Odyssey 2, 119 Atari 5200, 72 Arcadia 2001, 71 Vectrex, 68 Astrocade,
+       56 VC 4000, 38 Jaguar, 36 Mega Drive, 34 Channel F, 33 CreatiVision, 28
+       Intellivision. Mega Drive is the NINTH largest claimant here, and two of
+       the files ahead of it (exec.bin, grom.bin) are the BIOS koboy asks the
+       owner to install. A row here would route all of those to a 68000
+       emulator.
+       .gen is unambiguous but is five files, left out to keep the rule
+       holdable: one system, one extension. roms/README.txt says so on the
+       device. */
     { ".md",  "genesis_plus_gx_libretro.so", 3 }, /* Mega Drive -- ceiling above */
-    /* SNES, and the interesting part is that the v1 design spec ruled this
-       system OUT on CPU grounds. That judgement was re-tested rather than
-       inherited -- see scripts/build-snes-core.sh for the three-core
-       shootout and TESTED.md for the device figures.
+    /* SNES. The v1 design spec ruled this system OUT on CPU grounds; that was
+       re-tested rather than inherited -- scripts/build-snes-core.sh has the
+       three-core shootout, TESTED.md the device figures.
 
-       Two extensions, one core, and the pair is the WonderSwan pattern: an
-       .sfc and an .smc are the same cartridge behind different dumping
-       conventions (.smc historically carries a 512-byte copier header, which
-       the core detects and skips). .fig, .swc and .bs are the other
-       historical copier extensions and are NOT claimed, for the reason
-       .pc2 and .ngpc are not: nobody's collection here has them.
+       .sfc and .smc are the same cartridge behind different dumping
+       conventions (.smc historically carries a 512-byte copier header the core
+       detects and skips). .fig/.swc/.bs are NOT claimed: nobody's collection
+       here has them.
 
-       Case-insensitivity is load-bearing again and not hypothetically: the
-       author's SNES directory holds 47 files ending .smc and 11 ending
-       .SMC, side by side, on top of the device's FAT32. */
+       Case-insensitivity is load-bearing, not hypothetically: the author's
+       SNES directory holds 47 .smc and 11 .SMC side by side on FAT32. */
     { ".sfc", "snes9x2005_libretro.so", 3 },   /* SNES -- see `ceiling` above */
     { ".smc", "snes9x2005_libretro.so", 3 },   /* SNES, copier-header dump   */
     /* PC ENGINE / TurboGrafx-16, CARTRIDGE ONLY. The core advertises
-       `pce|sgx|cue|ccd|chd|toc|m3u` and exactly one is claimed.
-       .sgx (SuperGrafx, 7 files in the author's collection) is refused
-       because beetle-pce-FAST implements neither the second VDC nor the
-       priority mixer that system needs -- it would load an .sgx and render
-       it WRONGLY rather than refuse, which is the failure mode this project
-       treats as worse than absence. .chd and the other CD extensions (48
-       titles) need a system-card BIOS that is not ours to ship. Both
-       exclusions are argued at length in scripts/build-pce-core.sh. */
+       `pce|sgx|cue|ccd|chd|toc|m3u`; one is claimed. .sgx (SuperGrafx, 7 files
+       here) is refused because beetle-pce-FAST implements neither the second
+       VDC nor the priority mixer, so it would render WRONGLY rather than
+       refuse -- worse than absence. .chd and the CD extensions (48 titles)
+       need a system-card BIOS not ours to ship. See
+       scripts/build-pce-core.sh. */
     { ".pce", "mednafen_pce_fast_libretro.so", 0 }, /* PC Engine, beetle-pce-fast */
-    /* GAME BOY ADVANCE, and this is the SECOND system the v1 design spec
-       ruled out on CPU grounds that turned out to be playable. SNES was the
-       first; that is what made this one worth re-testing rather than
-       inheriting. scripts/build-gba-core.sh carries the three-core shootout
-       and TESTED.md the device figures.
+    /* GAME BOY ADVANCE -- the SECOND system the v1 spec ruled out on CPU
+       grounds that turned out playable (SNES was the first, which is why this
+       was re-tested). scripts/build-gba-core.sh has the three-core shootout,
+       TESTED.md the device figures.
 
-       ONE EXTENSION, and for once there is no argument to have: .gba has
-       never meant anything else. The owner's tree is 1693 files and every one
-       of them ends .gba -- no .agb, no .bin, no copier convention, nothing
-       like the .smc/.sfc split or the .bin contest the Mega Drive lost.
+       ONE EXTENSION: .gba has never meant anything else -- the owner's 1693
+       files all end .gba, no .agb, no .bin, no copier convention.
 
-       CEILING 4, AND IT IS NOT A HEADROOM CAP -- IT IS WHAT MAKES THE
-       SYSTEM EXIST. A GBA frame is 240x160 with square pixels, the smallest
-       frame koboy scales, so an uncapped auto-fit reaches the LCD strip's
-       full width: 1264x842, 1,064,288 pixels. MEASURED on the device
-       (koboy-arm --frames 900, Advance Wars 2, scale pinned; the table is in
-       TESTED.md):
+       CEILING 4, AND IT IS NOT A HEADROOM CAP -- IT IS WHAT MAKES THE SYSTEM
+       EXIST. A GBA frame is 240x160 square, the smallest koboy scales, so an
+       uncapped auto-fit reaches the LCD strip's full width: 1264x842,
+       1,064,288 px. MEASURED (koboy-arm --frames 900, Advance Wars 2, scale
+       pinned; table in TESTED.md):
 
            scale 3  720x480   submit 11.3 ms  pipeline 14.8 ms
            scale 4  960x640   submit 18.1 ms  pipeline 24.9 ms   <- this row
            scale 6 1264x842   submit 30.3 ms  pipeline 40.7 ms
 
-       The device runs present_divisor = 2, so the per-core-frame budget is
-       16742 - pipeline/2. At scale 4 that is 4,316 us and every measured
-       title fits. At the uncapped fit it is NEGATIVE: 20.3 ms of
-       presentation charged against a 16.7 ms frame, with nothing left for
-       the emulator at all.
+       At present_divisor = 2 the per-core-frame budget is 16742 - pipeline/2:
+       4,316 us at scale 4, and every measured title fits. At the uncapped fit
+       it is NEGATIVE -- 20.3 ms of presentation against a 16.7 ms frame.
 
-       Do not raise this without re-measuring. The one title that sits ON the
-       4,316 us budget rather than inside it is Metroid Fusion with the
-       screen scrolling (4,467 us, 99.1% of full speed) -- see
-       docs/FOLLOWUPS.md #87, whose remedy is the divisor rather than a
+       Do not raise this without re-measuring. The one title ON the budget
+       rather than inside it is Metroid Fusion scrolling (4,467 us, 99.1% of
+       full speed) -- docs/FOLLOWUPS.md #87, whose remedy is the divisor, not a
        smaller picture for the whole library. */
     { ".gba", "gpsp_libretro.so", 4 }, /* Game Boy Advance, gpSP -- ceiling above */
-    /* THE FIRST EXTENSION IN THIS TABLE THAT IS NOT A SYSTEM'S OWN, and the
-       decision behind it is the interesting part of adding arcade.
-       An arcade "ROM" is a ZIP of the individual EPROM dumps off one PCB,
-       named and CRC-checked against the emulator's own database -- so the
-       extension says "archive", not "Namco board", and .zip is a container
-       anything could be in.
+    /* THE FIRST EXTENSION HERE THAT IS NOT A SYSTEM'S OWN. An arcade "ROM" is
+       a ZIP of one PCB's EPROM dumps, CRC-checked against the emulator's dat,
+       so .zip says "archive", not "Namco board".
 
-       .ZIP IS CLAIMED FOR THE ARCADE CORE OUTRIGHT, rather than routed by a
-       subdirectory convention or by looking the name up in FBNeo's dat. The
-       reason is that the alternative is not "less ambiguous", it is
-       "ambiguous plus a second mechanism to get wrong": nothing else koboy
-       ships can open a .zip AT ALL. Nine of the ten other cores set
-       need_fullpath = false, so core.c hands them the file's BYTES (core.c,
-       core_load_rom) -- a zipped .nes reaches fceumm as the literal bytes
-       "PK\3\4...", which it rejects as not a NES header. There is no case
-       where routing .zip somewhere else would have worked and this row breaks
-       it.
+       .ZIP IS CLAIMED FOR THE ARCADE CORE OUTRIGHT rather than routed by
+       subdirectory or dat lookup, because nothing else koboy ships can open a
+       .zip AT ALL: nine of the ten other cores set need_fullpath = false, so
+       core_load_rom hands them the file's BYTES and a zipped .nes reaches
+       fceumm as literal "PK\3\4...", which it rejects. No routing this row
+       breaks would have worked.
 
-       WHAT IT COSTS, stated rather than discovered: a user who drops a zipped
-       Game Boy ROM into roms/ now gets FinalBurn Neo refusing it ("core
-       rejected rom") instead of the browser ignoring the file. That is a
-       worse-looking failure for a file that could never have run either way,
-       and it is the price of not building a dat parser into a 40 KB
-       front-end. The error names the core, so the diagnosis is one line of
-       koboy.log away.
+       WHAT IT COSTS: a zipped Game Boy ROM in roms/ now gets FinalBurn Neo
+       refusing it ("core rejected rom") instead of the browser ignoring the
+       file -- a worse-looking failure for a file that could never have run,
+       and the price of not building a dat parser into a 40 KB front-end. The
+       error names the core.
 
-       FBNeo also advertises `7z`, `cue` and `ccd`. None is claimed. .7z is
-       not merely unclaimed but UNBUILDABLE for the device -- lib7z does not
-       compile against glibc 2.19's headers, so scripts/build-fbneo-core.sh
-       switches it off (see the script) and the shipped core physically
-       cannot open one. .cue/.ccd are Neo Geo CD, which is outside this
-       batch's pre-1990 scope and wants a BIOS besides. */
+       FBNeo also advertises `7z`, `cue`, `ccd`; none claimed. .7z is
+       UNBUILDABLE here -- lib7z does not compile against glibc 2.19's headers,
+       so scripts/build-fbneo-core.sh switches it off and the shipped core
+       physically cannot open one. .cue/.ccd are Neo Geo CD: outside the
+       pre-1990 scope and wanting a BIOS. */
     { ".zip", "fbneo_libretro.so", 0 }, /* arcade, FinalBurn Neo    */
 };
 
 const char *config_core_for_rom(const char *rom_path)
 {
-    /* No name at all still answers gambatte: the caller writes the result
-       into core_path unconditionally, and a NULL return would be a crash
-       where the old unconditional default was merely useless. Gambatte also
-       stays the fall-through for an unlisted extension, for the same reason
-       it was the unconditional answer before this table existed. */
+    /* No name still answers gambatte: the caller writes the result into
+       core_path unconditionally, so a NULL return would be a crash where the
+       old unconditional default was merely useless. Gambatte is also the
+       fall-through for an unlisted extension. */
     if (!rom_path || !*rom_path) return "gambatte_libretro.so";
     for (size_t i = 0; i < sizeof g_core_by_ext / sizeof *g_core_by_ext; i++)
         if (ends_with_ext(rom_path, g_core_by_ext[i].ext))
@@ -464,26 +373,20 @@ size_t config_min_rom_bytes(const char *rom_path)
     if (!rom_path || !*rom_path) return 0;
     /* 8192 == one SNES mapping block. snes9x2005's InitROM rounds the file
        down to whole blocks into Memory.CalculatedSize and LoROMMap then does
-       `% Memory.CalculatedSize`, so anything under one block divides by zero
-       and raises SIGFPE inside retro_load_game -- the process dies, koboy and
-       all. MEASURED, not deduced from the source: every size from 0 to 1024
-       kills the loader (exit 136) and 8192 does not, and the backtrace is
-       retro_load_game -> LoadROM -> InitROM -> LoROMMap.
+       `% Memory.CalculatedSize`, so anything under one block divides by zero:
+       SIGFPE inside retro_load_game, taking koboy with it. MEASURED, not
+       deduced: every size 0..1024 kills the loader (exit 136), 8192 does not;
+       backtrace retro_load_game -> LoadROM -> InitROM -> LoROMMap.
 
-       This is not a hypothetical file. The author's collection contains
-       exactly one, and it is the kind every FAT32-and-macOS collection grows:
-       `._desire_d-zero_....smc`, a 212-byte AppleDouble resource-fork stub
-       that macOS writes beside the real file and that the browser lists as a
-       game because it ends in .smc. A partial download does the same thing.
+       Not hypothetical: the author's collection has one, a 212-byte
+       `._desire_d-zero_....smc` AppleDouble stub of the kind every
+       FAT32-and-macOS collection grows. A partial download does the same.
 
-       ONLY the two SNES extensions carry a floor, and the restraint is
-       deliberate: an Atari 2600 cartridge really is 2048 or 4096 bytes, a
-       Game & Watch .mgw and a Pokemon Mini .min are small too, and a floor
-       applied to those would refuse real content to guard against a crash
-       they do not have. Every other core in this project REFUSES a short
-       file cleanly ("core rejected rom"), which is the behaviour this one
-       should have had. Add a row here only for a core measured to do worse
-       than refuse. */
+       ONLY the two SNES extensions carry a floor, deliberately: a 2600
+       cartridge really is 2048 or 4096 bytes, and .mgw/.min are small too, so
+       a floor there would refuse real content to guard a crash they do not
+       have. Every other core REFUSES a short file cleanly. Add a row only for
+       a core MEASURED to do worse than refuse. */
     if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc"))
         return 8192;
     return 0;
@@ -491,195 +394,142 @@ size_t config_min_rom_bytes(const char *rom_path)
 
 int config_layout_for_rom(const char *rom_path)
 {
-    /* No name at all is the DMG faceplate, matching the sibling above: this
-       is the answer for the placeholder profile main.c resolves before any
-       ROM has been chosen, and it is also the layout every UI screen (MAIN
-       MENU, RECENT, ALL GAMES) is drawn over.
+    /* No name is the DMG faceplate: the answer for the placeholder profile
+       main.c resolves before a ROM is chosen, and the layout every UI screen
+       (MAIN MENU, RECENT, ALL GAMES) is drawn over.
 
-       THREE SYSTEMS NOW, and the two that joined .mgw did so for a reason
-       that has nothing to do with drawn-on artwork: THEIR PADS DO NOT FIT
-       THE DMG FACEPLATE. That faceplate carries A, B, START, SELECT, MENU
-       and at most two more discs (KOBOY_MAX_EXTRA_BTNS, and see
-       config_extra_buttons_for_rom for why two is the room there is, not a
-       number anyone chose). A SNES pad is A B X Y L R + Start/Select -- four
-       more than A and B, so L and R fell off. A six-button Mega Drive pad is
-       A B C X Y Z -- so X and Z fell off. Both shortfalls are recorded in
-       config_extra_buttons_for_rom's history; neither could be fixed on that
-       faceplate, because there is no seventh and eighth pocket on it.
+       THE TWO CONSOLES THAT JOINED .mgw DID SO BECAUSE THEIR PADS DO NOT FIT
+       THE DMG FACEPLATE, not because of drawn-on artwork. That faceplate
+       carries A, B, START, SELECT, MENU and at most two more discs
+       (KOBOY_MAX_EXTRA_BTNS -- room, not a number anyone chose; see
+       config_extra_buttons_for_rom). A SNES pad is A B X Y L R, so L and R
+       fell off; a six-button Mega Drive pad is A B C X Y Z, so X and Z did.
+       Neither was fixable there -- there is no seventh and eighth pocket.
 
-       The LCD strip has both. It was built for Game & Watch and it carries a
-       d-pad, a four-button DIAMOND, L1, R1, SELECT and START -- which is
-       EXACTLY a SNES pad, and a superset of a six-button Mega Drive's. So
-       these two systems move here rather than the strip's control set being
-       rebuilt on the DMG faceplate. What they give up is the faceplate's
-       moulded look and, for SNES, nothing else at all: the scale ceiling
-       still applies in this layout (config_resolve_profile_par), so the
-       picture is the same 897x672 it was on the DMG side.
+       The LCD strip has a d-pad, a four-button DIAMOND, L1, R1, SELECT and
+       START: EXACTLY a SNES pad, and a superset of a six-button Mega Drive's.
+       Cost of moving is the moulded look and nothing else -- the scale ceiling
+       still applies here (config_resolve_profile_par), so SNES presents at the
+       same 897x672 as on the DMG side.
 
-       ARCADE IS NOT HERE, and that was evaluated rather than skipped --
-       docs/FOLLOWUPS.md #74 has it in full. Two reasons: FBNeo's square
-       512x512 max would put ~135 px of permanent white band down each side of
-       a vertical board in this layout, and its DMG set (stick + four fire +
-       coin + start) already covers the pre-1990 scope the core was added for.
+       ARCADE IS NOT HERE, evaluated rather than skipped (docs/FOLLOWUPS.md
+       #74): FBNeo's square 512x512 max would put ~135 px of permanent white
+       band down each side of a vertical board, and its DMG set (stick + four
+       fire + coin + start) already covers the pre-1990 scope.
 
-       NONE OF THE REMAINING ELEVEN is in this company either: a NES pad, a
-       Pokemon Mini, a WonderSwan, a Neo Geo Pocket, an Atari 2600 joystick, a
-       ColecoVision controller, an Intellivision hand controller, a PC Engine
-       pad and a Master System / Game Gear pad all fit the DMG faceplate with
-       its two spare discs, and moving them would be churn.
-
-       The Intellivision came CLOSEST to earning it and still does not.
-       FreeIntv has an optional `freeintv_multiscreen_overlay` mode that
-       widens the frame to 1074x600 and paints a photographic 12-key keypad
-       beside the game, driven by RETRO_DEVICE_POINTER -- which is the Game &
-       Watch situation exactly, and koboy's LCD layout already forwards
-       touches as a pointer. It is not used, for two measured reasons: the
-       composite costs 1.335 ms/frame against 0.106 without it (12x, on the
-       host, before the Cortex-A9 multiplier), and the same 12 keys are
-       already reachable on the DMG faceplate through the core's own mini
-       keypad -- see the .int case in config_extra_buttons_for_rom. Paying
-       12x for a second way to press the same keys is not a trade. */
+       THE REMAINING ELEVEN all fit the DMG faceplate with its two spare discs;
+       moving them would be churn. The Intellivision came closest: FreeIntv has
+       a `freeintv_multiscreen_overlay` mode that widens the frame to 1074x600
+       and paints a 12-key keypad driven by RETRO_DEVICE_POINTER, which the LCD
+       layout could forward. Refused on two measurements -- the composite costs
+       1.335 ms/frame against 0.106 without it (12x, on the host, before the
+       Cortex-A9 multiplier), and the same 12 keys are already reachable on the
+       DMG faceplate through the core's own mini keypad (see the .int case in
+       config_extra_buttons_for_rom). */
     if (!rom_path || !*rom_path) return KOBOY_LAYOUT_DMG;
     if (ends_with_ext(rom_path, ".mgw")) return KOBOY_LAYOUT_LCD;
     if (ends_with_ext(rom_path, ".sfc")) return KOBOY_LAYOUT_LCD;
     if (ends_with_ext(rom_path, ".smc")) return KOBOY_LAYOUT_LCD;
     if (ends_with_ext(rom_path, ".md"))  return KOBOY_LAYOUT_LCD;
-    /* THE GAME BOY ADVANCE IS HERE FOR A DIFFERENT REASON FROM THE OTHER
-       THREE, and the difference is worth stating because the rule above --
-       "their pads do not fit the DMG faceplate" -- does NOT send it here.
+    /* THE GBA IS HERE FOR A DIFFERENT REASON: its pad FITS the DMG faceplate
+       (d-pad, A, B, START, SELECT and two shoulders, against A, B, START,
+       SELECT, MENU and two spare pockets), so the rule above does not send it.
 
-       It fits. A GBA is a d-pad, A, B, START, SELECT and two shoulders; the
-       DMG faceplate has A, B, START, SELECT, MENU and two spare disc pockets,
-       so L and R would both have a home and nothing would be unreachable. By
-       the reachability test alone this system belongs with the other eleven
-       and moving it would be churn.
+       WHAT SENDS IT HERE IS WHERE THE TWO SPARE POCKETS ARE: FACE pockets --
+       (905, 790) and the stacked column (470, 700)/(470, 830). A GBA's L and R
+       are a LEFT one and a RIGHT one at opposite ends of the machine, and the
+       faceplate has no position saying "left shoulder" or "right". A disc in
+       the middle of the case saying L is a control in the wrong PLACE -- a
+       real cost here, already written down once for the Mega Drive's X and Z
+       (config_lcd_pad_for_rom).
 
-       WHAT SENDS IT HERE IS WHERE THE TWO SPARE POCKETS ARE. They are FACE
-       pockets -- (905, 790), and the stacked column at (470, 700)/(470, 830)
-       -- one below the A disc and two between the d-pad and B. A GBA's L and
-       R are not face buttons: they are a LEFT one and a RIGHT one, at
-       opposite ends of the machine, and every title's own control screen
-       treats them as a pair with a side each. The DMG faceplate has no
-       position that says "left shoulder" and no position that says "right"; a
-       disc in the middle of the case saying L is a control in the wrong
-       PLACE, which this project has already had to write down once (see the
-       Mega Drive's X and Z in config_lcd_pad_for_rom) and which it treats as
-       a real cost rather than a cosmetic one.
+       The LCD strip has exactly one left/right pair (the outermost two slots
+       of its lower band, drawn narrower than SELECT and START so they read as
+       shoulders). Its face arrangement is per system, so a GBA gets TWO discs
+       rather than the diamond's four -- KOBOY_LCD_FACE_PAIR2 in koboy.h.
 
-       The LCD strip has exactly one left/right pair -- the outermost two
-       slots of its lower band, drawn narrower than SELECT and START so they
-       read as shoulders -- and that is where L and R go. It also has a face
-       arrangement per system, so a GBA gets TWO discs rather than the
-       diamond's four; see KOBOY_LCD_FACE_PAIR2 in koboy.h for why four would
-       be an invention and not a rounding error.
-
-       AND IT COSTS NOTHING IN PICTURE, which is the part that would have
-       decided it the other way. Measured on a 1264x1680 panel, resolving a
-       240x160 frame through config_resolve_profile_par in both layouts at
-       this system's ceiling of 4: DMG gives 960x640 at (152, 84), LCD gives
-       960x640 at (152, 310). The same rect, the same scale, the same
-       integer 4x -- the ceiling binds before either layout's own limit does,
-       so the only difference is that the LCD centres it vertically instead of
-       parking it under the top bezel. */
+       AND IT COSTS NOTHING IN PICTURE. Measured on 1264x1680, a 240x160 frame
+       through config_resolve_profile_par at this system's ceiling of 4: DMG
+       960x640 at (152, 84), LCD 960x640 at (152, 310). Same rect, same scale
+       -- the ceiling binds before either layout's own limit, so the only
+       difference is vertical centring. */
     if (ends_with_ext(rom_path, ".gba")) return KOBOY_LAYOUT_LCD;
     return KOBOY_LAYOUT_DMG;
 }
 
-/* WHETHER THE LCD RECT IS SIZED FROM THE CORE'S MAX GEOMETRY, or from what it
-   is drawing right now. Meaningless outside KOBOY_LAYOUT_LCD -- the DMG
-   branch has taken base since ae03e76 and this is not asked there.
+/* LCD RECT FROM THE CORE'S MAX GEOMETRY, or from what it draws now?
+   Meaningless outside KOBOY_LAYOUT_LCD -- the DMG branch has taken base since
+   ae03e76.
 
-   TRUE FOR GAME & WATCH ONLY, and the reason is a RATE, not a shape. A .mgw
+   TRUE FOR GAME & WATCH ONLY, and the reason is a RATE, not a shape: a .mgw
    title alternates between the whole unit and the LCD alone SEVERAL TIMES A
-   SECOND (Donkey Kong: 654x396 <-> 305x191). Sizing that rect from base would
-   resize the artwork, redraw the faceplate and repaint the whole panel at
-   that rate -- which is what the device log showed before the max-sized rect
-   went in, and it is why main.c's geometry check compares the resolved
-   presentation rather than the inputs.
+   SECOND (Donkey Kong 654x396 <-> 305x191), so a base-sized rect would resize
+   the artwork, redraw the faceplate and repaint the panel at that rate. That
+   is why main.c's geometry check compares the resolved presentation, not the
+   inputs.
 
-   FALSE FOR SNES AND MEGA DRIVE, and their base DOES move -- snes9x2005
-   drops into a 512-wide hi-res mode, Genesis Plus GX switches 256 <-> 320 --
-   but at SCENE boundaries, not at video rate, which is the same cost the DMG
-   layout has been paying for those two systems all along. What taking max
-   would cost them instead is not a cost anyone would accept: snes9x2005
-   declares a SQUARE 512x512 max for an interlaced mode almost nothing enters,
-   so a max-sized rect is a square recess around a 4:3 picture -- ~100 px of
-   permanent dead band under it -- and, worse, the per-system scale ceiling
-   would have nothing to bite on, because 3 x 512 is bigger than the panel.
-   The ceiling is measured, load-bearing and the reason SNES is playable
-   (see `ceiling` on g_core_by_ext); a rect sizing that disarmed it would put
-   Star Fox back at 67%. */
+   FALSE FOR SNES AND MEGA DRIVE. Their base does move (snes9x2005 into a
+   512-wide hi-res mode, GPGX 256 <-> 320) but at SCENE boundaries, the same
+   cost the DMG layout paid for them all along. Max would cost more:
+   snes9x2005 declares a SQUARE 512x512 for an interlaced mode almost nothing
+   enters, so the rect is a square recess around a 4:3 picture (~100 px of dead
+   band) and -- worse -- the per-system scale ceiling has nothing to bite on,
+   since 3 x 512 exceeds the panel. That ceiling is why SNES is playable;
+   disarming it puts Star Fox back at 67%. */
 bool config_lcd_rect_from_max_for_rom(const char *rom_path)
 {
     if (!rom_path || !*rom_path) return false;
     return ends_with_ext(rom_path, ".mgw");
 }
 
-/* WHAT THE LCD STRIP'S CONTROLS SAY AND HOW THEY ARE ARRANGED -- the whole
-   per-system description of the pad this layout presents. The contract, why
-   empty means "the retropad's own name", and what the two arrangements are,
-   are all on koboy_lcd_pad in koboy.h.
+/* WHAT THE LCD STRIP'S CONTROLS SAY AND HOW THEY ARE ARRANGED. Contract, why
+   empty means "the retropad's own name", and the arrangements: koboy_lcd_pad
+   in koboy.h.
 
-   Cleared on every call for the same reason config_extra_buttons_for_rom
-   clears its discs: this runs once per ROM load into a config that outlives
-   one game (MENU -> CHOOSE ROM reuses it), so "set them for a Mega Drive"
-   without "clear them for everything else" would leave a strip saying C on
-   the next Game & Watch. */
+   Cleared on every call: this runs once per ROM load into a config that
+   outlives one game (MENU -> CHOOSE ROM reuses it), so setting without
+   clearing would leave a strip saying C on the next Game & Watch. */
 void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path)
 {
     if (!l) return;
     memset(&l->lcd, 0, sizeof l->lcd);
     if (!rom_path || !*rom_path) return;
 
-    /* THE MEGA DRIVE, and every one of these six is READ OFF THE CORE rather
-       than chosen. Genesis Plus GX's port-0 descriptor block
-       (libretro/libretro.c) says:
+    /* THE MEGA DRIVE. All six labels are READ OFF THE CORE, not chosen:
+       Genesis Plus GX's port-0 descriptor block (libretro/libretro.c) says:
 
          JOYPAD_B -> B     JOYPAD_Y -> A     JOYPAD_L -> X
          JOYPAD_A -> C     JOYPAD_X -> Y     JOYPAD_R -> Z
          JOYPAD_START -> Start   JOYPAD_SELECT -> Mode
 
        The strip's diamond is TOP=JOYPAD_X, LEFT=JOYPAD_Y, RIGHT=JOYPAD_A,
-       BOTTOM=JOYPAD_B (chrome_lcd_layout, and input.c hit-tests the same
-       struct), so the labels below are that table transposed and nothing
-       more. Read them off the panel and the arrangement is A left, B bottom,
-       C right -- the hardware's own A-B-C arc -- with Y directly above B,
-       which is where a real six-button pad puts it.
+       BOTTOM=JOYPAD_B (chrome_lcd_layout; input.c hit-tests the same struct),
+       so the labels below are that table transposed. On the panel that reads A
+       left, B bottom, C right -- the hardware's own A-B-C arc -- with Y
+       directly above B, where a real six-button pad puts it.
 
-       X AND Z GO ON THE SHOULDER PILLS, and that is the one place this
-       differs from the moulded hardware, where they flank Y across the top
-       row. There is no third and fourth position in the diamond; the pills
-       are the only other pair the strip has, and a button in the wrong PLACE
-       is recoverable in a way that a button which does not exist is not. On
-       the DMG faceplate X and Z did not exist at all -- that shortfall is
-       what moved this system here.
+       THE ARRANGEMENT IS THE CONSOLE'S OWN, not the strip's default diamond:
+       KOBOY_LCD_FACE_ROWS6 puts X Y Z above A B C, as moulded. Same principle
+       as the labels, applied to POSITION -- somebody who has held a Genesis pad
+       knows where C is. It also gives X and Z real face discs rather than
+       shoulder pills, which is right twice: the console has no shoulders, and
+       the lower band then carries MODE and START alone. (On the DMG faceplate
+       X and Z did not exist at all; that shortfall moved this system here.)
 
-       AND THE ARRANGEMENT IS THE CONSOLE'S OWN, not the strip's default
-       diamond: KOBOY_LCD_FACE_ROWS6 puts X Y Z above A B C, which is what is
-       moulded on the pad. That is the same principle as the labels applied to
-       POSITION -- somebody who has held a Genesis pad knows where C is, and a
-       diamond would make them learn an arbitrary map to find it. It also
-       gives X and Z real face discs rather than shoulder pills, which is
-       right twice over: the console has no shoulders, and the strip's lower
-       band then carries MODE and START alone instead of naming two controls
-       for one bit.
+       SELECT SAYS MODE. A Mega Drive has no Select; JOYPAD_SELECT is the pad's
+       Mode button, held at power-on so a six-button pad can pretend to be a
+       three-button one. A pill saying SELECT that produces Mode is the same
+       lie as a disc saying A that produces C.
 
-       SELECT SAYS MODE. A Mega Drive has no Select; JOYPAD_SELECT is the
-       pad's Mode button, and holding it at power-on is how a six-button pad
-       pretends to be a three-button one for the titles that mis-detect it.
-       A pill saying SELECT that produces Mode is the same class of lie as a
-       disc saying A that produces C.
-
-       ALL SIX ARE LIVE WITHOUT A CORE OPTION, checked in the core rather than
-       assumed: libretro.c:1039 sets config.input[].padtype to
-       DEVICE_PAD2B|DEVICE_PAD3B|DEVICE_PAD6B, which input.c's
-       SYSTEM_GAMEPAD case reads as "auto" and replaces with the pad the
-       ROM HEADER declares -- DEVICE_PAD6B iff the cartridge's I/O-support
-       field contains '6' (core/loadrom.c's peripheralinfo table, bit 1).
-       koboy answers no core options and never calls
-       retro_set_controller_port_device, so that auto-detect stands. A
-       three-button title simply reads nothing from X/Y/Z, which is what it
-       does on real hardware too. */
+       ALL SIX ARE LIVE WITHOUT A CORE OPTION, checked in the core: libretro.c
+       :1039 sets config.input[].padtype to
+       DEVICE_PAD2B|DEVICE_PAD3B|DEVICE_PAD6B, which input.c's SYSTEM_GAMEPAD
+       case reads as "auto" and replaces with what the ROM HEADER declares --
+       DEVICE_PAD6B iff the cartridge's I/O-support field contains '6'
+       (core/loadrom.c's peripheralinfo table, bit 1). koboy answers no core
+       options and never calls retro_set_controller_port_device, so that
+       auto-detect stands. A three-button title reads nothing from X/Y/Z, as on
+       real hardware. */
     if (ends_with_ext(rom_path, ".md")) {
         l->lcd.face = KOBOY_LCD_FACE_ROWS6;
         snprintf(l->lcd.x, sizeof l->lcd.x, "%s", "Y");
@@ -697,22 +547,17 @@ void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path)
        identity map and the diamond is already in the hardware's arrangement:
        X on top, Y left, A right, B bottom.
 
-       Only the shoulders are relabelled, and it is not cosmetic. The console
-       calls them L and R; "L1"/"R1" is a DualShock word that arrived through
-       the retropad, and on a pad with exactly one pair of shoulders the "1"
-       says there is a second pair to look for. Every SNES title's own control
-       screen says L and R.
+       Only the shoulders are relabelled, and not cosmetically: the console
+       calls them L and R, and "L1"/"R1" is a DualShock word that arrived
+       through the retropad, whose "1" implies a second pair to look for.
 
-       THE FOUR FACE LABELS ARE SET EXPLICITLY rather than left to the
-       fallback, even though they come out identical. Two reasons: a reader
-       comparing this case with the Mega Drive's above can see the whole map
-       in one place, and a test can assert that a .sfc really was recognised
-       here -- an empty field is indistinguishable from "no case matched". */
+       THE FOUR FACE LABELS ARE SET EXPLICITLY though identical to the
+       fallback, so the whole map reads in one place and a test can assert a
+       .sfc really was recognised here -- an empty field is indistinguishable
+       from "no case matched". */
     if (ends_with_ext(rom_path, ".sfc") || ends_with_ext(rom_path, ".smc")) {
-        /* The DIAMOND is left as the zero rather than named, and that is the
-           one place in this function where the default is also the right
-           answer for a stated reason: a SNES pad IS this diamond -- X top, Y
-           left, A right, B bottom -- so there is nothing to override. */
+        /* The DIAMOND is left as the zero: a SNES pad IS this diamond -- X
+           top, Y left, A right, B bottom -- so there is nothing to override. */
         snprintf(l->lcd.x, sizeof l->lcd.x, "%s", "X");
         snprintf(l->lcd.y, sizeof l->lcd.y, "%s", "Y");
         snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "A");
@@ -730,21 +575,15 @@ void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path)
          JOYPAD_B -> B     JOYPAD_A -> A     JOYPAD_L -> L     JOYPAD_R -> R
          JOYPAD_START -> Start        JOYPAD_SELECT -> Select
 
-       So unlike the Mega Drive there is nothing to transpose, and unlike the
-       SNES there is nothing to shorten: the labels below are the console's
-       own names and they happen to be the retropad's too.
+       Nothing to transpose and nothing to shorten. Set explicitly anyway, for
+       the reason the SNES's are: a test can assert a .gba was recognised here.
 
-       THEY ARE SET EXPLICITLY ANYWAY, for the reason the SNES's are: a test
-       can then assert that a .gba really was recognised here, and an empty
-       field is indistinguishable from "no case matched".
-
-       WHAT THE OTHER TWO RETROPAD BITS DO, so nobody looks for the discs:
-       gpSP binds JOYPAD_X and JOYPAD_Y to "Turbo A" and "Turbo B", and
-       JOYPAD_R2 to a fast-forward. All three are front-end conveniences that
-       no Game Boy Advance has, and none is reachable here -- deliberately.
-       That is the whole argument for KOBOY_LCD_FACE_PAIR2 (koboy.h): a disc
-       labelled X that fires A twenty times a second is a control the hardware
-       does not have, which is the defect this layout was built to stop. */
+       WHAT THE OTHER RETROPAD BITS DO, so nobody hunts for discs: gpSP binds
+       JOYPAD_X/JOYPAD_Y to "Turbo A"/"Turbo B" and JOYPAD_R2 to fast-forward.
+       All three are front-end conveniences no GBA has, and none is reachable
+       here -- deliberately. That is the argument for KOBOY_LCD_FACE_PAIR2
+       (koboy.h): a disc labelled X that fires A twenty times a second is a
+       control the hardware does not have. */
     if (ends_with_ext(rom_path, ".gba")) {
         l->lcd.face = KOBOY_LCD_FACE_PAIR2;
         snprintf(l->lcd.a, sizeof l->lcd.a, "%s", "A");
@@ -752,41 +591,36 @@ void config_lcd_pad_for_rom(koboy_layout *l, const char *rom_path)
         snprintf(l->lcd.l1, sizeof l->lcd.l1, "%s", "L");
         snprintf(l->lcd.r1, sizeof l->lcd.r1, "%s", "R");
         snprintf(l->lcd.select, sizeof l->lcd.select, "%s", "SELECT");
-        /* x and y are left cleared, and that is not an omission: PAIR2 draws
-           no disc for either bit, so a label for one could never appear. */
+        /* x and y left cleared, not omitted: PAIR2 draws no disc for either
+           bit, so a label could never appear. */
         return;
     }
 
-    /* GAME & WATCH KEEPS THE RETROPAD NAMES, and this is a deliberate empty
-       case rather than a forgotten one. gw-libretro's own overlay (START with
-       no cursor active) draws a SNES pad labelled in retropad names and the
-       per-title bindings are quoted in those names too -- Mickey Mouse uses
-       up/down/x/b for its four diagonals and l1/r1 for GAME A / GAME B. A
-       player reading that overlay has to find the same button on this strip,
-       so relabelling would break the one correspondence the labels exist to
-       keep. Left cleared above; chrome.c fills in X/Y/A/B/L1/R1/SELECT. */
+    /* GAME & WATCH KEEPS THE RETROPAD NAMES -- a deliberate empty case.
+       gw-libretro's own overlay (START with no cursor active) draws a SNES pad
+       in retropad names and quotes per-title bindings in them (Mickey Mouse:
+       up/down/x/b for diagonals, l1/r1 for GAME A / GAME B). Relabelling would
+       break the correspondence the labels exist to keep. chrome.c fills in
+       X/Y/A/B/L1/R1/SELECT. */
 }
 
 void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
 {
     if (!l) return;
-    /* Cleared, not left alone, on every call: this runs once per ROM load and
-       the config it edits outlives a single game (MENU -> CHOOSE ROM reuses
-       it), so "set them for .min" without "clear them for everything else"
-       would leave a C button drawn and live on the next Game Boy. */
+    /* Cleared on every call: this runs once per ROM load into a config that
+       outlives one game (MENU -> CHOOSE ROM reuses it), so setting without
+       clearing leaves a C button drawn and live on the next Game Boy. */
     memset(l->extra, 0, sizeof l->extra);
     if (!rom_path || !*rom_path) return;
 
-    /* The two positions on the DMG faceplate that fit another disc, and they
-       are tight enough to be worth writing down once here rather than twice
-       in the tables below.
+    /* The two positions on the DMG faceplate that fit another disc; both are
+       tight enough to write down once.
 
        SLOT R -- (905, 790) r 70, the pocket below A and right of B. A and B
-       are fixed (they are the Game Boy's, and this must not move them), the
-       Start/Select/MENU row owns everything from 892 permille down, and the
-       panel needs KOBOY_CHROME_MARGIN clear on the right. That leaves this
-       pocket, and only at a smaller radius than A/B's 85. Checked on all four
-       supported panels -- gap to the A disc, gap to the MENU pill, right
+       are the Game Boy's and must not move, the Start/Select/MENU row owns
+       everything from 892 permille down, and the right needs
+       KOBOY_CHROME_MARGIN clear. That leaves this pocket, at a smaller radius
+       than A/B's 85. Checked on all four panels -- A-gap, MENU-gap, right
        margin:
          Clara  1072x1448  A-gap 25px  MENU-gap 75px  right margin 27px
          Libra2 1264x1680  A-gap 28    MENU-gap 84    right margin 33
@@ -794,54 +628,47 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
          Sage   1440x1920  A-gap 32    MENU-gap 98    right margin 37
 
        SLOTS L/R-STACKED -- (470, 700) and (470, 830), both r 62, the column
-       between the d-pad's right edge and B's left edge. Two discs need two
-       places and the pocket above holds one, so the WonderSwan pair goes
-       here instead of splitting across the faceplate. Clearances at the
-       WORST panel of the four (1072x1448, the narrowest): 40px to the d-pad,
-       47px to B, 56px between the two discs, 26px to the START row.
+       between the d-pad's right edge and B's left. Two discs need two places
+       and the pocket above holds one, so a pair goes here rather than
+       splitting across the faceplate. Clearances at the narrowest panel
+       (1072x1448): 40px to the d-pad, 47px to B, 56px between the discs, 26px
+       to the START row.
 
-       Neither slot becomes chrome_controls_top's binding minimum on any of
-       the four panels (the minimum stays 879 / 1018 / 1135 / 1164, set by the
-       A disc), which is what lets these systems get the same game rect and
-       resolved scale they would have got with no extra buttons at all.
-       tests/test_chrome.c re-derives every one of those numbers rather than
-       trusting this comment.
+       LIVE CONSTRAINT: neither slot becomes chrome_controls_top's binding
+       minimum on any of the four panels (it stays 879 / 1018 / 1135 / 1164,
+       set by the A disc), which is what lets these systems keep the game rect
+       and scale they would have had with no extra buttons.
+       tests/test_chrome.c re-derives every number rather than trusting this.
 
-       Labels go INSIDE these discs, not below them like A and B: there is no
-       case band under any of the three to put one in. chrome.c reuses the LCD
-       strip's draw_face_button for exactly that reason. */
+       Labels go INSIDE these discs, not below like A and B: there is no case
+       band under any of the three. chrome.c reuses the LCD strip's
+       draw_face_button for that. */
 
-    /* A Pokemon Mini genuinely has an A, a B and a C, and the core binds C to
-       RETRO_DEVICE_ID_JOYPAD_R -- bit 11, KOBOY_BTN_R1 -- and advertises it as
-       "C" in its own input descriptors. The mapping is read off the core, not
-       chosen. */
+    /* A Pokemon Mini has A, B and C; the core binds C to
+       RETRO_DEVICE_ID_JOYPAD_R (bit 11, KOBOY_BTN_R1) and advertises it as "C"
+       in its input descriptors. Read off the core, not chosen. */
     if (ends_with_ext(rom_path, ".min")) {
         l->extra[0] = (koboy_extra_btn){ 905, 790, 70, KOBOY_BTN_R1, "C" };
         return;
     }
 
-    /* A WonderSwan needs TWO, and it needs them because of the ROTATION, not
-       because the hardware has six face buttons. The console has two 4-way
-       cursors (X1-X4, Y1-Y4) plus A, B and START, and many titles are played
-       with the unit turned on its side -- beetle-wswan's default
-       `wswan_rotate_display = manual` toggles that on SELECT, which the DMG
-       faceplate already has, and `wswan_rotate_keymap = auto` swaps the
-       retropad map to match.
+    /* A WonderSwan needs TWO, because of the ROTATION rather than six face
+       buttons. The console has two 4-way cursors (X1-X4, Y1-Y4) plus A, B and
+       START, and many titles are played with the unit on its side --
+       beetle-wswan's `wswan_rotate_display = manual` toggles that on SELECT
+       and `wswan_rotate_keymap = auto` swaps the retropad map.
 
-       In that ROTATED map (third_party/wswan/libretro.c, map[1]) the retropad
-       d-pad drives the Y cursor -- the one under the thumb in that grip, so
-       koboy's d-pad is right -- but the WonderSwan's own A and B move to
-       JOYPAD_L and JOYPAD_R. MEASURED, not read: `Kaze no Klonoa - Moonlight
-       Museum` in portrait responds to exactly two inputs, START and JOYPAD_L,
-       and JOYPAD_L is the hardware's A button. Without these two discs that
-       title cannot be started at all -- the same "a button that exists in the
-       hardware and is unreachable on koboy" bug the Game & Watch layout and
-       then the Pokemon Mini each spent a round on.
+       In the ROTATED map (third_party/wswan/libretro.c, map[1]) the d-pad
+       drives the Y cursor (the one under the thumb in that grip) but the
+       WonderSwan's own A and B move to JOYPAD_L and JOYPAD_R. MEASURED: `Kaze
+       no Klonoa - Moonlight Museum` in portrait responds to exactly START and
+       JOYPAD_L, and JOYPAD_L is the hardware's A. Without these discs that
+       title cannot be started at all -- the same unreachable-button bug the
+       Game & Watch layout and the Pokemon Mini each spent a round on.
 
-       L1 above R1 because that is where they sit once the console is turned:
-       A ends up above B. What is still NOT reachable is the rotated map's
-       X-cursor up/right, which land on JOYPAD_Y and JOYPAD_X -- there is no
-       room for two more discs, and no title measured so far needs them. */
+       L1 above R1 because that is where they sit once the console is turned.
+       Still NOT reachable: the rotated map's X-cursor up/right on JOYPAD_Y and
+       JOYPAD_X -- no room, and no measured title needs them. */
     if (ends_with_ext(rom_path, ".ws") || ends_with_ext(rom_path, ".wsc")) {
         l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_L1, "L1" };
         l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_R1, "R1" };
@@ -849,220 +676,176 @@ void config_extra_buttons_for_rom(koboy_layout *l, const char *rom_path)
     }
 
     /* An Intellivision hand controller is the hardest control set this
-       project has met and the two discs make ALL OF IT reachable, which was
-       not obvious and is the whole reason this case is long.
+       project has met, and these two discs make ALL of it reachable.
 
        The hardware: a 16-direction disc, three action buttons (top,
        lower-left, lower-right -- the two upper side buttons are one signal),
-       and a TWELVE-KEY TELEPHONE KEYPAD. FreeIntv gives the disc's four
-       cardinals to the retropad d-pad, the lower two action buttons to
-       JOYPAD_A / JOYPAD_B, and the top one to JOYPAD_Y (src/controller.c's
-       getControllerState -- read off the code, not the input descriptors,
-       which contradict the core's own on-screen help about which of A/B is
-       which side). So the top button needs a disc: that is extra[1].
+       and a TWELVE-KEY TELEPHONE KEYPAD. FreeIntv gives the four cardinals to
+       the d-pad, the lower two actions to JOYPAD_A/JOYPAD_B and the top one to
+       JOYPAD_Y (src/controller.c getControllerState -- read off the CODE; the
+       input descriptors contradict the core's own on-screen help about which
+       of A/B is which side). So the top button needs extra[1].
 
-       THE KEYPAD, which no faceplate can draw and which several titles
-       cannot be started without -- BurgerTime and Bump 'n' Jump both stop at
-       "Select 1 or 2 Players", Diner says "then press enter". FreeIntv puts
-       keypad 0 and 5 on the thumbsticks and Clear/Enter on the triggers,
-       and 1-9 only on the RIGHT ANALOG STICK, which koboy has no source for
-       (src/core.c answers RETRO_DEVICE_JOYPAD alone). That would have left
-       nine keys dead.
+       THE KEYPAD, which no faceplate can draw and several titles cannot start
+       without (BurgerTime and Bump 'n' Jump stop at "Select 1 or 2 Players",
+       Diner says "then press enter"). FreeIntv puts 0 and 5 on the thumbsticks,
+       Clear/Enter on the triggers, and 1-9 ONLY on the right analog stick,
+       which koboy has no source for (core.c answers RETRO_DEVICE_JOYPAD
+       alone) -- nine dead keys.
 
-       It does not, because the core has a second way in that its input
-       descriptors call "Show Keypad": HOLD JOYPAD_L, and a 4x3 keypad is
-       drawn into the corner of the frame, the D-PAD moves a cursor over it,
-       and any face button presses the selected key (src/controller.c,
-       getKeypadState + drawMiniKeypad; libretro.c:1267 makes it modal, so
-       the disc is not steering the game while it is held). MEASURED, not
-       read: holding L1 and tapping A on BurgerTime's player-count prompt put
-       a "1" on the screen, and the mini keypad appeared in both bottom
-       corners. Three simultaneous touches -- disc, d-pad, A -- and koboy
-       tracks ten.
+       The way in is what the descriptors call "Show Keypad": HOLD JOYPAD_L and
+       a 4x3 keypad is drawn into the frame corner, the D-PAD moves a cursor
+       and any face button presses the selected key (controller.c,
+       getKeypadState + drawMiniKeypad; libretro.c:1267 makes it modal, so the
+       disc is not steering while held). MEASURED: holding L1 and tapping A on
+       BurgerTime's player-count prompt put a "1" on screen. Three simultaneous
+       touches; koboy tracks ten.
 
-       So extra[0] is JOYPAD_L, labelled KEY rather than L1 because what it
-       does is open the keypad and nothing on the hardware is called L1.
+       extra[0] is JOYPAD_L, labelled KEY rather than L1 because it opens the
+       keypad and nothing on the hardware is called L1.
 
-       What is still NOT reachable: the disc's twelve DIAGONAL positions.
-       koboy's touch d-pad reports the four cardinals and their four
-       diagonals; the 16-way disc has eight more between those, and
-       FreeIntv only offers them on the left analog stick. Titles that steer
-       finely (Astrosmash's ship, Auto Racing) are coarser here than on real
-       hardware. JOYPAD_X ("last selected keypad button") and the L2/R2/L3/R3
-       keypad shortcuts are also unreachable, and all six are redundant with
-       the mini keypad above rather than lost. */
+       Still NOT reachable: the disc's twelve DIAGONAL positions (koboy's touch
+       d-pad gives four cardinals + four diagonals; the eight between are on
+       FreeIntv's left analog stick only), so finely-steered titles
+       (Astrosmash, Auto Racing) are coarser than on hardware. JOYPAD_X ("last
+       selected keypad button") and the L2/R2/L3/R3 shortcuts are unreachable
+       and redundant with the mini keypad. */
     if (ends_with_ext(rom_path, ".int")) {
         l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_L1, "KEY" };
         l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_Y,  "TOP" };
         return;
     }
 
-    /* A ColecoVision controller ALSO has a twelve-key keypad, and unlike the
-       Intellivision this core offers no on-screen way to reach it: Gearcoleco
-       spreads the keys across the whole retropad (keypad 1 on JOYPAD_Y, 2 on
-       X, 3-8 on the shoulders and sticks, * and # on START/SELECT, 9 and 0 on
-       an analog axis -- platforms/libretro/libretro.cpp's descriptors). Only
-       two of those can have a disc.
+    /* A ColecoVision controller ALSO has a twelve-key keypad, and unlike
+       FreeIntv this core offers no on-screen way in: Gearcoleco spreads the
+       keys across the whole retropad (1 on JOYPAD_Y, 2 on X, 3-8 on shoulders
+       and sticks, * and # on START/SELECT, 9 and 0 on an analog axis --
+       platforms/libretro/libretro.cpp). Only two can have a disc.
 
-       1 and 2 are the two, because that is what the CONSOLE'S OWN BIOS asks
-       for: every cartridge boots into an option screen whose first two lines
-       are "1 = SKILL 1/ONE PLAYER" and "2 = SKILL 2/ONE PLAYER" -- rendered
-       and read, not assumed. Without keypad 1 a ColecoVision title cannot be
-       started at all, which is the same bug the Game & Watch layout, the
-       Pokemon Mini and the WonderSwan each spent a round on.
+       1 and 2, because that is what the CONSOLE'S OWN BIOS asks for: every
+       cartridge boots to an option screen reading "1 = SKILL 1/ONE PLAYER" /
+       "2 = SKILL 2/ONE PLAYER" -- rendered and read, not assumed. Without
+       keypad 1 no ColecoVision title starts at all.
 
-       Labelled K1/K2 rather than 1/2 so a finger looking for "the keypad"
-       finds them; the faceplate has no other numbers on it.
+       Labelled K1/K2 rather than 1/2 so a finger hunting "the keypad" finds
+       them; the faceplate has no other numbers.
 
-       Two things a reader should know rather than discover: koboy's START and
-       SELECT are keypad * and # on this system (the core binds them there,
-       and the faceplate's moulded labels lie about it), and keypad 3-9 and 0
-       are unreachable. The games that need those are the ones with in-play
-       menus -- Fortune Builder, the Super Action titles -- not the ones with
-       a start screen. */
+       Also: koboy's START and SELECT ARE keypad * and # here (the core binds
+       them there and the moulded labels lie about it), and keypad 3-9 and 0
+       are unreachable -- needed only by in-play-menu titles (Fortune Builder,
+       the Super Action ones), not by start screens. */
     if (ends_with_ext(rom_path, ".col")) {
         l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "K1" };
         l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "K2" };
         return;
     }
 
-    /* THE MEGA DRIVE AND THE SNES HAVE NO DISCS HERE ANY MORE, and this is a
-       deliberate empty case for two systems that used to have two each. They
-       do not reach this faceplate at all: config_layout_for_rom sends
-       .md/.sfc/.smc to KOBOY_LAYOUT_LCD, whose bottom strip carries a d-pad,
-       a four-button diamond, L1, R1, SELECT and START.
+    /* THE MEGA DRIVE AND THE SNES HAVE NO DISCS HERE -- a deliberate empty
+       case for two systems that used to have two each. config_layout_for_rom
+       sends .md/.sfc/.smc to KOBOY_LAYOUT_LCD instead, whose strip carries a
+       d-pad, a four-button diamond, L1, R1, SELECT and START.
 
-       They moved because THE DISCS WERE NOT ENOUGH, which the history here is
-       worth keeping. This faceplate has exactly two spare pockets (see the
-       SLOT notes above -- that is room, not a policy), and:
+       They moved because THE DISCS WERE NOT ENOUGH. Two spare pockets (see the
+       SLOT notes above -- room, not policy), and: */
 
-         SNES needs A B X Y L R. The two discs went to Y and X, because on
-         this console Y is the run-and-fire button (Mario runs on Y, Samus
-         shoots on Y, Link's item is Y) and a SNES without it is one where
-         the primary action of most of the library has no button. L and R
-         were unreachable: no hop in Mario Kart, no fierce in the fighters,
-         no aim-diagonal in Super Metroid.
+    /*   SNES needs A B X Y L R. The two discs went to Y and X (Y is the
+         run-and-fire button: Mario runs on Y, Samus shoots on Y, Link's item
+         is Y), leaving L and R unreachable -- no hop in Mario Kart, no fierce
+         in the fighters, no aim-diagonal in Super Metroid.
 
-         MEGA DRIVE needs A B C, or A B C X Y Z on a six-button pad. Genesis
-         Plus GX maps JOYPAD_B -> B, JOYPAD_A -> **C**, JOYPAD_Y -> **A**, so
-         the faceplate's own A disc is the console's C and the hardware's A
-         had to have extra[0] or it did not exist. That left one pocket for
-         three six-button keys; Y took it, X and Z were unreachable.
+         MEGA DRIVE needs A B C, or A B C X Y Z on a six-button pad. GPGX maps
+         JOYPAD_B -> B, JOYPAD_A -> C, JOYPAD_Y -> A, so the faceplate's own A
+         disc is the console's C and the hardware's A had to take extra[0] or
+         not exist. One pocket left for three six-button keys; Y took it, X and
+         Z were unreachable.
 
-       Both shortfalls are gone in the LCD strip and neither could have been
-       fixed here. The core mappings themselves did not move -- they are read
-       off the same descriptor tables and now live in
-       config_lcd_pad_for_rom, which is what turns them into the labels the
-       strip prints. Recorded as an empty case rather than deleted, because
-       "this system needs no disc" and "somebody forgot this system" look
-       identical at a glance, and because a future reader who moves either
-       system back here will need the two paragraphs above. */
+       The core mappings did not move -- they are read off the same descriptor
+       tables and now live in config_lcd_pad_for_rom. Kept as an empty case
+       because "needs no disc" and "somebody forgot this system" look identical
+       at a glance. */
 
-    /* An Atari 2600 joystick is four directions and ONE button, and the
-       console adds Reset and Select. stella2014 binds fire to JOYPAD_B,
-       Reset to JOYPAD_START and Select to JOYPAD_SELECT, so the DMG
-       faceplate already carries every control a 2600 game has and NO extra
-       disc is needed -- recorded as a deliberate empty case for the reason
-       the Neo Geo Pocket one below is.
+    /* An Atari 2600 joystick is four directions and ONE button, plus Reset
+       and Select on the console. stella2014 binds fire to JOYPAD_B, Reset to
+       JOYPAD_START, Select to JOYPAD_SELECT, so the DMG faceplate covers
+       everything and NO extra disc is needed -- a deliberate empty case.
 
-       Worth knowing anyway: the A DISC IS DEAD for this system. Fire is B,
-       and JOYPAD_A only does anything for a Genesis pad or paddles, neither
-       of which koboy can present (libretro.cxx's event mapping). The two
-       difficulty switches and the colour/black-and-white switch are
-       unreachable; they are set-once console switches, not controls, and no
-       title in the author's 82 needs one to start. Paddle titles (Breakout,
-       Warlords) play on the d-pad rather than by feel, because a paddle is
-       an analog axis and koboy has none.
+       THE A DISC IS DEAD for this system: fire is B, and JOYPAD_A only does
+       anything for a Genesis pad or paddles, neither of which koboy can
+       present (libretro.cxx). The two difficulty switches and the
+       colour/B&W switch are unreachable set-once console switches; none of the
+       author's 82 titles needs one to start. Paddle titles (Breakout,
+       Warlords) play on the d-pad -- a paddle is an analog axis, and koboy has
+       none.
 
-       A Master System and a Game Gear are likewise fully covered: two
-       buttons on JOYPAD_B and JOYPAD_A, and PAUSE/START on JOYPAD_START
-       (third_party/gpgx's DEVICE_PAD2B branch). Nothing left over. */
+       Master System and Game Gear are likewise fully covered: two buttons on
+       JOYPAD_B/JOYPAD_A and PAUSE/START on JOYPAD_START (gpgx's DEVICE_PAD2B
+       branch). */
 
-    /* ARCADE, and this is the first system where the extra discs are chosen
-       from a POPULATION rather than from one console's control panel --
-       FinalBurn Neo is 227 different boards in the author's set alone, with
-       no single answer to "what does the hardware have".
+    /* ARCADE -- the first system whose extra discs are chosen from a
+       POPULATION rather than one console's control panel: FBNeo is 227
+       different boards in the author's set, with no single answer to "what
+       does the hardware have".
 
-       So it was counted. Every one of those 227 romsets was loaded and its
-       retro_input_descriptors read (port 0, RETRO_DEVICE_JOYPAD), and the
-       mapping FBNeo uses is flat and consistent: JOYPAD_B is always the
-       board's "Button 1", JOYPAD_A its "Button 2", JOYPAD_Y its "Button 3",
-       JOYPAD_X its "Button 4". Counts across the 227:
+       So it was COUNTED. All 227 romsets were loaded and their
+       retro_input_descriptors read (port 0, RETRO_DEVICE_JOYPAD). FBNeo's map
+       is flat: JOYPAD_B = "Button 1", JOYPAD_A = 2, JOYPAD_Y = 3, JOYPAD_X = 4.
+       Counts across the 227:
 
          B  208    Y  134    L1 45    L2 45    L3 26
          A  185    X   71    R1 48    R2 46    R3 14
 
-       B and A the DMG faceplate already has. Y is bound by 134 boards --
-       more than half -- and X by 71, so those two are the discs, and they
-       take the L/R-stacked slots the WonderSwan pair uses. That covers every
-       board with four or fewer fire buttons, which is all of the pre-1990
-       era this batch is scoped to and most of what came after.
+       B and A the faceplate already has. Y is bound by 134 boards -- more than
+       half -- and X by 71, so those are the discs, in the L/R-stacked slots.
+       That covers every board with four or fewer fire buttons.
 
-       Labelled 3 and 4, NOT C and D, and the labels are the honest part:
-       on this system the faceplate's moulded B and A ARE buttons 1 and 2, so
-       numbering the new pair continues a sequence the player can actually
-       follow. (The ColecoVision case above had the same problem and answered
-       it the same way with K1/K2.)
+       Labelled 3 and 4, NOT C and D: on this system the faceplate's moulded B
+       and A ARE buttons 1 and 2, so the numbering continues a sequence the
+       player can follow. (Same problem the ColecoVision answered with K1/K2.)
 
-       WHAT IS STILL UNREACHABLE, counted rather than guessed: L1/R1 (45/48
-       boards), L2/R2 (45/46) and L3/R3 (26/14). Those are the SIX-BUTTON
-       layouts -- Street Fighter's strong punch and kick, a Neo Geo D button,
-       Defender's "Reverse" -- and there is no seventh and eighth place on
-       this faceplate for them. Every one of those boards is outside the
-       pre-1990 scope this core was added for. Within that scope the only
-       casualty measured is Defender, which puts Hyperspace on Y, Thrust on X
-       and Reverse on R1: the first two are reachable through these discs,
-       Reverse is not.
+       STILL UNREACHABLE, counted: L1/R1 (45/48 boards), L2/R2 (45/46), L3/R3
+       (26/14) -- the SIX-BUTTON layouts (Street Fighter's strong punch and
+       kick, a Neo Geo D, Defender's "Reverse"), all outside the pre-1990 scope
+       this core was added for. The only measured casualty within scope is
+       Defender, whose Reverse is on R1 (Hyperspace on Y and Thrust on X are
+       reachable).
 
-       COIN AND START need no disc and this is worth writing down because it
-       is the thing a reader will check first: FBNeo binds "Coin 1" to
-       JOYPAD_SELECT and "Start 1" to JOYPAD_START (retro_input.cpp,
-       GameInpStandardOne), which are the faceplate's SELECT and START pills.
-       An arcade board will not start without a coin, so a missing SELECT
-       would have been the "button that exists and is unreachable" bug for a
-       fourth time. It is reachable. Verified by playing: Galaga reaches
-       STAGE 1 from SELECT then START. */
+       COIN AND START NEED NO DISC, which is the first thing a reader will
+       check: FBNeo binds "Coin 1" to JOYPAD_SELECT and "Start 1" to
+       JOYPAD_START (retro_input.cpp, GameInpStandardOne) -- the faceplate's
+       own pills. A board will not start without a coin, so a missing SELECT
+       would have been the unreachable-button bug a fourth time. Verified by
+       playing: Galaga reaches STAGE 1 from SELECT then START. */
     if (ends_with_ext(rom_path, ".zip")) {
         l->extra[0] = (koboy_extra_btn){ 470, 700, 62, KOBOY_BTN_Y, "3" };
         l->extra[1] = (koboy_extra_btn){ 470, 830, 62, KOBOY_BTN_X, "4" };
         return;
     }
 
-    /* A Neo Geo Pocket has a stick, A, B and OPTION and nothing else, so it
-       needs NO extra disc -- recorded here as a deliberate empty case rather
-       than left to the fall-through, because "we checked and it needs none"
-       and "we never looked" are indistinguishable otherwise.
+    /* A Neo Geo Pocket has a stick, A, B and OPTION, so it needs NO extra
+       disc -- a deliberate empty case, because "checked, needs none" and
+       "never looked" are otherwise indistinguishable.
 
-       RACE binds OPTION to JOYPAD_START, and the two face buttons CROSSED:
-       NGP A -> JOYPAD_B, NGP B -> JOYPAD_A (third_party/race/libretro/
-       libretro.c's descriptors say so in as many words). That reads like a
-       bug and is not one. On the hardware A is the LEFT button and B the
-       right; on koboy's faceplate the B disc is left of the A disc, exactly
-       as on a Game Boy. So the crossing puts each label where the finger
-       expects it, and undoing it would be the bug. */
+       RACE binds OPTION to JOYPAD_START and the face buttons CROSSED: NGP A ->
+       JOYPAD_B, NGP B -> JOYPAD_A (race/libretro/libretro.c's descriptors).
+       That reads like a bug and is not: on the hardware A is the LEFT button,
+       and on koboy's faceplate the B disc is left of the A disc, as on a Game
+       Boy. The crossing puts each label where the finger expects it; undoing
+       it would be the bug. */
 }
 
 /* ------------------------------------------------- install-relative paths
  *
- * Why this exists, in full, because it cost a device round-trip to find.
+ * Cost a device round-trip to find. dlopen() given a slashless name treats it
+ * as a library *name* and searches DT_RUNPATH, LD_LIBRARY_PATH,
+ * /etc/ld.so.cache and the system directories -- NEVER the cwd. So a bare
+ * "gambatte_libretro.so" failed with "cannot open shared object file" while
+ * sitting next to the binary. No host test could catch it: on the desktop the
+ * core always arrives with a slash (`--core build/stub_core.so`).
  *
- * `core_path` defaults to a bare "gambatte_libretro.so", and core.c hands it
- * to dlopen(). Per POSIX and glibc, dlopen() given a name containing no slash
- * treats it as a library *name* and searches DT_RUNPATH, LD_LIBRARY_PATH,
- * /etc/ld.so.cache and the system library directories -- it NEVER looks in the
- * current working directory. So on the device it looked everywhere except the
- * one directory the file was actually in, and failed with "cannot open shared
- * object file: No such file or directory" while sitting next to it.
- *
- * No host test could have caught it: on the desktop the core always arrives as
- * a path with a slash in it (`--core build/stub_core.so`), which dlopen treats
- * as a filesystem path.
- *
- * The fix resolves against the directory containing the *executable*, not the
- * cwd. A "./" prefix would also have worked, but only when the cwd happens to
- * be the install directory -- it fails the moment koboy is launched from
- * NickelMenu or KFMon, which do not set one. /proc/self/exe is independent of
- * how the process was started.
+ * The fix resolves against the directory containing the EXECUTABLE. "./" would
+ * work only when the cwd happens to be the install directory, and NickelMenu
+ * and KFMon set none; /proc/self/exe is independent of how the process
+ * started.
  */
 
 /* Split out from config_exe_dir and taking the directory as an argument so it
@@ -1116,19 +899,16 @@ bool config_exe_dir(char *out, size_t n)
     return true;
 }
 
-/* Called once, after the ini and the command line have both been applied, so
-   that a bare name from either source gets the same treatment. Deliberately
-   NOT done inside config_load: the loader's job is to report what the file
-   says, and folding resolution into it would make the parse tests assert on
-   this machine's directory layout.
+/* Called once, after both the ini and the command line, so a bare name from
+   either gets the same treatment. NOT inside config_load: the loader reports
+   what the file says, and folding resolution in would make the parse tests
+   assert on this machine's directory layout.
 
-   All three paths get it, not just core_path. rom_path and save_dir reach
-   fopen(), which does resolve relative to the cwd, so they are not broken the
-   way core_path was -- but they fail the same way for the same reason when
-   launched from a menu that sets no cwd, and save_dir is the worse of the two:
-   the shipped default is ".", which under a menu launch would try to write
-   save files to the read-only rootfs. Resolving all three keeps one rule to
-   remember: no slash means "next to koboy". */
+   Every path, not just core_path. rom_path and save_dir reach fopen(), which
+   does resolve against the cwd, so they are not broken the way core_path was
+   -- but they fail the same way under a menu launch that sets no cwd, and
+   save_dir's shipped "." would try to write saves to the read-only rootfs.
+   One rule: no slash means "next to koboy". */
 void config_resolve_paths(koboy_config *c)
 {
     char dir[PATH_MAX];
@@ -1143,11 +923,9 @@ void config_resolve_paths(koboy_config *c)
         snprintf(c->save_dir, sizeof c->save_dir, "%s", tmp);
     if (config_join_sibling(tmp, sizeof tmp, c->rom_dir, dir))
         snprintf(c->rom_dir, sizeof c->rom_dir, "%s", tmp);
-    /* Resolved for the same reason save_dir is, and the failure is the same
-       one: the shipped default is a bare name, and under a NickelMenu launch
-       (which sets no cwd) a bare name resolves against the read-only rootfs.
-       A screenshot that silently went nowhere would be indistinguishable
-       from a screenshot feature that does not work. */
+    /* Resolved for the reason save_dir is: under a NickelMenu launch a bare
+       name resolves against the read-only rootfs, and a screenshot that
+       silently went nowhere looks like a feature that does not work. */
     if (config_join_sibling(tmp, sizeof tmp, c->shot_dir, dir))
         snprintf(c->shot_dir, sizeof c->shot_dir, "%s", tmp);
 }
@@ -1160,22 +938,19 @@ static void trim(char *s)
     while (n && (s[n-1] == ' ' || s[n-1] == '\t' || s[n-1] == '\r' || s[n-1] == '\n')) s[--n] = 0;
 }
 
-/* An EMPTY value leaves the default alone rather than meaning true. This
-   treated everything except "false" and "0" as true, including "", so a
-   blanked `grab_input = ` silently turned the grab on -- the opposite of what
-   clearing a line means, and invisible without reading this function. `trim`
-   has already run, so "" covers whitespace-only values too. */
+/* An EMPTY value leaves the default alone rather than meaning true: this once
+   treated everything but "false"/"0" as true, so a blanked `grab_input = `
+   silently turned the grab ON -- the opposite of what clearing a line means.
+   `trim` has run, so "" covers whitespace-only values. */
 static bool as_bool(const char *v, bool dflt) {
     if (!v || !v[0]) return dflt;
     return !(strcmp(v,"false")==0 || strcmp(v,"0")==0);
 }
 
-/* The promotion test, extracted from the main loop so it can be tested.
-   >= and not >, deliberately: a frame in which the entire game rect changed is
-   precisely when a flashing refresh is wanted, so the boundary case belongs
-   inside the promotion, not outside it. permille <= 0 disables the promotion
-   outright -- without that guard 0 would make the comparison always true, which
-   is the exact inverse of what "disabled" means. */
+/* Extracted from the main loop so it can be tested. >= and not >: a frame in
+   which the ENTIRE game rect changed is exactly when a flash is wanted.
+   LIVE GUARD: permille <= 0 disables outright -- without it, 0 makes the
+   comparison always true, the exact inverse of "disabled". */
 bool config_promote_full(const koboy_config *c, long dirty_px, long whole_px)
 {
     if (!c || c->full_refresh_permille <= 0) return false;
@@ -1195,17 +970,15 @@ bool config_load(koboy_config *c, const char *path)
         char *k = line, *v = eq + 1;
         trim(k); trim(v);
         /* See KOBOY_SCALE_LEGACY_DEFAULT: an ini naming exactly 5 is
-           indistinguishable from one that was never edited, so it does not
-           mark intent. Any other value does. */
+           indistinguishable from one never edited, so it marks no intent. */
         if      (!strcmp(k, "scale")) {
             c->scale = atoi(v);
             c->scale_explicit = (c->scale != KOBOY_SCALE_LEGACY_DEFAULT);
         }
-        /* REJECTED, not clamped, and not accepted as written: see
-           config_present_divisor_ok in config.h for why neither clamp
-           direction is defensible. atoi gives 0 for a non-numeric value too,
-           so `present_divisor = fast` lands here and keeps the default rather
-           than dividing by zero in pacer_tick. */
+        /* REJECTED, not clamped -- config_present_divisor_ok in config.h says
+           why neither clamp direction is defensible. atoi gives 0 for junk too,
+           so `present_divisor = fast` keeps the default rather than dividing by
+           zero in pacer_tick. */
         else if (!strcmp(k, "present_divisor")) {
             int d = atoi(v);
             if (config_present_divisor_ok(d)) c->present_divisor = d;
@@ -1219,11 +992,9 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "dpad_hysteresis"))  c->dpad_hysteresis = atoi(v);
         else if (!strcmp(k, "dpad_mode"))        c->dpad_mode = strcmp(v,"cross") ? KOBOY_DPAD_RELATIVE : KOBOY_DPAD_CROSS;
         /* Unlike dpad_mode above, an unrecognised name KEEPS the current
-           value instead of falling to entry 0. dpad_mode has two settings and
-           either is usable; gray_map has five, and entry 0 is the Rec.601
-           mapping this key exists to move away from -- so a typo'd or
-           truncated name must not silently reinstate exactly the rendering
-           the user was trying to change. */
+           value rather than falling to entry 0: entry 0 is the Rec.601 mapping
+           this key exists to move away from, so a typo must not silently
+           reinstate the rendering the user was changing. */
         else if (!strcmp(k, "gray_map")) {
             koboy_gray_map gm;
             if (video_gray_map_parse(v, &gm)) c->gray_map = (int)gm;
@@ -1235,53 +1006,41 @@ bool config_load(koboy_config *c, const char *path)
         else if (!strcmp(k, "rom"))              snprintf(c->rom_path,  sizeof c->rom_path,  "%s", v);
         else if (!strcmp(k, "rom_dir"))          snprintf(c->rom_dir,   sizeof c->rom_dir,   "%s", v);
         else if (!strcmp(k, "full_refresh_permille")) c->full_refresh_permille = atoi(v);
-        /* Both CLAMPED to [0, KOBOY_SETTLE_MS_MAX], and the clamp is live in
-           both directions. Negative would make pacer_settle_us' uint32_t
-           arguments enormous, which is a freeze rather than a fast setting --
-           the one failure mode a pacing key must not have. The ceiling is the
-           same argument as present_divisor's: a hand-edited 100000 would look
-           exactly like a hang, and no panel this project has measured is
-           within an order of magnitude of a second per update. */
+        /* LIVE CLAMP, both directions, to [0, KOBOY_SETTLE_MS_MAX]. Negative
+           makes pacer_settle_us' uint32_t arguments enormous -- a freeze, the
+           one failure mode a pacing key must not have. The ceiling: a
+           hand-edited 100000 looks exactly like a hang, and no measured panel
+           is within an order of magnitude of a second per update. */
         else if (!strcmp(k, "settle_base_ms")) c->settle_base_ms = clamp_settle_ms(atoi(v));
         else if (!strcmp(k, "settle_full_ms")) c->settle_full_ms = clamp_settle_ms(atoi(v));
         else if (!strcmp(k, "refresh_fixed_tiles")) {
-            /* Clamped to >= 0, not merely accepted. video_split_dirty's cost
-               sum adds fixed_tiles once per candidate rect (src/video.c), so
-               a negative value makes the split branch cheaper the MORE rects
-               it emits -- the opposite of a fixed cost, and unbounded as the
-               candidate count approaches KOBOY_MAX_RECTS. cleanup_interval and
-               full_refresh_permille guard <= 0 above for the same reason (a
-               bad config value must not invert the behaviour it controls);
-               this one clamps instead of treating <= 0 as "off" because 0 is
-               itself a real, meaningful value here (no fixed cost at all),
-               not a sentinel. */
+            /* LIVE CLAMP to >= 0. video_split_dirty adds fixed_tiles once per
+               candidate rect, so a negative value makes the split branch
+               cheaper the MORE rects it emits -- unbounded as the count
+               approaches KOBOY_MAX_RECTS. Clamped rather than treated as "off"
+               like cleanup_interval, because 0 is a real value here (no fixed
+               cost), not a sentinel. */
             int t = atoi(v);
             c->refresh_fixed_tiles = t < 0 ? 0 : t;
         }
         else if (!strcmp(k, "waveform_fast")) {
-            /* Unparseable keeps AUTO rather than the previous value, which is
-               what the old ternary did too: this key selects a PANEL
-               behaviour, and the one behaviour that is safe on a device
-               nobody has measured is "let the driver decide". */
+            /* Unparseable keeps AUTO rather than the previous value: this
+               selects a PANEL behaviour, and "let the driver decide" is the
+               one safe answer on an unmeasured device. */
             koboy_wfm_policy wp = KOBOY_WFM_AUTO;
             config_wfm_policy_parse(v, &wp);
             c->wfm_fast_policy = wp;
         }
-        /* An ini `core=` is an explicit choice and outranks the ROM's
-           extension -- see core_explicit in config.h. WITH ONE EXCEPTION,
-           and it is not a special case so much as a dated one: every koboy.ini
-           written before this feature existed carries a literal
-           `core = gambatte_libretro.so`, because that is what v1 shipped
-           uncommented when gambatte was the only core there was. That line
-           records PACKAGING, not preference -- nobody chose it -- so honouring
-           it as a pin would silently disable choice-by-extension for every
-           existing install, and present as ".mgw files are listed but refuse
-           to load". A redeploy overwrites koboy.ini and would fix it, but
+        /* An ini `core=` outranks the ROM's extension (core_explicit in
+           config.h) WITH ONE DATED EXCEPTION: every koboy.ini written before
+           choice-by-extension carries a literal `core = gambatte_libretro.so`,
+           which v1 shipped uncommented. That records PACKAGING, not preference,
+           so honouring it as a pin would silently disable choice-by-extension
+           on every existing install and present as ".mgw files are listed but
+           refuse to load". A redeploy would fix it, but
            docs/device-workflow.md tells the user to carry values forward from
-           their backup, which is exactly how the dead line comes back.
-           So: the historical default value alone does not mark intent.
-           `--core` on the command line is exempt from the exemption -- it is
-           typed deliberately, now, and can mean nothing else. */
+           their backup -- which is how the dead line comes back.
+           `--core` is exempt from the exemption: typed deliberately, now. */
         else if (!strcmp(k, "core")) {
             snprintf(c->core_path, sizeof c->core_path, "%s", v);
             c->core_explicit = strcmp(v, KOBOY_CORE_LEGACY_DEFAULT) != 0;
@@ -1313,80 +1072,56 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
                                 uint32_t par)
 {
     memset(p, 0, sizeof *p);
-    /* LIVE GUARD: a core (or a hand-built test profile) reporting a
-       non-positive geometry has nothing this function can scale -- dividing
-       by max_w/max_h below would be a division by zero or a negative divisor,
-       not merely a "too big to fit" case like max_fit < 1 already handles.
-       Refusing here keeps that division safe without every caller having to
-       re-derive the same check. */
+    /* LIVE GUARD: a non-positive geometry would divide by zero or by a
+       negative below, not merely fail to fit like max_fit < 1 does. */
     if (max_w < 1 || max_h < 1) return false;
-    /* LIVE GUARD, and it is new with the base-sized rect below: base_w/base_h
-       used to be carried through untouched and could be anything, because
-       nothing divided by them. The DMG branch now does. A caller that has not
-       got a geometry yet (main.c's placeholder profile passes the Game Boy's,
-       so it is not that one) would otherwise divide by zero. */
+    /* LIVE GUARD, new with the base-sized rect below: base_w/base_h used to be
+       carried through untouched because nothing divided by them. The DMG
+       branch now does. */
     if (base_w < 1 || base_h < 1) return false;
 
-    /* Both layouts reserve the game rect clear of whatever controls their
-       faceplate draws, and both ask the same function where those start --
-       see chrome.h. Hoisted above the split because it is the one thing the
-       two branches genuinely share. */
+    /* Both layouts reserve the game rect clear of their faceplate's controls
+       and ask the same function where those start (chrome.h). Hoisted above
+       the split as the one thing the branches share. */
     int ctrl_top = chrome_controls_top(c->layout_mode, &c->layout, panel_w, panel_h);
 
-    /* The reserved rect's WIDTH IN SOURCE PIXELS. max_w for square pixels --
-       which is what this whole function used before non-square ones existed,
-       and what it still computes bit for bit, since par == KOBOY_ASPECT_ONE
-       makes the multiply exact and the round-up a no-op. See
-       config_resolve_profile_par in config.h for why the rect and not just
-       the per-frame fit has to know.
+    /* The reserved rect's WIDTH IN SOURCE PIXELS. par == KOBOY_ASPECT_ONE
+       makes the multiply exact and the round-up a no-op, so square pixels
+       compute bit for bit what this function did before.
 
-       ROUNDED UP, not to nearest: the rect has to HOLD the widened picture,
-       and rounding down by one source pixel costs an entire integer step of
-       scale when it makes the fit's own ceiling one pixel short. Measured:
-       at nearest-rounding the NES rect came out 292 and the frame needed
-       877.7 of the 876 that gave, so the fit dropped from 3x to 2x -- the
-       exact failure this parameter exists to remove, reintroduced by a
-       rounding mode. */
+       ROUNDED UP, not to nearest: the rect must HOLD the widened picture, and
+       rounding down by one source pixel costs a whole integer step of scale.
+       MEASURED: at nearest-rounding the NES rect came out 292 and the frame
+       needed 877.7 of the 876 that gave, dropping the fit 3x -> 2x. */
     if (par == 0) par = KOBOY_ASPECT_ONE;
 
-    /* WHICH GEOMETRY THE RECT IS SIZED FROM, and the two layouts answer
-       differently on purpose.
+    /* WHICH GEOMETRY THE RECT IS SIZED FROM -- the layouts differ on purpose.
 
-       LCD ASKS THE SYSTEM -- `lcd_rect_from_max`, set from the ROM's
-       extension by config_lcd_rect_from_max_for_rom, which explains the split
-       in full. Game & Watch keeps MAX: its fit is fractional, so a frame
-       smaller than max costs nothing but margin, and a .mgw title changes
-       base several times a second (654x396 <-> 305x191 on Donkey Kong), so
-       sizing that rect from base would resize the artwork, redraw the strip
-       and repaint the panel at that rate. Nothing about the Game & Watch
-       presentation changes here. The two console systems that joined this
-       layout (SNES, Mega Drive) take BASE, exactly as they did on the DMG
-       side: their base moves at scene boundaries rather than at video rate,
-       snes9x2005's square 512x512 max would put a permanent dead band under
-       a 4:3 picture, and -- the part that matters most -- the per-system
-       scale ceiling below has nothing to bite on against a max that big.
+       LCD ASKS THE SYSTEM (`lcd_rect_from_max`, set from the extension; that
+       function explains the split). Game & Watch keeps MAX: its fit is
+       fractional so a smaller frame costs only margin, and a .mgw title
+       changes base several times a second (654x396 <-> 305x191 on Donkey
+       Kong). SNES and Mega Drive take BASE, as on the DMG side.
 
-       DMG takes BASE -- what the core is drawing NOW -- and that is the
-       change. Max was chosen when the only two cores had base == max, and it
-       is wrong for a core whose max is a mode it never enters: snes9x2005
-       declares 512x512 for an interlaced hi-res mode almost nothing uses and
-       then draws 256x224 forever, and a 512-tall reservation cannot exceed
-       scale 1 under chrome_controls_top. MEASURED on the verified 1264x1680
-       panel: 597x448 presented, against the Game Boy's 800x720 -- 46% of the
-       area, on a system with 1.8x the Game Boy's pixels. From base it is
-       1196x896.
+       DMG TAKES BASE -- what the core draws NOW. Max was chosen when both
+       cores had base == max and is wrong for a core whose max is a mode it
+       never enters: snes9x2005 declares 512x512 for an interlaced hi-res mode
+       almost nothing uses and then draws 256x224 forever, and a 512-tall
+       reservation cannot exceed scale 1 under chrome_controls_top. MEASURED on
+       the verified 1264x1680 panel: 597x448 presented against the Game Boy's
+       800x720 -- 46% of the area on a system with 1.8x its pixels. From base
+       it is 1196x896.
 
-       What made max safe was that a frame anywhere in [1, max] could not
-       spill out of the rect. That defence has MOVED rather than gone:
-       video_fit_rect now falls back to the fractional fit for any frame the
-       integer one cannot shrink to size (its 1x floor could not), so a frame
-       larger than base is presented SMALLER inside the rect instead of
-       overflowing it. Check that before believing this comment -- it is the
-       whole safety argument, and it is asserted by sweep in
-       tests/test_video_pipeline.c.
+       Max's safety property was that any frame in [1, max] fitted the rect.
+       That defence MOVED rather than went: video_fit_rect falls back to the
+       fractional fit for any frame the integer one cannot shrink (its 1x floor
+       could not), so an oversized frame is presented SMALLER inside the rect
+       instead of overflowing. That is the whole safety argument and it is
+       asserted by sweep in tests/test_video_pipeline.c -- check it before
+       believing this comment.
 
-       The BUFFER is still allocated from max (video_create). That is memory
-       safety and it did not move. */
+       The BUFFER is still allocated from max (video_create): memory safety,
+       unchanged. */
     int rect_w = max_w, rect_h = max_h;
     if (c->layout_mode != KOBOY_LAYOUT_LCD || !c->lcd_rect_from_max) {
         rect_w = base_w; rect_h = base_h;
@@ -1397,63 +1132,48 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     }
 
     if (c->layout_mode == KOBOY_LAYOUT_LCD) {
-        /* The LCD layout, in three lines, because it has no scale search to
-           do: the rect is simply the largest aspect-preserving fit of the
-           core's MAX geometry into the full panel width and everything above
-           the bottom strip. Fractional, so a 654x396 Mickey Mouse unit fills
-           1264 columns instead of the 654 an integer scale of 1 would leave
-           it at -- the "too small" the device reported.
+        /* No scale search here: the rect is the largest aspect-preserving fit
+           into the full panel width and everything above the bottom strip.
+           Fractional, so a 654x396 Mickey Mouse unit fills 1264 columns rather
+           than the 654 an integer 1x would leave -- the "too small" the device
+           reported.
 
-           No KOBOY_CHROME_MARGIN on the sides, deliberately, unlike the DMG
-           branch below: the whole point of dropping the drawn controls is to
-           give the artwork the panel, and a Game & Watch unit's own artwork
-           already has a moulded border drawn into it. The vertical margin is
-           whatever centring leaves over. */
+           No KOBOY_CHROME_MARGIN on the sides, unlike the DMG branch: dropping
+           the drawn controls is meant to give the artwork the panel, and a
+           Game & Watch unit's artwork has its own moulded border. The vertical
+           margin is whatever centring leaves. */
         if (panel_w < 1 || ctrl_top < 1) return false;
         int gw = 0, gh = 0;
         video_fit_frac(rect_w, rect_h, panel_w, ctrl_top, &gw, &gh);
         if (gw < 1 || gh < 1) return false;
 
-        /* THE PER-SYSTEM SCALE CEILING, and it applies here for exactly the
-           reason it applies in the DMG branch below -- it is a measured cap
-           on how much PICTURE AREA a system's heaviest titles can afford, and
-           the pixel pipeline that spends it (video_submit) does not care
-           which faceplate is drawn around the result. Without this, moving
-           SNES to this layout would have handed it a 1264x1106 fractional fit
-           -- 2.3x the area the ceiling exists to hold it to -- and put Star
-           Fox straight back at the 67% that bought the ceiling in the first
-           place (see `ceiling` on g_core_by_ext, and TESTED.md's rect-sizing
-           table for the device numbers).
+        /* THE PER-SYSTEM SCALE CEILING, live here for the reason it is live
+           in the DMG branch: it is a measured cap on PICTURE AREA, and
+           video_submit does not care which faceplate is drawn around the
+           result. Without it, moving SNES here would hand it a 1264x1106
+           fractional fit -- 2.3x the capped area -- and put Star Fox back at
+           the 67% that bought the ceiling (see `ceiling` on g_core_by_ext and
+           TESTED.md's rect-sizing table).
 
-           The cap is ceiling x rect, which is the same picture the DMG
-           branch's scale search would have produced: on the verified panel a
-           .sfc is 897x672 in both layouts, to the pixel.
+           The cap is ceiling x rect, the same picture the DMG scale search
+           gives: a .sfc is 897x672 in both layouts, to the pixel.
 
-           ONE TEST DECIDES BOTH DIMENSIONS. video_fit_frac preserves the
-           rect's aspect and the cap is exactly proportional to it, so gw
-           exceeding cap_w and gh exceeding cap_h cannot disagree by more than
-           the fit's own rounding; taking both from the cap rather than
-           scaling gw down and re-deriving gh keeps the ratio exact.
+           ONE TEST DECIDES BOTH DIMENSIONS: video_fit_frac preserves the
+           rect's aspect and the cap is proportional to it, so taking both from
+           the cap keeps the ratio exact.
 
-           AN EXPLICIT `scale =` REPLACES IT rather than switching it off, and
-           that is the one place this branch reads c->scale at all. The DMG
-           rule is "the owner's number wins over the measured default", and
-           the honest translation of a scale into a fractional fit is a cap of
-           N times the source -- not "no cap", which would make `scale = 2`
-           produce a BIGGER picture than the ceiling did. `scale = 0` is the
-           ini's own word for auto and falls through to the ceiling, which is
-           why the > 0 test is here and not folded into scale_explicit.
+           AN EXPLICIT `scale =` REPLACES the ceiling rather than switching it
+           off -- the honest translation of a scale into a fractional fit is a
+           cap of N times the source, not "no cap", which would make
+           `scale = 2` produce a BIGGER picture than the ceiling did.
+           `scale = 0` is the ini's word for auto and falls through, which is
+           why the > 0 test is not folded into scale_explicit.
 
-           WORTH KNOWING BEFORE TOUCHING THIS: the shipped config/koboy.ini
-           says `scale = 5`, and that does NOT count as explicit -- 5 is
-           KOBOY_SCALE_LEGACY_DEFAULT and config_load treats a file naming
-           exactly it as "never edited". So on a real device the ceiling is
-           what runs, and it has to be: this branch's fit is fractional and
-           full-width, with no margin loop underneath it to catch an oversized
-           rect the way the DMG branch has. Measured on the verified panel:
-           a .sfc is 897x672 with the cap and 1264x946 -- 1.98x the area --
-           without it, which is most of the way back to the 67% the ceiling
-           was added to prevent. */
+           The shipped config/koboy.ini says `scale = 5` and that does NOT
+           count as explicit (KOBOY_SCALE_LEGACY_DEFAULT), so the ceiling is
+           what a device runs -- and it must be, because this fit is fractional
+           and full-width with no margin loop under it. Measured: a .sfc is
+           897x672 with the cap and 1264x946 (1.98x the area) without. */
         int cap = 0;
         if (c->scale_explicit && c->scale > 0) cap = c->scale;
         else if (c->scale_ceiling > 0)         cap = c->scale_ceiling;
@@ -1471,22 +1191,21 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
         p->max_h   = max_h;
         p->layout_mode = KOBOY_LAYOUT_LCD;
         /* Carried into the profile because video.c decides from it and only
-           has the profile -- see koboy_profile. */
+           has the profile. */
         p->rect_from_max = c->lcd_rect_from_max;
-        /* And how the strip arranges its face buttons, for the same reason --
-           chrome_lcd_layout takes only a profile. See koboy_profile. */
+        /* And the strip's face arrangement, for the same reason --
+           chrome_lcd_layout takes only a profile. */
         p->lcd_face = c->layout.lcd.face;
         p->game_w  = gw;
         p->game_h  = gh;
         p->game_x  = (panel_w - gw) / 2;
         p->game_y  = (ctrl_top - gh) / 2;
-        /* INFORMATIONAL ONLY in this layout, and said here because the field
-           name promises more than it can deliver: the real fit is fractional
-           and lives in game_w/game_h, which is what video.c and chrome.c both
-           read. Nothing outside the startup log line and the tests consumes
-           p->scale (checked: it has no other reader in src/). The integer
-           part is reported rather than 0 or 1 so the log still says something
-           true about how much bigger the picture got. */
+        /* INFORMATIONAL ONLY here -- the field name promises more than it can
+           deliver. The real fit is fractional and lives in game_w/game_h, which
+           video.c and chrome.c read; nothing but the startup log line and the
+           tests consumes p->scale (checked: no other reader in src/). The
+           integer part is reported rather than 0 or 1 so the log says
+           something true. */
         p->scale = gw / rect_w;
         if (p->scale < 1) p->scale = 1;
         return true;
@@ -1496,51 +1215,41 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     int fit_h = panel_h / rect_h;
     int max_fit = fit_w < fit_h ? fit_w : fit_h;
     if (max_fit < 1) return false;
-    /* The configured scale is the GAME BOY's scale unless the user said
-       otherwise, and applying it to every system was wrong in a way only a
-       second system could reveal. 5 was measured for 160x144: it is what makes
-       800x720 sit inside the DMG faceplate, and the design spec explicitly
-       rejected a full-width Game Boy in favour of it. Auto-fitting the Game
-       Boy today lands on 6 (measured by mutating this very branch off: the
-       chrome goldens and test_config's sweep both go red at 6), so the 5 is a
-       deliberate choice against the panel's maximum, not a coincidence of the
-       arithmetic.
+    /* The configured scale is the GAME BOY's unless the user said otherwise;
+       applying it to every system was wrong in a way only a second system
+       could reveal. 5 was MEASURED for 160x144 -- it is what makes 800x720 sit
+       inside the DMG faceplate, and the spec explicitly rejected a full-width
+       Game Boy in favour of it. Auto-fitting the Game Boy today lands on 6
+       (mutating this branch off turns the chrome goldens and test_config's
+       sweep red at 6), so 5 is a deliberate choice against the panel maximum.
+       A Pokemon Mini at scale 5 is 480x320 -- a postage stamp on 1264x1680.
 
        KEYED ON MAX, not on the base the rect is now sized from, and that is
-       load-bearing rather than leftover: a Game Gear's BASE is 160x144 --
-       byte for byte the Game Boy's -- while its max is 284x240, so keying
-       this on base would hand the Game Gear the Game Boy's measured 5 and
-       shrink it. Genesis Plus GX is the core that makes those two questions
-       different. None of that reasoning transfers. A Pokemon Mini is 96x64, so scale 5 is
-       480x320 -- a postage stamp on a 1264x1680 panel, and precisely the
-       complaint the Game & Watch layout was rebuilt to answer.
+       load-bearing: a Game Gear's BASE is 160x144, byte for byte the Game
+       Boy's, while its max is 284x240, so keying on base would hand the Game
+       Gear the Game Boy's measured 5 and shrink it. Genesis Plus GX is what
+       makes those two questions different.
 
-       So: an explicitly configured scale still wins, for every system. Absent
-       one, the Game Boy keeps its measured 5 and every other system fits
-       itself to the panel. Keyed on the geometry rather than on the core,
-       because 5 was measured for that geometry and nothing else. */
+       So: an explicit scale wins for every system; absent one the Game Boy
+       keeps its measured 5 and everything else fits itself to the panel. */
     bool is_game_boy = (max_w == KOBOY_GB_W && max_h == KOBOY_GB_H);
     int want = (c->scale_explicit || is_game_boy) ? c->scale : 0;
     int s = want > 0 ? want : max_fit;
     if (s > max_fit) s = max_fit;        /* configured scale does not fit */
-    /* The per-system ceiling applies to an AUTO-fitted scale only: an
-       explicit `scale =` is the owner overriding a default, and a default is
-       all this is. See `ceiling` on g_core_by_ext for the measurement. */
+    /* The per-system ceiling applies to an AUTO-fitted scale only: an explicit
+       `scale =` is the owner overriding a default. See `ceiling` above. */
     if (!c->scale_explicit && c->scale_ceiling > 0 && s > c->scale_ceiling)
         s = c->scale_ceiling;
 
-    /* Two reservations, not one. KOBOY_CHROME_MARGIN keeps the bezel inside the
-       buffer; ctrl_top keeps the game rect off the CONTROLS. Reserving only the
-       bezel margin was the bug: at scale = 0 the fitted rect cleared the panel
-       edges comfortably and still covered the drawn A button and d-pad on all
-       four supported panels (on the Libra 2 it chose scale 7 and put 15,677
-       chrome pixels inside the game rect). The touch zones stay live underneath
-       a rect drawn over them, so tapping the lower playfield pressed A or a
-       direction -- unplayable at the one setting whose whole purpose is a bigger
-       picture. Shrinking the controls was the other way out and is explicitly
-       not the fix: they are the only way to play on a device with no buttons.
-       See chrome.h for why chrome.c owns the geometry, and the hoisted
-       ctrl_top above for where it is now computed. */
+    /* TWO reservations, not one: KOBOY_CHROME_MARGIN keeps the bezel inside
+       the buffer, ctrl_top keeps the game rect off the CONTROLS. Reserving
+       only the bezel was the bug -- at scale = 0 the fitted rect cleared the
+       panel edges and still covered the drawn A button and d-pad on all four
+       panels (Libra 2 chose scale 7 and put 15,677 chrome pixels inside the
+       game rect). Touch zones stay live under a rect drawn over them, so
+       tapping the lower playfield pressed A or a direction. Shrinking the
+       controls is explicitly NOT the fix: they are the only way to play on a
+       device with no buttons. */
 
     while (s > 1) {
         int game_w = rect_w * s;
@@ -1561,14 +1270,10 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
         }
         s--;
     }
-    /* The floor stays 1 rather than becoming a failure: at scale 1 the rect is
-       rect_w x rect_h and every panel spec §3 supports (>= 1072x1448) clears
-       the control band by hundreds of pixels for the shipped Game Boy core's
-       160x144 (this is unreachable there) -- and on some hypothetical tiny
-       panel, or a core whose max geometry is itself large, running with a
-       slightly overlapped control band still beats refusing to start.
-       chrome_render clamps its own writes either way; it does not rely on
-       this loop. */
+    /* The floor stays 1 rather than becoming a failure: on a tiny panel, or a
+       core whose geometry is itself large, running with a slightly overlapped
+       control band beats refusing to start. chrome_render clamps its own
+       writes and does not rely on this loop. */
 
     p->scale   = s;
     p->panel_w = panel_w;
@@ -1577,13 +1282,11 @@ bool config_resolve_profile_par(koboy_profile *p, const koboy_config *c,
     p->base_h  = base_h;
     p->max_w   = max_w;
     p->max_h   = max_h;
-    /* game_w/game_h -- and therefore the reserved rect chrome lays out around
-       -- come from rect_w/rect_h, which for this layout is the core's BASE
-       geometry. See the long note where rect_w is computed for why that is
-       now safe and what it bought; the short version is that the rect no
-       longer has to hold every frame the core COULD send, because
-       video_fit_rect shrinks the ones it cannot hold. video_create's buffer
-       still comes from max, and that is the part that is memory safety. */
+    /* game_w/game_h come from rect_w/rect_h, which for this layout is the
+       core's BASE geometry -- the rect no longer has to hold every frame the
+       core COULD send, because video_fit_rect shrinks the ones it cannot. See
+       the note where rect_w is computed. video_create's buffer still comes
+       from max; that part is memory safety. */
     p->game_w  = rect_w * s;
     p->game_h  = rect_h * s;
     p->game_x  = (panel_w - p->game_w) / 2;
@@ -1605,18 +1308,14 @@ bool config_profile_presentation_same(const koboy_profile *a,
 
 /* Rewrites `path`, dropping every assignment whose key is in `drop` and
    appending `block` verbatim. Everything else -- comments, blanks, other keys,
-   even the file's ordering -- comes through untouched.
-
-   ONE implementation for both writers. config_save_keys (first-run
-   calibration) and config_save_gray_map (the in-game GREYSCALE entry) want
-   exactly the same read-filter-append-rename discipline over the same file,
-   and two copies of it would be two places to get the temp-file, the trailing
-   newline or the atomic rename wrong. */
+   ordering -- comes through untouched. ONE implementation for every writer:
+   two copies would be two places to get the temp file, the trailing newline or
+   the atomic rename wrong. */
 static bool rewrite_ini(const char *path, const char *const *drop, int ndrop,
                         const char *block)
 {
-    /* Create temp file in same directory as target to ensure same filesystem
-       (so rename succeeds atomically, and so writes fail fast if disk full) */
+    /* Temp file in the target's directory: same filesystem, so the rename is
+       atomic and a full disk fails fast. */
     char temp_path[512];
     snprintf(temp_path, sizeof temp_path, "%s.tmp", path);
 
@@ -1628,15 +1327,12 @@ static bool rewrite_ini(const char *path, const char *const *drop, int ndrop,
     if (in) {
         char line[1024];
         while (fgets(line, sizeof line, in)) {
-            /* Check if this is an assignment (has '=' before any '#').
-               If so, check if its key is one of `drop` and skip it if so.
-               Pure comment lines (# ...) or blank lines pass through unchanged. */
+            /* An assignment is a '=' before any '#'; comments and blanks pass
+               through. */
             char *eq = strchr(line, '=');
             char *hash = strchr(line, '#');
 
-            /* If there's an '=' and it comes before any '#', this is an assignment */
             if (eq && (!hash || eq < hash)) {
-                /* Extract key name (everything before '=', trimmed) */
                 char k[1024];
                 int  skip = 0;
                 snprintf(k, sizeof k, "%.*s", (int)(eq - line), line);
@@ -1646,7 +1342,6 @@ static bool rewrite_ini(const char *path, const char *const *drop, int ndrop,
                 if (skip) continue;
             }
 
-            /* Preserve this line (comments, blanks, other keys) */
             fputs(line, out);
             size_t llen = strlen(line);
             if (llen) last_char_written = line[llen - 1];
@@ -1654,22 +1349,19 @@ static bool rewrite_ini(const char *path, const char *const *drop, int ndrop,
         fclose(in);
     }
 
-    /* A source ini with no trailing newline would otherwise have the appended
-       block concatenated onto its final line. Harmless today only because
+    /* Without this, a source ini with no trailing newline gets the appended
+       block concatenated onto its final line -- harmless today only because
        config_load truncates at the resulting '#', but it silently rewrites an
-       unrelated line -- against the "preserve everything else" intent this
-       function exists to honour. */
+       unrelated line. */
     if (last_char_written && last_char_written != '\n') fputc('\n', out);
 
     fputs(block, out);
 
     if (fclose(out) != 0) {
-        /* fclose failed; temp file is left but out of sync, remove it */
-        remove(temp_path);
+        remove(temp_path);               /* temp is out of sync; drop it */
         return false;
     }
 
-    /* Atomically replace the target file */
     if (rename(temp_path, path) != 0) {
         remove(temp_path);
         return false;
@@ -1680,9 +1372,8 @@ static bool rewrite_ini(const char *path, const char *const *drop, int ndrop,
 
 bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 {
-    /* Filtering out the old key_a/key_b lines first is what makes calibration
-       idempotent: whether called for the first time or on recalibration, the
-       file ends with exactly one key_a line and one key_b line. */
+    /* Dropping the old key_a/key_b lines is what makes calibration idempotent:
+       the file ends with exactly one of each, first run or re-run. */
     static const char *const drop[] = { "key_a", "key_b" };
     char block[128];
     snprintf(block, sizeof block,
@@ -1693,10 +1384,9 @@ bool config_save_keys(const char *path, uint16_t key_a, uint16_t key_b)
 
 bool config_save_gray_map(const char *path, koboy_gray_map map)
 {
-    /* video_gray_map_name never returns NULL, and for an out-of-range map it
-       names the default -- so what lands in the file is always a name
-       config_load will parse back to a real mapping, never a number or an
-       empty value. */
+    /* video_gray_map_name never returns NULL and names the default for an
+       out-of-range map, so the file always gets a name config_load parses
+       back. */
     static const char *const drop[] = { "gray_map" };
     char block[128];
     snprintf(block, sizeof block,
@@ -1706,9 +1396,8 @@ bool config_save_gray_map(const char *path, koboy_gray_map map)
 }
 
 /* The values the in-game FRAMES entry cycles through, ascending. Contract and
-   the reasoning for these six and not 1..8 are on config_next_present_divisor
-   in config.h. Kept here, in the one file that both the loader and the menu's
-   policy live in, so the ini's valid range and the menu's offer cannot drift:
+   the argument for these six are on config_next_present_divisor in config.h.
+   Kept beside the loader so the ini's range and the menu's offer cannot drift;
    tests/test_config.c asserts the last entry is KOBOY_PRESENT_DIVISOR_MAX. */
 static const int PRESENT_DIVISOR_LADDER[] = { 1, 2, 3, 4, 6, 8 };
 #define PRESENT_DIVISOR_LADDER_N \
@@ -1730,9 +1419,9 @@ bool config_save_present_divisor(const char *path, int divisor)
 {
     static const char *const drop[] = { "present_divisor" };
     char block[128];
-    /* Checked before the write, not after: rewrite_ini would happily produce a
-       file config_load then ignores, and a menu whose choice silently does not
-       survive the relaunch is worse than one that reports it could not save. */
+    /* Checked before the write: rewrite_ini would happily produce a file
+       config_load then ignores, and a choice that silently does not survive
+       the relaunch is worse than one that reports it could not save. */
     if (!config_present_divisor_ok(divisor)) return false;
     snprintf(block, sizeof block,
              "# written by the in-game FRAMES menu entry\npresent_divisor = %d\n",
@@ -1742,9 +1431,9 @@ bool config_save_present_divisor(const char *path, int divisor)
 
 /* ------------------------------------------------------------------ MOTION */
 
-/* Index by koboy_wfm_policy. These strings ARE the ini's vocabulary: the
-   parser below and the writer further down both go through them, so the token
-   the menu writes is by construction the token config_load reads back. */
+/* Indexed by koboy_wfm_policy. These strings ARE the ini's vocabulary -- the
+   parser and the writer both go through them, so the token the menu writes is
+   by construction the one config_load reads back. */
 static const char *const WFM_NAMES[KOBOY_WFM_COUNT] = { "auto", "du4", "du" };
 
 const char *config_wfm_policy_name(koboy_wfm_policy p)
@@ -1761,11 +1450,9 @@ bool config_wfm_policy_parse(const char *s, koboy_wfm_policy *out)
     return false;
 }
 
-/* The rungs, in the order the menu steps through them. Contract and the
-   argument for these three and not all four combinations are on
-   config_next_motion in config.h. Kept here, beside the loader, for the same
-   reason PRESENT_DIVISOR_LADDER is: the file's vocabulary and the menu's
-   offer live in one place and cannot drift. */
+/* The rungs, in menu order. Contract and the argument for three rather than
+   all four combinations: config_next_motion in config.h. Beside the loader for
+   the reason PRESENT_DIVISOR_LADDER is. */
 typedef struct { bool dither; koboy_wfm_policy wfm; } motion_rung;
 static const motion_rung MOTION_LADDER[] = {
     { false, KOBOY_WFM_AUTO },
@@ -1784,9 +1471,9 @@ void config_next_motion(bool *dither, koboy_wfm_policy *wfm)
             return;
         }
     }
-    /* Off the ladder entirely (a hand-edited pair). Land on rung 0 rather
-       than guessing which rung the file "meant" -- rung 0 is the shipped
-       default and the one combination a whole game has been played at. */
+    /* Off the ladder (a hand-edited pair): land on rung 0 rather than guessing
+       what the file meant. Rung 0 is the shipped default and the one
+       combination a whole game has been played at. */
     *dither = MOTION_LADDER[0].dither;
     *wfm    = MOTION_LADDER[0].wfm;
 }
@@ -1795,11 +1482,9 @@ bool config_save_motion(const char *path, bool dither, koboy_wfm_policy wfm)
 {
     static const char *const drop[] = { "force_dither", "waveform_fast" };
     char block[192];
-    /* Checked before the write for the reason config_save_present_divisor
-       checks its range: rewrite_ini would happily produce a file whose
-       waveform_fast config_load then silently reads as `auto`, and a menu
-       whose choice does not survive the relaunch is worse than one that says
-       it could not save. */
+    /* Checked before the write, as config_save_present_divisor checks its
+       range: an unwritable policy would land in the file as something
+       config_load silently reads back as `auto`. */
     if ((int)wfm < 0 || (int)wfm >= KOBOY_WFM_COUNT) return false;
     snprintf(block, sizeof block,
              "# written by the in-game MOTION menu entry\n"
