@@ -2091,4 +2091,27 @@ TEST_MAIN({
            this. */
         CHECK(p.game_w > 480);
     }
+
+    /* ---- the shipped defaults for the two MOTION keys ---- */
+    {
+        koboy_config c; config_defaults(&c);
+        /* 1-BIT ON BY DEFAULT. Pinned because it is a REVERSAL: koboy shipped
+           four-level output through v1 and most of v2, and flipping it back
+           would silently reinstate the motion smearing that was the oldest
+           open defect in the project -- a change nothing else in this suite
+           would notice, since every video test constructs its own profile and
+           passes force_dither explicitly.
+
+           Asserted as `true` and not as "whatever config_defaults says",
+           which is how the neighbouring blank-value test is written: that one
+           captures the default into a variable to prove a blank value does not
+           disturb it, and by construction cannot tell true from false. This
+           one has to. */
+        CHECK_EQ_INT(c.force_dither, 1);
+        /* AUTO, not DU. On 1-bit content the driver's AUTO already selects DU
+           to within 0.5 ms at three region sizes, so forcing it buys nothing;
+           and DU4 is the FOUR-level variant whose inability to erase is the
+           mechanism the 1-bit default exists to avoid. */
+        CHECK_EQ_INT(c.wfm_fast_policy, (int)KOBOY_WFM_AUTO);
+    }
 })

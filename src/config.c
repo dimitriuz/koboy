@@ -107,6 +107,18 @@ void config_defaults(koboy_config *c)
        which is what every build before this one did. */
     c->settle_base_ms = KOBOY_SETTLE_BASE_MS_DEFAULT;
     c->settle_full_ms = KOBOY_SETTLE_FULL_MS_DEFAULT;
+    /* 1-BIT OUTPUT ON BY DEFAULT, and it is a deliberate reversal.
+       It shipped off through v1 and most of v2 because nobody had judged it
+       on a panel. When someone did, it fixed the motion smearing that had
+       been the oldest open defect in the project: the panel's fast waveforms
+       are two-level, so four-level content asks them for states they cannot
+       reach and lands between, leaving a stale ghost AND overshoot brighter
+       than the background. Confirmed by the device owner playing NES Super
+       Mario Bros., 2026-08-27 -- see TESTED.md.
+       AUTO stays the waveform: measured on 1-bit content it already selects
+       DU to within 0.5 ms at three region sizes, so forcing DU buys nothing
+       and forcing DU4 is the four-level variant this fix exists to avoid. */
+    c->force_dither = true;
     c->wfm_fast_policy = KOBOY_WFM_AUTO;
     c->gray_map = KOBOY_GRAY_DEFAULT;
     c->grab_input = true;
