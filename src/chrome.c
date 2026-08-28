@@ -299,7 +299,17 @@ int chrome_controls_top(int layout_mode, const koboy_layout *l,
    horizontal and vertical margins differ, decoupling the row/column that
    trips the coarse skip from the range that needs trimming. The horizontal-
    and vertical-overflow guard-band tests in tests/test_chrome.c exercise
-   exactly this path. Do not remove them as "unreachable". */
+   exactly this path. Do not remove them as "unreachable".
+
+   x1 IS INCLUSIVE, and that is the shape of a bug this file has already
+   shipped once. The removed speaker grille drew each slash two columns wide
+   (hline(..., glx0+s, glx0+s+1, ...)) behind a length clamp that only tested
+   the FIRST of the two, so when the unclamped last column landed exactly on
+   the right edge the clamp never fired and the second column painted one
+   past it, into the margin that edge exists to keep clear. The equality tests
+   in tests/test_chrome.c could not see it: the function returned the same
+   value either way, and only a term-by-term audit found it. Any future caller
+   passing x1 = x + n must reserve n, not n - 1. */
 static void hline(uint8_t *fb, int stride, int W, int H, int x0, int x1, int y, uint8_t v)
 {
     if (x0 > x1) { int t = x0; x0 = x1; x1 = t; }

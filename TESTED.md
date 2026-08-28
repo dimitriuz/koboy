@@ -1804,6 +1804,13 @@ gpSP's ARM RECOMPILER on a Cortex-A9.
 `libm.so.6` and `libc.so.6` and nothing else --- smaller than every other core
 koboy ships except the Game & Watch one.
 
+**Keep the recipe, because the fallback is silent by design.** A Kobo with a
+hardened kernel would show nothing in that `grep` and gpSP would quietly run as
+an interpreter, with every figure in this section wrong and no error anywhere.
+If that ever happens the answer is not to drop GBA: mGBA is only 1.21x slower
+than gpSP's INTERPRETER on the host (the shootout above), so it would then be
+the fastest thing available --- `third_party/mgba`, CMake, `-DBUILD_LIBRETRO=ON`.
+
 ### The ceiling of 4, MEASURED --- and uncapped is not merely slow, it is impossible
 
 A GBA frame is 240x160 with square pixels: the smallest frame koboy scales,
@@ -1850,6 +1857,14 @@ shipped `present_divisor = 3` the same rect gives 8,458 us and Fusion sits at
 53% of budget; the divisor is a menu entry the owner already cycles. Dropping
 the ceiling to 3 would buy the same headroom by throwing away 44% of the
 picture area for all fifteen hundred titles, to rescue one.
+
+**One caveat on the sweep itself, which is not in the numbers.** It ran on one
+title with no input, so `submit`'s per-pixel cost was measured on a static
+strategy map rather than on four scrolling layers. The dirty-rect count is
+content-dependent (846 rects at scale 4 here) and a scrolling GBA screen
+dirties every tile every frame, so the scale-4 pipeline could be worse in play
+than 24,852 us --- which would move the Metroid Fusion margin the wrong way.
+Re-measure with `koboy` driven by real input when there is a way to do that.
 
 ### Compatibility: 1692 of 1693 files load and run
 
@@ -2153,37 +2168,42 @@ looks. `docs/FOLLOWUPS.md` #97.
 
 ---
 
-## The in-game SCREENSHOT: NOT RUN ON THE DEVICE, 2026-08-27
+## The in-game SCREENSHOT, on the device, 2026-08-27
 
-`MENU -> SCREENSHOT` is host-verified end to end and has never executed on a
-Kobo. What that means precisely, so nobody reads more into it than is there:
+`MENU -> SCREENSHOT` was host-verified end to end and has now run on the Kobo.
+What that establishes, and what it does not:
 
 | | Host (x86_64, SDL dummy) | Kobo Libra 2 |
 |---|---|---|
-| The row appears and arms a capture | yes, driven by `--ui-script`'s `menu` verb | not run |
-| A PNG is written | yes, 2,125,257 bytes at 1264x1680 | not run |
-| It decodes | yes, through **python3's zlib** -- an independent decoder, and the same library any viewer uses | not run |
-| It contains the GAME and not the MENU | asserted: the game rect is >= 95% the stub's black, and the faceplate's zero pure-white pixels make a menu capture impossible to miss | not run |
-| It is the composited PANEL | asserted: >100,000 mid-grey faceplate pixels outside the game rect | not run |
-| The counter survives a relaunch | asserted across two processes | not run |
-| Time taken by a capture | a few ms, and meaningless -- see below | **unknown** |
-| The confirmation plaque | drawn and erased without crashing; its pixels are never read back | **unknown** |
+| The row appears and arms a capture | yes, driven by `--ui-script`'s `menu` verb | **yes**, same script path |
+| A PNG is written | yes, 2,125,257 bytes at 1264x1680 | **yes**, to the device's own FAT32 |
+| It decodes | yes, through **python3's zlib** -- an independent decoder, and the same library any viewer uses | **yes**, decoded at 1264x1680 after transfer |
+| It contains the GAME and not the MENU | asserted: the game rect is >= 95% the stub's black, and the faceplate's zero pure-white pixels make a menu capture impossible to miss | not asserted on-device |
+| It is the composited PANEL | asserted: >100,000 mid-grey faceplate pixels outside the game rect | not asserted on-device |
+| The counter survives a relaunch | asserted across two processes | not re-checked on-device |
+| Time taken by a capture | a few ms, and meaningless | **~6 ms, once** -- see below |
+| The confirmation plaque | drawn and erased without crashing; its pixels are never read back | **still unknown** |
 
-The two numbers worth going to the device for:
+**A capture costs one frame about 6 ms longer than it would otherwise be.**
+Three scripted captures of Tetris against a control run of the same ROM
+without one, same build, same settings:
 
-**How long a capture takes.** It composites a 2 MB panel, checksums 2.1 MB and
-writes the file from the main loop. On this host that is a few milliseconds.
-On a 1 GHz Cortex-A9 writing to FAT32 it is a different question, and the
-answer decides whether it needs to move off the loop. It happens once, when a
-human asked for it, so even a visible hitch is survivable -- but "survivable"
-should be measured rather than assumed.
+| | `core` mean | `core` max | `submit` mean |
+|---|---|---|---|
+| with a capture | 4,493-4,499 us | 14,532-16,149 us | 15,968-16,337 us |
+| control, no capture | 4,468 us | 10,426 us | 16,341 us |
 
-**Whether the plaque erases cleanly.** The confirmation is a white plaque with
-black text in the band under the game rect, refreshed with `KOBOY_REFRESH_FULL`
-and taken away 2.5 s later by re-rendering chrome and blitting back that
-rectangle, also with FULL. Nothing on the host can look at a panel. On e-ink
-the question is residue where the text was; a FULL refresh of the same rect
-should leave none, and this project's history with "should" is the reason this
-row exists.
+The whole cost lands in one frame's `core` max and nothing else moves. This
+was the number the decision needed: not 50 ms, not 2 seconds, so compositing a
+2 MB panel, checksumming 2.1 MB and writing it to FAT32 **stays on the main
+loop**. It happens once, when a human asked for it.
+
+**What is still unknown is the plaque, and it needs eyes rather than
+numbers.** The confirmation is a white plaque with black text in the band
+under the game rect, refreshed with `KOBOY_REFRESH_FULL` and taken away 2.5 s
+later by re-rendering chrome and blitting back that rectangle, also with FULL.
+Nothing on the host can look at a panel. On e-ink the question is residue where
+the text was; a FULL refresh of the same rect should leave none, and this
+project's history with "should" is the reason this row survives.
 
 `docs/FOLLOWUPS.md` #101-#104.

@@ -41,7 +41,19 @@ static inline unsigned gray_lift(unsigned v)
 
    KOBOY_GRAY_VALUE has no weights: it is max(R,G,B), which no weighted sum
    can express. Its row is present so the table stays indexable by the enum,
-   and gray_of branches on the enum rather than on a sentinel weight. */
+   and gray_of branches on the enum rather than on a sentinel weight.
+
+   WHY BALANCED IS NOT EQUAL, since (R+G+B)/3 is the obvious answer to
+   "Rec.601 crushes blue skies to black" and it is the WRONG one. Measured
+   over the same 38 gameplay frames from 19 colour titles: equal weights crush
+   MORE pixels to level 0 than Rec.601 does, 8.9% against 6.7%, because what
+   they hand back to blue they take from green -- on Kirby's Adventure they
+   turn the floor solid black, which Rec.601 did not. What actually removes
+   the crushing is the shadow lift above, not the weights. BALANCED's blue is
+   about twice Rec.601's, which is what raises a sky, and its green stays high
+   enough that Sonic's own blue body still lands a level BELOW the sky he is
+   drawn against -- the failure EQUAL gets close to. Both halves are needed;
+   neither alone is the fix. */
 static const struct { uint16_t wr, wg, wb; uint8_t lift; } GRAY_MAPS[KOBOY_GRAY_COUNT] = {
     /* LUMA     */ {  77, 150,  29, 0 },
     /* BRIGHT   */ {  77, 150,  29, 1 },
