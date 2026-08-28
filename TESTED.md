@@ -59,8 +59,9 @@ Resolved presentation, from `config_resolve_profile` at the shipped
 
 NES lands almost exactly on the Game Boy's presentation cost. Pokemon Mini
 is by far the cheapest thing koboy renders and correspondingly small on the
-panel -- `scale = 0` auto-fits it to 13x (1248x832, ~26 ms). See
-`docs/FOLLOWUPS.md` #34 and #35.
+panel -- `scale = 0` auto-fits it to 13x (1248x832, ~26 ms). Both figures
+predate the per-system scale ceilings: Pokemon Mini now caps at 8 and NES is
+still one of the nine uncapped systems, `docs/FOLLOWUPS.md` #73 and #78.
 
 ### WonderSwan and Neo Geo Pocket: NOT RUN ON THE DEVICE, 2026-08-26
 
@@ -159,7 +160,10 @@ examined, not assumed:
   relevant option is `race_dark_filter_level`, which darkens -- the wrong
   direction on reflective paper, and left at its default 0. Improving colour
   would mean a contrast or gamma stage in koboy's own pipeline before
-  `video_quantise4`; see `docs/FOLLOWUPS.md` #43.
+  `video_quantise4`. That is what shipped: `gray_map` is selectable, the
+  default is no longer Rec.601 and it carries a shadow lift -- the weights,
+  the lift and the measurements behind both are in `src/video.c`'s
+  `GRAY_MAPS` and `KOBOY_GRAY_LIFT` comments.
 
 **Saves diverge between the two systems, and that matters.** A WonderSwan
 cartridge exposes `RETRO_MEMORY_SAVE_RAM` and `sram.c` is the right path for
@@ -330,8 +334,10 @@ the correct shape is about 840x630. Playable and legible, plainly wrong. It
 is also the ONLY system here with the problem -- ColecoVision, Intellivision,
 Master System and Game Gear are all square-pixel by arithmetic. Deliberately
 not fixed in this batch: anisotropic fitting is a change to `video.c`'s hot
-path and to the one presentation that has been verified on hardware. See
-`docs/FOLLOWUPS.md` #51.
+path and to the one presentation that has been verified on hardware. **Fixed
+since** -- the core's `geometry.aspect_ratio` is carried through the fit, and
+`tests/test_video_aspect.c` pins the shapes. `docs/FOLLOWUPS.md` #65 has the
+two structural choices that correction made and never re-examined.
 
 **How four greys actually look.** Rendered through koboy's real pipeline and
 examined:
@@ -1512,11 +1518,12 @@ value cycled and it persisted.
 **Still not established on hardware:** the takeover (`scripts/koboy.sh` was
 not run and Nickel was never stopped), real TOUCH input into the menu (the
 script bypasses the touch transform and feeds panel coordinates directly),
-and save states. `MENU_SAVE`/`MENU_LOAD` are now driven end to end on the HOST
--- `tests/smoke_host.sh` writes a state to slot 1 from a script and reads it
-back in a second run, the first automated save state this project has produced
--- and the same two runs would work on the device, with Nickel up, exactly as
-the FRAMES run above did. Nobody has done it. See `docs/FOLLOWUPS.md` #76.
+and save states. `MENU_SAVE`/`MENU_LOAD` are driven end to end on the HOST --
+`tests/smoke_host.sh` writes a state to slot 1 from a script and reads it back
+in a second run, the first automated save state this project produced. **Save
+states have since been exercised by hand on the device by the owner**; what
+this particular session did not do was drive them there from a script, which
+is a smaller gap than it was when this paragraph was written.
 
 The temporary binary and ini files were removed afterwards; the device still
 runs the pre-change `koboy` and its `koboy.ini` is untouched.
@@ -2159,11 +2166,10 @@ white pattern rather than a flat grey -- 170 is about two thirds white -- and
 expect the Game Boy to LOSE from this, since its four shades already are the
 panel's four levels.
 
-Also worth doing in the same session, because it is one probe run with Nickel
-up: `koboy-probe --coexist` now times DU alongside AUTO/DU4/A2/GC16. Nobody
-has a number for what DU costs on this panel, and if it is as slow as FBInk's
-header guesses (~260 ms) that changes the verdict independently of how it
-looks. `docs/FOLLOWUPS.md` #97.
+DU's cost on this panel is no longer part of that session's job: the probe run
+happened, and DU measures 144.4 ms + 15.8 ns/px, i.e. 153.5 ms at the shipped
+rect, with AUTO identical to it on 1-bit content. See "The panel's refresh
+cost, measured at last" above.
 
 
 ---
