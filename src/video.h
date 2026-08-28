@@ -2,44 +2,32 @@
 #define KOBOY_VIDEO_H
 #include "koboy.h"
 
-/* The RGB -> grey reduction, under whichever koboy_gray_map is selected (the
-   enum, and why it exists at all, are in koboy.h).
-
-   These three MUST agree: video_gray_lut_build is just 65536 calls to
-   video_rgb565_to_gray, and video_xrgb8888_to_gray is the same arithmetic for
-   the other pixel format a core may request. A core that hands koboy
-   XRGB8888 must not render differently from one that hands it RGB565, so all
-   three go through one static gray_of() in video.c rather than three copies
-   of the weights.
-
-   An out-of-range map renders as KOBOY_GRAY_DEFAULT rather than reading past
-   the weight table -- see the guard's comment in video.c. */
+/* The RGB -> grey reduction under the selected koboy_gray_map (the enum is in
+   koboy.h). These three MUST agree -- a core handing koboy XRGB8888 must not
+   render differently from one handing it RGB565 -- so all three go through one
+   static gray_of() in video.c rather than three copies of the weights.
+   An out-of-range map renders as KOBOY_GRAY_DEFAULT. */
 uint8_t video_rgb565_to_gray(uint16_t px, koboy_gray_map m);
 uint8_t video_xrgb8888_to_gray(uint32_t px, koboy_gray_map m);
 void    video_gray_lut_build(uint8_t lut[65536], koboy_gray_map m);
 
-/* The range check, exported and named rather than left as an `if` at each use
-   site, and that is deliberate rather than tidiness.
+/* The range check, EXPORTED rather than left as an `if` at each use site, and
+   that is not tidiness. koboy_gray_map reaches video.c through an `int` field
+   set from an ini file and the in-game MENU, so an out-of-range value is one
+   bad edit from indexing the weight table off its end -- but a guard whose
+   only observable failure is an out-of-bounds read is a guard NO TEST CAN
+   PROVE (CLAUDE.md: "if a test can only fail via UB, it is not a test").
+   Exposing the clamp lets tests/test_video_gray.c assert the CLAMPED VALUE, so
+   deleting the guard fails a check.
 
-   koboy_gray_map reaches video.c through an `int` field in koboy_config --
-   set from an ini file and from the in-game MENU -- so an out-of-range value
-   is one bad edit away, and unguarded it would index the weight table off its
-   end. But a guard whose only observable failure is reading past an array is
-   a guard NO TEST CAN PROVE: what such a read returns is undefined, and on
-   this host it may well land on a plausible value inside the next object and
-   look like the guard working. That exact trap is written up in CLAUDE.md
-   ("if a test can only fail via UB, it is not a test"). Exposing the clamp
-   lets tests/test_video_gray.c assert the CLAMPED VALUE directly, so deleting
-   the guard fails a check instead of merely becoming undefined.
-
-   LIVE: video.c calls it on every gray_of and every video_gray_map_name. */
+   LIVE: called on every gray_of and every video_gray_map_name. */
 koboy_gray_map video_gray_map_clamp(int m);
 
-/* The ini/menu spelling of a map, and the reverse. video_gray_map_name never
-   returns NULL (an out-of-range map names the default), which is what lets
-   main.c build a menu label without a null check. video_gray_map_parse
-   returns false and touches nothing for a name it does not know, so a typo in
-   koboy.ini keeps the previous value instead of silently becoming map 0. */
+/* The ini/menu spelling of a map, and the reverse. _name never returns NULL
+   (an out-of-range map names the default), so main.c builds a menu label
+   without a null check. _parse returns false and touches nothing for an
+   unknown name, so a typo in koboy.ini keeps the previous value instead of
+   silently becoming map 0. */
 const char *video_gray_map_name(koboy_gray_map m);
 bool        video_gray_map_parse(const char *s, koboy_gray_map *out);
 void video_scale_gray(uint8_t *dst, int dst_stride, const uint8_t *src,
@@ -47,32 +35,25 @@ void video_scale_gray(uint8_t *dst, int dst_stride, const uint8_t *src,
 
 /* Nearest-neighbour rescale to an ARBITRARY dst_w x dst_h -- the LCD layout's
    scaler, where "the largest integer multiple that fits" wastes most of the
-   panel (a 654x396 Game & Watch unit at integer scale 1 uses about half the
-   width of a 1264x1680 panel, which is what the device reported as "too
-   small").
+   panel (a 654x396 Game & Watch unit at integer 1x uses about half a 1264-wide
+   panel: the device's "too small").
 
-   Nearest neighbour, NOT interpolation, and that is a decision rather than a
-   shortcut: the output is quantised to four grey levels immediately
-   afterwards (video_quantise4), so a blended edge pixel lands on one of the
-   same four values a nearest-neighbour pixel would -- it just picks a
-   different one, and does it by smearing the hard edges of an LCD segment
-   into its background. Blending buys nothing here and costs legibility.
+   NEAREST NEIGHBOUR, not interpolation, and that is a decision: the output is
+   quantised to four levels immediately afterwards, so a blended edge pixel
+   lands on one of the same four values -- it just picks a different one, by
+   smearing the hard edges of an LCD segment into its background.
 
-   Fixed point, NOT floats: nothing in this project's pixel path uses floating
-   point and the device's armhf toolchain is not where anyone wants to find
-   out what that costs. A 16.16 step per axis is exact enough that the whole
-   error budget over a 1560-row destination is a fraction of one source pixel.
+   FIXED POINT, not floats: nothing in this pixel path uses floating point, and
+   a 16.16 step per axis keeps the whole error budget over a 1560-row
+   destination under one source pixel.
 
-   Rows repeat under upscaling, so a destination row that maps to the same
-   source row as its predecessor is memcpy'd from it rather than resampled --
-   the same "collapse per-pixel work into block copies" trick the integer path
-   above uses, and it matters because video_submit is this pipeline's measured
-   bottleneck (CLAUDE.md).
+   Rows repeat under upscaling, so a destination row mapping to the same source
+   row as its predecessor is memcpy'd rather than resampled -- the same
+   collapse-into-block-copies trick the integer path uses, and it matters
+   because video_submit is this pipeline's measured bottleneck.
 
-   Preconditions, stated because they are checked rather than assumed:
-   src_w/src_h/dst_w/dst_h all >= 1 (anything else draws nothing), and
-   dst_stride >= dst_w. src_w and src_h must be under 65536 for the 16.16
-   step to be representable -- far above any core geometry, and guarded. */
+   Preconditions, CHECKED not assumed: src/dst w and h all >= 1, dst_stride >=
+   dst_w, and src_w/src_h under 65536 so the 16.16 step is representable. */
 void video_scale_gray_frac(uint8_t *dst, int dst_stride, const uint8_t *src,
                            int src_w, int src_h, int src_stride,
                            int dst_w, int dst_h);
@@ -88,151 +69,129 @@ void video_dither_1bit(uint8_t *buf, int w, int h, int stride,
 koboy_rect video_dirty_rect(const uint8_t *prev, const uint8_t *cur,
                            int w, int h, int stride);
 
-/* Up to this many rectangles per frame. Four was enough to separate a sprite
-   corner from a status bar corner (the case this exists for) without the
-   candidate/merge bookkeeping growing unbounded; nothing about the algorithm
-   requires exactly four, but callers size their koboy_rect arrays against
-   this constant so it is fixed at compile time.
-   NOT a guarantee of disjointness -- see video_split_dirty below. */
+/* Up to this many rectangles per frame. Four separates a sprite corner from a
+   status bar corner (the case this exists for) without unbounded merge
+   bookkeeping; nothing requires exactly four, but callers size their
+   koboy_rect arrays against it. NOT a disjointness guarantee -- see below. */
 #define KOBOY_MAX_RECTS 4
 
 /* Splits the changed region into up to max_out rectangles, or returns the
    single merged bounding box when splitting would not pay.
 
-   Refresh cost on this hardware is roughly `fixed + area`, so a sprite in the
-   top-left and a status bar in the bottom-right merge into a near-full-rect
-   refresh whose interior has not changed. `fixed_tiles` expresses the fixed
-   cost in 8x8 tiles and comes from config, not from a constant: every absolute
-   timing this project has measured moved by up to a factor of 2.2 between
-   sessions, so a compiled-in threshold would be false precision.
+   Refresh cost here is roughly `fixed + area`, so a sprite in one corner and a
+   status bar in the other merge into a near-full-rect refresh whose interior
+   has not changed. `fixed_tiles` is that fixed cost in 8x8 tiles and comes
+   from config, not a constant: every absolute timing this project measured
+   moved by up to 2.2x between sessions, so a compiled-in threshold would be
+   false precision.
 
-   Returns 0 when nothing changed. The union of the returned rects ALWAYS covers
-   every changed tile -- a dropped region leaves a stale pixel that looks exactly
-   like ghosting, which is the worst kind of e-ink bug because nobody reports it
-   as a bug. tests/test_video_multirect.c asserts that union directly.
+   Returns 0 when nothing changed. THE UNION OF THE RETURNED RECTS ALWAYS
+   COVERS EVERY CHANGED TILE -- a dropped region leaves a stale pixel that
+   looks exactly like ghosting, the worst kind of e-ink bug because nobody
+   reports it as a bug. tests/test_video_multirect.c asserts the union.
 
-   The rects are NOT guaranteed disjoint. When the candidate list is capped to
-   max_out, candidates are merged pairwise by bounding-box union (src/video.c),
-   which can make one candidate a strict superset of another once it has
-   absorbed a third; video_split_dirty drops any rect fully contained in
-   another after capping, but does not otherwise deoverlap. Coverage still
-   holds either way -- a union only grows -- the cost is a rect blitted and
-   refreshed twice, not a stale pixel.
+   The rects are NOT guaranteed disjoint: capping to max_out merges candidates
+   pairwise by bounding-box union, which can make one a strict superset of
+   another once it has absorbed a third. Contained rects are dropped after
+   capping, but nothing else is deoverlapped. Coverage holds either way -- a
+   union only grows -- and the cost is a rect refreshed twice, not a stale
+   pixel.
 
-   max_out < 1 degrades to the merged box (written to out[0], returns 1) rather
-   than refusing to answer: a caller that mis-passes 0 still gets a correct,
-   if unsplit, answer as long as out itself has room for one rect -- this is
-   the live guard for that case. out == NULL has nowhere to write anything, so
-   that returns 0 -- the live guard for that case. */
+   LIVE GUARDS: max_out < 1 degrades to the merged box in out[0] (returns 1)
+   rather than refusing; out == NULL returns 0. */
 int video_split_dirty(const uint8_t *prev, const uint8_t *cur,
                       int w, int h, int stride, int fixed_tiles,
                       koboy_rect *out, int max_out);
 
-/* THE PIXEL ASPECT RATIO of the frame a core just delivered: how wide one of
-   its pixels is relative to how tall, in 16.16, given the DISPLAY aspect the
-   core asked for (core_display_aspect) and the frame's own delivered size.
-   KOBOY_ASPECT_ONE means square, and square is what every scaler path in this
-   file did unconditionally before this existed.
+/* THE PIXEL ASPECT RATIO of the frame a core just delivered -- how wide one of
+   its pixels is relative to how tall, in 16.16 -- from the DISPLAY aspect the
+   core asked for and the frame's delivered size. KOBOY_ASPECT_ONE is square,
+   which is what every scaler path here did unconditionally before this existed.
 
-   Why this is a separate step rather than a field: the display aspect is a
-   property of the CORE, but the pixel aspect depends on the size of the frame
-   in hand, and one core varies that frame to frame (the Game & Watch core
-   alternates between the whole unit and the LCD alone several times a second).
-   So the core's number is stored and this is computed per submit -- three
-   integer operations, on the pipeline's own admission the wrong place to be
-   careless, but not a per-pixel cost.
+   A separate step rather than a field because the display aspect belongs to
+   the CORE while the pixel aspect depends on the frame in hand, and one core
+   varies that frame to frame (Game & Watch alternates between the whole unit
+   and the LCD alone several times a second). Three integer operations per
+   submit, not a per-pixel cost.
 
-   THE DEADBAND IS LOAD-BEARING, not tidiness. A result within
-   KOBOY_PAR_DEADBAND of 1.0 is snapped to exactly 1.0, because a core is free
-   to report a ROUNDED aspect and one does: race (Neo Geo Pocket) reports 1.05
-   for a 160x152 frame whose exact ratio is 1.0526, which is 0.25% off square.
-   Without the snap that core -- and any other that writes 1.33 for 4/3 --
-   would leave the integer block-copy scaler for the fractional one and
-   resample a picture that did not need resampling, for a quarter of one
-   percent. 1/128 is a factor of eleven below the smallest REAL anisotropy in
-   the measured population (Mega Drive, 32:35, 8.6% off square), so the
-   deadband cannot swallow a genuine one.
+   THE DEADBAND IS LOAD-BEARING. A result within KOBOY_PAR_DEADBAND of 1.0
+   snaps to exactly 1.0, because cores report ROUNDED aspects: race (Neo Geo
+   Pocket) reports 1.05 for a 160x152 frame whose exact ratio is 1.0526, 0.25%
+   off square. Without the snap that core -- and any writing 1.33 for 4/3 --
+   leaves the integer block-copy scaler for the fractional one and resamples a
+   picture that did not need it. 1/128 is eleven times below the smallest REAL
+   anisotropy measured (Mega Drive, 32:35, 8.6% off square), so it cannot
+   swallow a genuine one.
 
-   Returns KOBOY_ASPECT_ONE for a degenerate frame or an absent aspect rather
-   than dividing by it -- the live guard for a caller that has already gone
-   wrong. */
+   LIVE GUARD: returns KOBOY_ASPECT_ONE for a degenerate frame or an absent
+   aspect rather than dividing by it. */
 #define KOBOY_PAR_DEADBAND 512u        /* 1/128 in 16.16 */
 uint32_t video_pixel_aspect(uint32_t display_aspect, int frame_w, int frame_h);
 
 /* Largest scale at which src_w x src_h fits p's reserved game rect, plus the
-   destination width the pixel aspect asks for and the offsets that centre the
-   result. At the core's max geometry with square pixels this is p->scale at
-   (0,0); below max it scales up to fill rather than leaving the frame at 1:1
-   in a corner. Exposed for tests.
+   destination width the pixel aspect asks for and the centring offsets. At the
+   core's max geometry with square pixels this is p->scale at (0,0); below max
+   it scales up to fill. Exposed for tests.
 
-   THE SCALE IS THE VERTICAL ONE AND IT STAYS AN INTEGER. Only the horizontal
-   axis carries the pixel aspect, and that asymmetry is a decision:
+   THE SCALE IS THE VERTICAL ONE AND STAYS AN INTEGER; only the horizontal axis
+   carries the pixel aspect. That asymmetry is a decision:
 
-     - It is what makes a square-pixel core bit-identical. par == 1 gives
-       dw == src_w * scale, which is the number this function returned before
-       it could return anything else, and the pipeline then takes
-       video_scale_gray's block path exactly as it always did. The Game Boy is
-       the only presentation verified on hardware and the goldens pin it.
-     - Uneven ROW replication is the artifact that would be worst here. A
-       160x210 Atari frame fitted freely into a 960x768 rect is 960x720, i.e.
-       every source row drawn 3 or 4 times in a repeating comb across a
-       four-level panel. Keeping the vertical integer and letting the width
-       carry the ratio gives 840x630 -- exactly three rows per row, and
-       exactly the shape docs/FOLLOWUPS.md #51 predicted by hand.
+     - It makes a square-pixel core bit-identical: par == 1 gives
+       dw == src_w * scale, and the pipeline takes video_scale_gray's block
+       path exactly as it always did. The Game Boy is the only presentation
+       verified on hardware, and the goldens pin it.
+     - Uneven ROW replication is the worst artifact available here. A 160x210
+       Atari frame fitted freely into a 960x768 rect is 960x720 -- every source
+       row drawn 3 or 4 times in a repeating comb across a four-level panel.
+       Integer vertical gives 840x630: exactly three rows per row, the shape
+       docs/FOLLOWUPS.md #51 predicted by hand.
 
-   The cost is that a tall frame with a wide pixel can leave more of the
-   reserved rect unused than a free fit would (PAL Atari, 160x250 at 25:12,
-   lands on 666x500 of 960x768). That is the trade taken deliberately. */
+   The cost, taken deliberately, is that a tall frame with a wide pixel leaves
+   more of the rect unused than a free fit would (PAL Atari, 160x250 at 25:12,
+   lands on 666x500 of 960x768). */
 void video_fit_par(const koboy_profile *p, int src_w, int src_h, uint32_t par,
                    int *scale_out, int *dw_out, int *ox_out, int *oy_out);
 
-/* video_fit_par with square pixels, which is what this function has always
-   been. Kept as its own name because it is what config.c's sibling and every
-   pre-existing test talk about, and because "the square case" is worth being
-   able to say. */
+/* video_fit_par with square pixels -- what this function has always been.
+   Kept as its own name because config.c's sibling and every pre-existing test
+   talk about it. */
 void video_fit(const koboy_profile *p, int src_w, int src_h,
                int *scale_out, int *ox_out, int *oy_out);
 
 /* The largest dst_w x dst_h with src's aspect ratio that fits avail_w x
-   avail_h. Exact integer arithmetic, no fixed-point ratio and no float: the
-   BINDING axis is filled to the pixel, which is the property that lets
+   avail_h. EXACT integer arithmetic, no fixed-point ratio and no float: the
+   BINDING axis is filled to the pixel, which is what lets
    config_resolve_profile and video_fit_rect agree on the same rect instead of
    drifting apart by the rounding of a shared 16.16 ratio.
 
-   BOTH axes are fitted -- min of the two ratios, not just width. Fitting
-   width alone overflows the panel for a tall title: Donkey Kong is 606x748,
-   and scaled to a 1264-wide panel that is 1560 rows, which only fits at all
-   because the bottom strip is subtracted first.
+   BOTH axes are fitted -- min of the two ratios. Fitting width alone overflows
+   the panel for a tall title: Donkey Kong is 606x748, which scaled to 1264
+   wide is 1560 rows.
 
-   Lives here, not in config.c, so there is ONE definition of the aspect fit
-   shared by the resolver that sizes the reserved rect and the per-frame fit
-   that places a frame inside it. Writes nothing and returns silently for a
-   degenerate input (any argument < 1), which the callers' own guards already
-   exclude. */
+   Here and not in config.c so there is ONE definition of the aspect fit,
+   shared by the resolver that sizes the rect and the per-frame fit that places
+   a frame inside it. Writes nothing for a degenerate input (any argument
+   < 1). */
 void video_fit_frac(int src_w, int src_h, int avail_w, int avail_h,
                     int *dw_out, int *dh_out);
 
 /* Where a src_w x src_h frame lands inside p's reserved game rect, in
-   game-rect-relative pixels, for WHATEVER layout p carries: an
-   integer-vertical fit in KOBOY_LAYOUT_DMG (video_fit_par above), a
-   fractional aspect-preserving fit in KOBOY_LAYOUT_LCD. Always centred, on
-   both axes, and never wider or taller than the rect -- the bounds guard in
-   video_pipeline_run exists because a frame that overflows corrupts memory
-   rather than merely looking wrong, and this function is what keeps it from
-   having to fire.
+   game-rect-relative pixels, for WHATEVER layout p carries: integer-vertical
+   in KOBOY_LAYOUT_DMG (video_fit_par), fractional aspect-preserving in
+   KOBOY_LAYOUT_LCD. Always centred on both axes and NEVER wider or taller than
+   the rect -- video_pipeline_run's bounds guard exists because an overflowing
+   frame corrupts memory rather than merely looking wrong, and this is what
+   keeps it from firing.
 
-   "NEVER WIDER OR TALLER" IS NOW A PROMISE FOR EVERY FRAME IN [1, max], not
-   an inherited property of the reserved rect. It used to be the latter: the
-   DMG rect was max_w x max_h times an integer, so it held any frame the
-   bounds guard accepted and the integer fit could never be asked to shrink.
-   The rect is now sized from the core's BASE geometry
-   (config_resolve_profile_par), so a bigger-than-base frame CAN be bigger
-   than the rect, and the DMG branch drops to the fractional fit when it is.
-   That is the safety argument for the whole rect-sizing change; it is swept
-   over every system's real geometry in tests/test_video_pipeline.c.
+   "NEVER WIDER OR TALLER" IS A PROMISE FOR EVERY FRAME IN [1, max], not an
+   inherited property of the rect. It used to be the latter (the DMG rect was
+   max times an integer). The rect now comes from BASE geometry, so a
+   bigger-than-base frame CAN exceed it, and the DMG branch drops to the
+   fractional fit when it does. That is the safety argument for the whole
+   rect-sizing change, swept over every system's real geometry in
+   tests/test_video_pipeline.c.
 
-   `par` is the pixel aspect from video_pixel_aspect. KOBOY_ASPECT_ONE
-   reproduces this function's pre-anisotropy answer exactly, on both
+   KOBOY_ASPECT_ONE reproduces the pre-anisotropy answer exactly, both
    branches. */
 void video_fit_rect(const koboy_profile *p, int src_w, int src_h, uint32_t par,
                     int *dw_out, int *dh_out, int *ox_out, int *oy_out);
@@ -242,65 +201,53 @@ typedef struct koboy_video koboy_video;
 koboy_video   *video_create(const koboy_profile *p, bool force_dither,
                             koboy_gray_map map);
 
-/* Swaps the greyscale mapping of a live koboy_video, rebuilding the 65536-entry
-   LUT in place. Costs one LUT build (~65k multiply/divide pairs, microseconds)
-   and nothing per frame afterwards, which is the whole point of keeping this a
-   LUT: video_submit is this pipeline's measured bottleneck and must not gain a
-   branch per pixel.
-
-   Does NOT invalidate: the caller must follow this with video_invalidate(),
-   because `prev` still holds pixels produced by the OLD mapping and the dirty
-   diff would leave every unchanged tile showing them. On e-ink that is a
-   half-old, half-new frame that persists until something else happens to touch
-   those tiles. main.c's return-from-MODE_MENU path already invalidates
-   unconditionally, which is why the menu entry does not have to. */
-/* Quarter turns COUNTER-CLOCKWISE to apply to every frame this pipeline is
-   handed, 0..3, matching RETRO_ENVIRONMENT_SET_ROTATION. Defaults to 0, which
-   is byte-for-byte the behaviour that existed before rotation did.
+/* Quarter turns COUNTER-CLOCKWISE applied to every frame, 0..3, matching
+   RETRO_ENVIRONMENT_SET_ROTATION. Defaults to 0, byte for byte the behaviour
+   that existed before rotation did.
 
    Set it right after video_create and leave it alone: the profile this
-   koboy_video was built from was itself resolved from ALREADY-TRANSPOSED
-   geometry (core_get_geometry does the swap), so the rotation and the buffer
-   dimensions have to agree, and the way they are kept agreeing is that a
-   change to either destroys and rebuilds the koboy_video. Flipping it on a
-   live pipeline without a video_invalidate would leave prev claiming that
-   pixels which all moved did not. */
+   koboy_video was built from was resolved from ALREADY-TRANSPOSED geometry
+   (core_get_geometry does the swap), so rotation and buffer dimensions must
+   agree -- kept so by destroying and rebuilding on a change to either.
+   Flipping it live without a video_invalidate leaves prev claiming that pixels
+   which all moved did not. */
 void           video_set_rotation(koboy_video *v, int rot);
 int            video_get_rotation(const koboy_video *v);
 
-/* The DISPLAY aspect ratio the core asked for, in 16.16 -- core_display_aspect
-   is where it comes from. Set it right after video_create and again whenever
-   the core re-announces, exactly like video_set_rotation -- and, like that
-   one, a change needs a video_invalidate, because every pixel moves.
+/* The DISPLAY aspect the core asked for, 16.16, from core_display_aspect. Set
+   right after video_create and again whenever the core re-announces, like
+   video_set_rotation -- and like it, a change needs a video_invalidate,
+   because every pixel moves.
 
-   THE DEFAULT IS 0, WHICH MEANS "NO ANSWER" AND YIELDS SQUARE PIXELS. Not
+   THE DEFAULT IS 0, MEANING "NO ANSWER", AND YIELDS SQUARE PIXELS. Not
    KOBOY_ASPECT_ONE: a display aspect of 1:1 is a real, non-neutral claim (a
-   160x144 frame shown in a square gives pixels 0.9 as wide as they are tall),
-   so it cannot double as the sentinel. A koboy_video nobody has told about an
-   aspect -- which is every one built by a test that predates this -- scales
-   exactly as it did before non-square pixels existed. */
+   160x144 frame in a square gives pixels 0.9 as wide as tall), so it cannot
+   double as the sentinel. */
 void           video_set_aspect(koboy_video *v, uint32_t display_aspect);
 uint32_t       video_get_aspect(const koboy_video *v);
 
+/* Swaps the greyscale mapping of a LIVE koboy_video, rebuilding the
+   65536-entry LUT in place -- microseconds once, nothing per frame, which is
+   the point of a LUT: video_submit is the measured bottleneck and must not
+   gain a branch per pixel.
+
+   Does NOT invalidate; the caller must. `prev` still holds pixels from the OLD
+   mapping, and the dirty diff would leave every unchanged tile showing them --
+   on e-ink a half-old frame that persists until something else touches those
+   tiles. main.c's return-from-MODE_MENU path invalidates unconditionally. */
 void           video_set_gray_map(koboy_video *v, koboy_gray_map map);
 koboy_gray_map video_get_gray_map(const koboy_video *v);
 
 /* Whether the pipeline ends in video_dither_1bit (two output values) instead
-   of video_quantise4 (four). Settable on a LIVE pipeline for the same reason
-   video_set_gray_map is: the in-game MOTION entry has to be judged while
-   looking at the game in motion, and the only honest comparison is one made
-   without relaunching.
+   of video_quantise4 (four). Settable LIVE for the reason video_set_gray_map
+   is: the in-game MOTION entry has to be judged while looking at motion.
 
-   A change needs a video_invalidate -- every pixel's output value can move,
-   and the dirty diff would otherwise leave untouched tiles carrying the old
-   rendering, which on e-ink persists until something else happens to write
-   them. main.c's return-from-menu path already invalidates unconditionally.
+   A change needs a video_invalidate -- every pixel's output value can move.
+   main.c's return-from-menu path invalidates unconditionally.
 
-   The getter exists so the log can report what the LIVE pipeline is doing
-   rather than what config.c parsed -- the same end-to-end trick as
-   video_get_gray_map, and the only handle a host test has on this at all,
-   since the panel is the only thing that can see the difference the setting
-   is for. */
+   The getter lets the log report what the LIVE pipeline is doing rather than
+   what config.c parsed, and is the only handle a host test has on this at all,
+   since only the panel can see the difference the setting is for. */
 void           video_set_dither(koboy_video *v, bool on);
 bool           video_get_dither(const koboy_video *v);
 void           video_destroy(koboy_video *v);
@@ -308,43 +255,34 @@ koboy_rect     video_submit(koboy_video *v, const void *src, int src_w, int src_
                             size_t src_pitch, koboy_pixfmt fmt);
 
 /* As video_submit, but fills `out` with up to max_out rects (video_split_dirty
-   above decides how many) and returns the count. video_submit remains a
-   single-rect wrapper -- max_out 1 -- so existing callers and Task 6's
-   tests/test_video_dirty.c keep working unchanged.
+   decides how many) and returns the count. video_submit is the single-rect
+   wrapper -- max_out 1.
 
-   fixed_tiles is threaded through as a parameter rather than stored on
-   koboy_video at video_create time: video_create's signature is shared with
-   tests/test_video_dirty.c and tests/test_video_pipeline.c, which the task
-   brief requires stay untouched, so the config value that only main.c knows
-   about travels through the call instead of through the struct. video_submit
-   passes 0: with max_out 1, video_split_dirty takes its max_out<1-equivalent
-   merged-box path before fixed_tiles is ever read, so the value is dead on
-   that path by construction, not by accident. */
+   fixed_tiles is a PARAMETER rather than a koboy_video field so video_create's
+   signature stays shared with the existing tests. video_submit passes 0: at
+   max_out 1 video_split_dirty takes its merged-box path before fixed_tiles is
+   read, so the value is dead there by construction, not by accident. */
 int video_submit_rects(koboy_video *v, const void *src, int src_w, int src_h,
                        size_t src_pitch, koboy_pixfmt fmt, int fixed_tiles,
                        koboy_rect *out, int max_out);
 
-/* Forces the next video_submit to report the entire game rect dirty.
-   Called on the way back from any UI mode: those modes paint over the game
-   rect, so `prev` stops describing what is on the panel. Without this the
-   first frame back diffs against a screen that is no longer there and leaves
-   the overpainted region stale -- which looks exactly like ghosting and is
-   therefore the kind of bug nobody reports as a bug. */
+/* Forces the next video_submit to report the entire game rect dirty. Called on
+   the way back from any UI mode, which paints over the game rect so `prev`
+   stops describing the panel. Without it the first frame back diffs against a
+   screen that is no longer there and leaves the overpainted region stale --
+   which looks exactly like ghosting. */
 void video_invalidate(koboy_video *v);
 
-/* The rect the LAST submitted frame actually occupies inside the reserved
-   game rect, game-rect-relative -- i.e. video_fit_rect's answer for that
-   frame. Zero-sized until a frame has been submitted.
+/* The rect the LAST submitted frame occupies inside the reserved game rect --
+   video_fit_rect's answer for that frame. Zero-sized until a frame arrives.
 
-   It exists for the LCD layout's pointer input: a touch has to be normalised
-   against the pixels the artwork is ACTUALLY drawn on, and in that layout
-   those are not the whole reserved rect. The reserved rect is sized from the
-   core's MAX geometry, and a Game & Watch title alternates between the whole
-   unit (max) and the LCD alone (smaller), several times a second -- and the
-   core normalises the pointer it receives against whatever it is currently
-   showing (third_party/gw/gwlua/functions.c reads state->zoom for exactly
-   this). Normalising against the reserved rect instead would leave every
-   touch offset by the centring margin whenever the frame is not at max. */
+   For the LCD layout's POINTER input: a touch must be normalised against the
+   pixels the artwork is actually on, which there are not the whole reserved
+   rect. That rect comes from MAX geometry, and a Game & Watch title alternates
+   between the whole unit and the LCD alone several times a second, normalising
+   the pointer it receives against whatever it is showing
+   (gw/gwlua/functions.c reads state->zoom). Normalising against the reserved
+   rect would offset every touch by the centring margin. */
 void video_frame_rect(const koboy_video *v, koboy_rect *out);
 
 const uint8_t *video_buffer(const koboy_video *v);
