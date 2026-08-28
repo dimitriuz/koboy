@@ -344,7 +344,7 @@ core-fbneo: $(CORE_FBNEO_SO)
 # no KoboRoot.tgz, nothing under /usr, nothing the firmware updater will notice.
 # Everything it writes lives in .adds/koboy/, so uninstalling is `rm -rf` of one
 # directory and a bad build cannot brick anything.
-VERSION := 0.5.1
+VERSION := 0.5.2
 
 dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $(CORE_NGP_SO) \
       $(CORE_A26_SO) $(CORE_COL_SO) $(CORE_INT_SO) $(CORE_SMS_SO) \
@@ -404,12 +404,23 @@ dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $
 	# until it is answered. tests/test_dist.sh asserts three of its facts by
 	# name.
 	cp packaging/README-fbneo.txt build/pkg/.adds/koboy/README-fbneo.txt
+	# The ONE entry in this archive that is not hidden. Every payload path
+	# starts with `.adds`, and a leading dot hides the whole package from
+	# Linux file managers, Finder and Explorer alike -- so the archive opens
+	# looking EMPTY, which reads as a broken download. `.adds` is not
+	# negotiable (it is where Kobo add-ons live and where the launcher looks),
+	# so the fix is a visible file that explains the hidden one. It is inert:
+	# nothing reads it, and it says so.
+	#
+	# Deliberately .md and not .txt: Nickel indexes TXT as a book, so a
+	# README.txt at the drive root would turn up in the owner's library.
+	cp packaging/KOBOY-INSTALL.md build/pkg/KOBOY-INSTALL.md
 	mkdir -p dist && rm -f dist/koboy-$(VERSION).zip
 	# -D omits directory entries: unzip creates the directories it needs from
 	# the file paths, and a bare ".adds/" entry in the listing is exactly the
 	# kind of thing that makes "writes nothing outside .adds/koboy/" hard to
 	# check mechanically.
-	cd build/pkg && zip -qrD ../../dist/koboy-$(VERSION).zip .adds
+	cd build/pkg && zip -qrD ../../dist/koboy-$(VERSION).zip .adds KOBOY-INSTALL.md
 	@echo "dist: dist/koboy-$(VERSION).zip"
 .PHONY: dist
 
@@ -422,7 +433,9 @@ probe-dist: build/koboy-probe-arm | build
 	cp build/koboy-probe-arm    build/probe-pkg/.adds/koboy/koboy-probe
 	cp docs/probe-readme.md     build/probe-pkg/.adds/koboy/README.md
 	chmod +x build/probe-pkg/.adds/koboy/koboy-probe
+	# Same hidden-root problem as `dist`; see the note there.
+	cp packaging/KOBOY-INSTALL.md build/probe-pkg/KOBOY-INSTALL.md
 	mkdir -p dist && rm -f dist/koboy-probe-$(VERSION).zip
-	cd build/probe-pkg && zip -qrD ../../dist/koboy-probe-$(VERSION).zip .adds
+	cd build/probe-pkg && zip -qrD ../../dist/koboy-probe-$(VERSION).zip .adds KOBOY-INSTALL.md
 	@echo "probe-dist: dist/koboy-probe-$(VERSION).zip"
 .PHONY: probe-dist

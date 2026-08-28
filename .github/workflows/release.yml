@@ -390,7 +390,12 @@ jobs:
             "dist/koboy-probe-$v.zip#koboy-probe $v (device profiler only)" <<'NOTES'
           Unzip the koboy archive below at the root of the drive your Kobo
           shows up as over USB, put ROMs in `.adds/koboy/roms/`, and launch
-          from NickelMenu. README.md has the rest, including the screen
+          from NickelMenu.
+
+          **The archive looks almost empty until you extract it.** Everything
+          lives in `.adds`, and the leading dot hides it from Linux file
+          managers, Finder and Explorer -- that is where Kobo add-ons go, and
+          your extractor creates it for you. README.md has the rest, including the screen
           settings -- try `MENU -> MOTION` first, it is the one that stops
           moving sprites smearing.
 

@@ -63,7 +63,14 @@ distributed here because neither is ours to distribute. Put them in
 0. **You need NickelMenu or KFMon. koboy will not start without one.**
 1. Plug the Kobo into a computer with USB. It appears as a drive.
 2. **Unzip `koboy-<version>.zip` at the top level of that drive.** It creates
-   one folder, `.adds/koboy/`, and writes nothing anywhere else.
+   one folder, `.adds/koboy/`, plus a note at the root you can delete once
+   you are done.
+
+   The archive will look almost empty before you extract it: everything is
+   inside `.adds`, and the leading dot hides that folder from Linux file
+   managers, Finder and Explorer alike. That is the right shape — `.adds` is
+   where every Kobo add-on lives — and your extractor creates it for you, so
+   you never have to open it by hand.
 3. Copy your games into `.adds/koboy/roms/`. Subfolders work — the browser
    walks them one level at a time, which is what makes a thousand-file
    collection usable.

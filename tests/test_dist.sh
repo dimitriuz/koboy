@@ -64,12 +64,46 @@ fi
 
 if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     make dist
-    Z=$(ls dist/koboy-*.zip | head -1)
-    [ -n "$Z" ] || { echo "FAIL: no zip produced"; exit 1; }
+    # THE ZIP `make dist` JUST BUILT, by exact name -- not `ls | head -1`,
+    # which is what this was and which is a test checking the wrong artifact.
+    # dist/ is git-ignored and accumulates: on a working tree that had built
+    # 0.1.0, 0.5.0 and 0.5.1, the glob's first entry was the 0.1.0 archive
+    # from a previous day, so every packaging assertion below -- the core
+    # list, the BIOS ban, the size cap -- was passing against a stale package
+    # while the one about to ship went unexamined. It only stayed invisible
+    # because that old zip was ALSO a complete build; the day it is not, this
+    # reports a package nobody has.
+    #
+    # Same awk as .github/workflows/release.yml's tag check, deliberately:
+    # one way to read VERSION out of the Makefile.
+    V=$(awk -F':=' '/^VERSION[[:space:]]*:=/ { gsub(/[[:space:]]/,"",$2); print $2 }' Makefile)
+    [ -n "$V" ] || { echo "FAIL: no VERSION in the Makefile"; exit 1; }
+    Z="dist/koboy-$V.zip"
+    [ -f "$Z" ] || { echo "FAIL: make dist produced no $Z"; exit 1; }
 
-    # Nothing may install outside .adds/koboy: no root, no brick risk.
-    if unzip -Z1 "$Z" | grep -v '^\.adds/koboy/'; then
+    # Nothing may install outside .adds/koboy: no root, no brick risk. The
+    # ONE exception is KOBOY-INSTALL.md, an inert note at the drive root --
+    # named here rather than allowed by a wildcard, so a SECOND stray file
+    # still fails this. It is why the two greps below are separate: the first
+    # is the safety property, the second is the reason the exception exists.
+    if unzip -Z1 "$Z" | grep -v '^\.adds/koboy/' | grep -v '^KOBOY-INSTALL\.md$'; then
         echo "FAIL: zip writes outside .adds/koboy/"; exit 1
+    fi
+    # ...and the archive must not LOOK empty. Every payload path begins with
+    # `.adds`, which Linux file managers, Finder and Explorer all hide, so
+    # without a visible top-level entry the package opens as a blank window
+    # and reads as a broken download. This asserts the entry a human sees --
+    # a property no other check here covers, since every one of them is
+    # satisfied by an archive that is entirely hidden.
+    # `grep -qv` is NOT the way to write this: on the grep here it returns 1
+    # for input that plainly contains a non-matching line, so the assertion
+    # failed on a correct archive. Substituting the empty test keeps the
+    # meaning and does not depend on how -q and -v combine.
+    if [ -z "$(unzip -Z1 "$Z" | cut -d/ -f1 | grep -v '^\.')" ]; then
+        echo "FAIL: every top-level entry is hidden; the zip looks empty"; exit 1
+    fi
+    if ! unzip -p "$Z" KOBOY-INSTALL.md | grep -q 'root'; then
+        echo "FAIL: KOBOY-INSTALL.md missing or does not say where to extract"; exit 1
     fi
     if unzip -Z1 "$Z" | grep -q 'KoboRoot'; then
         echo "FAIL: ships a KoboRoot.tgz"; exit 1

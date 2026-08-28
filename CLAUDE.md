@@ -17,8 +17,9 @@ is GONE (`core-fbneo` still rebuilds just that core). `tests/test_dist.sh`
 asserts the core IS in the package, with real bytes, under a 32 MB cap.
 Deleting `.adds/koboy/fbneo_libretro.so` is how an owner without a romset
 reclaims the space, and both packaged READMEs (`packaging/roms-README.txt`,
-`packaging/README-fbneo.txt` -- real files `make dist` COPIES) say so by
-filename. Arcade is still the ONLY system whose core and content are
+`packaging/README-fbneo.txt` -- real files `make dist` COPIES, as is
+`packaging/KOBOY-INSTALL.md`, the one entry in the zip that is NOT hidden)
+say so by filename. Arcade is still the ONLY system whose core and content are
 version-locked: the romset must match FBNeo v1.0.0.03 (ae41c16e, 2025-07-24),
 pinned in `scripts/pins.txt` and explained in `scripts/build-fbneo-core.sh`.
 
