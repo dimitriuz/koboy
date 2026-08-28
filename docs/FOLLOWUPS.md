@@ -1042,6 +1042,14 @@ is the only clean exit a player has.
 The owner has pressed both by hand on the device. That is not a regression
 test, and this entry is filed under coverage for that reason.
 
+**Half of this closed on 2026-08-28** with the screens extraction.
+`tests/test_screens.c` taps every one of the ten MENU rows -- CHOOSE ROM and
+QUIT included -- and asserts `screen_menu` returns that row's `MENU_*`. What
+is still driven by nothing is what `main()` DOES with the two answers: leaving
+the emulator loop, flushing SRAM before the core closes, and rebuilding video,
+input and chrome for the next game. That half is still inside `main()` and
+still reachable only by `tests/smoke_host.sh`.
+
 ### 5. A ROM that is deleted or unreadable has no test; a truncated one now does
 
 `src/core.c`'s load failure paths. The truncated case is covered end to end --
@@ -1082,6 +1090,13 @@ Moving the geometry into `shot.c` beside `shot_compose` would make the rect
 testable; the drawing and the erase would still not be. The cheap version is
 to assert the rect, which is where the clamps are.
 
+**Still open after the 2026-08-28 screens extraction, deliberately.**
+`shot_note_rect` sits just above the block that moved (`main.c:295`, the six
+screens started at 316) and it is a different extraction with a different
+argument, so it was left where it is rather than swept into a 350-line move.
+The mechanism it needs is now demonstrated: `src/screens.c` proves a new
+`src/*.c` joins all test binaries with no Makefile change.
+
 ### 103. One capture per `--ui-script` run, and that is the script's fault
 
 The emulator loop's `menu` marker scan steps over idle states looking for the
@@ -1108,6 +1123,30 @@ so the vertical-arm term is always the smaller of the two. The equality
 check in `tests/test_chrome.c` does not catch this, because the
 function's return value is identical whether the line is there or not --
 only a term-by-term audit finds it.
+
+### 110. `screen_browser`'s overflow-row `continue` is provably unreachable
+
+`src/screens.c:353`, the one line of that file `make coverage` reports as
+never executed after `tests/test_screens.c` (109 of 110):
+
+```c
+if (kind == ROMLIST_DIR)      n = romlist_enter(&rl, pick);
+else if (kind == ROMLIST_UP)  n = romlist_up(&rl);
+else                          continue;   /* the overflow row: not selectable */
+```
+
+`romlist_kind` returns `ROMLIST_OVERFLOW` for exactly one index -- `i >=
+rl.count` (`romlist.c:458`) -- and `screen_browser` passes `rl.hidden > 0 ?
+rl.count : -1` as `screen_list`'s `disabled_index`, so `screen_list` refuses
+to return that index. When `rl.hidden == 0` there is no overflow row at all
+and `n == rl.count`. Either way the `else` arm cannot be entered.
+
+Same class as #19, and the same verdict: **the guard is correct, its
+unreachability is a consequence of a second guard one layer up, and deleting
+it would leave the row's safety resting on one check instead of two.** Filed
+rather than removed, and filed rather than left silent, so the next person
+reading a 99.1% coverage number knows which line the missing 0.9% is and that
+it is not a hole.
 
 ## Decisions on record, so nobody re-derives them
 

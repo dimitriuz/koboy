@@ -46,7 +46,7 @@ speed and nothing a finger does. See "Known unfinished".
 ## Build and test
 
 ```sh
-make test        # host suite: 28 binaries, 6134 checks. Runs on x86_64.
+make test        # host suite: 29 binaries, 6244 checks. Runs on x86_64.
 make lint        # clang -Werror -fsyntax-only over src/ AND tests/. A SECOND
                  # front end: `make test` is gcc, and clang carries classes
                  # gcc has no equivalent for. Green on the tree; CI gates on
@@ -131,6 +131,19 @@ software the moment you do.
 -- v2 additions: the ROM browser, in-game MENU and save states -----------
 src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
                       browser and the in-game MENU (MODE_BROWSE / MODE_MENU)
+src/screens.c         the six full-panel screens that DRIVE that widget --
+                      screen_list plus the MENU, slot picker, MAIN MENU,
+                      RECENT picker and ROM browser -- and the MENU_* /
+                      MAIN_* / BROWSE_* enums main() switches on. Split out
+                      of main.c on 2026-08-28 for ONE reason: main.c is
+                      filtered out of $(SRC), so nothing linked it and its
+                      714 executable lines were the whole of the suite's
+                      coverage deficit. Nothing here may name platform_kobo_*
+                      or platform_sdl_* -- everything goes through the
+                      koboy_platform vtable, which is what lets this file
+                      link into all 29 test binaries. koboy_stop, the signal
+                      flag, is DEFINED here rather than in main.c for exactly
+                      that reason. tests/test_screens.c + tests/fakeplat.h
 src/romlist.c         lists ONE directory of rom_dir at a time -- folders
                       sort first, then files, with a ".." row below the root;
                       feeds ui.c's list widget. It does NOT recurse: the
@@ -371,7 +384,7 @@ record, not a to-do list.
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 68 findings that are still open, grouped by subsystem, with a six-item "Start here" at the top. Everything CLOSED and everything whose only content was "not run on hardware" was cut (2026-08-28); the 41 retired numbers are indexed in a table at the bottom, so a `#N` in a source comment still resolves. Numbers are never reused. The live ones: **#23** (`video_submit` is the bottleneck on all fifteen systems and nothing has optimised it), **#84 / #72** (one file segfaults the process, and twelve cores have never been swept for the same), **#92 / #95** (two unexplained SIGSEGVs in the owner's log, on a path a remote session cannot exercise), **#78** (nine systems auto-fit with no measured scale ceiling), **#25** (scroller smearing, improved by 1-bit output and not solved). |
+| `docs/FOLLOWUPS.md` | 69 findings that are still open, grouped by subsystem, with a six-item "Start here" at the top. Everything CLOSED and everything whose only content was "not run on hardware" was cut (2026-08-28); the 41 retired numbers are indexed in a table at the bottom, so a `#N` in a source comment still resolves. Numbers are never reused. The live ones: **#23** (`video_submit` is the bottleneck on all fifteen systems and nothing has optimised it), **#84 / #72** (one file segfaults the process, and twelve cores have never been swept for the same), **#92 / #95** (two unexplained SIGSEGVs in the owner's log, on a path a remote session cannot exercise), **#78** (nine systems auto-fit with no measured scale ceiling), **#25** (scroller smearing, improved by 1-bit output and not solved). |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix, and the record every "measured" claim in this file points at. Exactly ONE device is verified (a Kobo Libra 2). All fifteen systems have rendered on it; only the Game Boy has been played. Sections are dated and LATER ones supersede earlier ones — three "NOT RUN ON THE DEVICE" sections dated 2026-08-27 are overturned by "All fourteen systems run on the device" later the same day, so read the file forwards. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -594,6 +607,19 @@ the shapes to read for are: **an assertion gated on the behaviour under test**
 initialiser** with a `continue` above it, and **a comparison of two things the
 test itself wrote down**. All three were live in this tree as of 2026-08-28.
 The fix for the tooling is `docs/FOLLOWUPS.md` #105.
+
+**A fourth shape, and it is the one that got past this section's author on
+2026-08-28: a check whose FIXTURE does not put the code in the state the check
+is named for.** `tests/test_screens.c` has a case for "a tap on the faceplate's
+A disc, under a full-panel list, selects the row and does not page" — the whole
+reason `screen_list` calls `input_ui_state` instead of `input_state`. It tapped
+the A disc's ROW at the panel's horizontal centre, which is nowhere near the
+disc, so no A bit was ever synthesised and swapping the two functions changed
+nothing. The check passed, read correctly, and tested the wrong thing. It was
+caught by the mutant and by nothing else, and the fix was to tap the disc's own
+centre computed from `koboy_layout`. **Ask of every new test not only "can this
+fail" but "does the fixture actually reach the state the name claims" — and the
+mutant is what answers the second question, the same as the first.**
 
 ## Known unfinished
 
