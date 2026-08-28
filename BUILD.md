@@ -55,6 +55,20 @@ tested without hands.
 
 ## The cross toolchain, and it is fragile
 
+> **The toolchain is a 32-bit x86 binary.** Its `cc1` links against
+> `linux-gate.so.1` and resolves everything through `/usr/lib32`, so a clean
+> 64-bit machine cannot run it even though the tarball extracts fine. On
+> Debian/Ubuntu:
+>
+> ```sh
+> sudo dpkg --add-architecture i386
+> sudo apt-get update
+> sudo apt-get install libc6:i386 lib32z1 lib32stdc++6
+> ```
+>
+> Without it the first compile fails with `cc1: error while loading shared
+> libraries: libz.so.1` — which reads as a broken toolchain and is not one.
+
 ### The constraint
 
 The device runs **glibc 2.19**. Anything linking a newer versioned glibc

@@ -204,6 +204,18 @@ jobs:
         name: Unpack the toolchain
         run: |
           mkdir -p "$HOME/tc"
+          # The Linaro 4.9-2014.09 toolchain is a 32-BIT x86 binary -- its
+          # cc1 links against linux-gate.so.1 and resolves every dependency
+          # through /usr/lib32. A stock x86_64 runner has none of that, and
+          # the failure is not a missing compiler but a compiler that cannot
+          # start: "cc1: error while loading shared libraries: libz.so.1".
+          # Found by a workflow_dispatch dry run, in which every one of the
+          # fourteen core jobs failed this way while `check` and `toolchain`
+          # both passed -- the tarball downloads and extracts perfectly, and
+          # nothing before the first compile notices.
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc6:i386 lib32z1 lib32stdc++6
           tar xf toolchain.tar.xz -C "$HOME/tc"
           bin=$(find "$HOME/tc" -maxdepth 3 -type d -name bin | head -1)
           [ -x "$bin/arm-linux-gnueabihf-gcc" ] || {
@@ -255,6 +267,18 @@ jobs:
       - name: Unpack the toolchain
         run: |
           mkdir -p "$HOME/tc"
+          # The Linaro 4.9-2014.09 toolchain is a 32-BIT x86 binary -- its
+          # cc1 links against linux-gate.so.1 and resolves every dependency
+          # through /usr/lib32. A stock x86_64 runner has none of that, and
+          # the failure is not a missing compiler but a compiler that cannot
+          # start: "cc1: error while loading shared libraries: libz.so.1".
+          # Found by a workflow_dispatch dry run, in which every one of the
+          # fourteen core jobs failed this way while `check` and `toolchain`
+          # both passed -- the tarball downloads and extracts perfectly, and
+          # nothing before the first compile notices.
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libc6:i386 lib32z1 lib32stdc++6
           tar xf toolchain.tar.xz -C "$HOME/tc"
           bin=$(find "$HOME/tc" -maxdepth 3 -type d -name bin | head -1)
           [ -x "$bin/arm-linux-gnueabihf-gcc" ] || { echo "FAIL: no cross gcc"; exit 1; }
