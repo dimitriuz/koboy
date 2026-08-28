@@ -360,19 +360,18 @@ TEST_MAIN({
            settled" timer, which would ignore the user's setting entirely. */
         CHECK(presented <= 8);
 
-        /* THE VETO IS ONE FRAME DEEP, not a queue, and it costs NO PHASE.
-           Once the hold expires the very next frame presents -- the pacer does
-           not owe the panel the frames it skipped and must not try to catch
-           up, because catching up is how a scroll turns into a burst; and it
-           does not wait for a lattice point either.
+        /* THE VETO IS ONE FRAME DEEP, not a queue, and it costs NO PHASE: once
+           the hold expires the very next frame presents. The pacer does not owe
+           the panel the frames it skipped and must not catch up (catching up is
+           how a scroll turns into a burst), and it does not wait for a lattice
+           point either.
 
-           THIS IS THE ASSERTION THAT DISTINGUISHES THE GAP GATE FROM THE
-           MODULO IT REPLACED. A 100000 us hold against divisor 4 expires
-           during frame 6 (100452 us). Under `frames % divisor` the next
-           eligible frame is 8, at 133936 us -- a third of the delivered rate
-           given up to phase alone, on precisely the content that has the least
-           to spare. Under a minimum GAP frame 6 presents, because it is
-           already six frames after the last present and six is more than
+           THIS DISTINGUISHES THE GAP GATE FROM THE MODULO IT REPLACED. A
+           100000 us hold against divisor 4 expires during frame 6 (100452 us).
+           Under `frames % divisor` the next eligible frame is 8, at 133936 us
+           -- a third of the delivered rate given up to phase alone, on exactly
+           the content with least to spare. Under a minimum GAP frame 6
+           presents: six frames since the last one, and six is more than
            four. */
         koboy_pacer c;
         pacer_init(&c, 0, 4, KOBOY_FRAME_US);

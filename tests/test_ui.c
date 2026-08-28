@@ -143,18 +143,16 @@ TEST_MAIN({
 
     /* Paging with the page-turn buttons, also edge-triggered.
 
-       UNCONDITIONAL, and that matters more than it looks. Every assertion
-       below used to sit inside `if (ui_list_pages(&u) > 1)` -- gated on the
-       very function under test. Mutating ui_list_pages() to `return 1` left
-       the whole 820-check suite green, including the CHECK_EQ_INT(idx, rows)
-       below that exists to catch "loads the wrong ROM". So the geometry this
-       list is built with is asserted OUTRIGHT first: 13 items at 10 rows a
-       page is two pages, and if that ever stops being true the two lines
-       below fail loudly instead of silently skipping the rest.
+       UNCONDITIONAL, which matters more than it looks: every assertion below
+       used to sit inside `if (ui_list_pages(&u) > 1)` -- GATED ON THE VERY
+       FUNCTION UNDER TEST. Mutating ui_list_pages() to `return 1` left the
+       whole 820-check suite green, including the CHECK_EQ_INT(idx, rows) that
+       exists to catch "loads the wrong ROM". So the geometry is asserted
+       OUTRIGHT first, and if it stops being true the lines below fail loudly
+       instead of silently skipping.
 
-       24, not 10: UI_MAX_ROWS went from 10 to 24 so a 300-ROM collection
-       does not need 23+ pages of prev/next taps to reach the end -- see
-       src/ui.c. 30 items at 24 rows a page is two pages. */
+       24, not 10: UI_MAX_ROWS went to 24 so a 300-ROM collection does not need
+       23+ pages of taps. 30 items at 24 rows a page is two pages. */
     CHECK_EQ_INT(ui_list_rows(&u), 24);
     CHECK_EQ_INT(ui_list_pages(&u), 2);
     {
@@ -279,21 +277,18 @@ TEST_MAIN({
        REGRESSION, C1: the faceplate's A and B touch zones must not hijack a
        UI list.
 
-       In every UI mode the drawn faceplate is still underneath the list, and
-       input.c's recompute() hit-tests the A and B discs against the layout
-       permille unconditionally -- it has no notion of a UI mode. ui_list_feed
-       tests a rising A/B FIRST and returns early, so those synthesised bits
-       were consumed as page-turns before any row hit-test ran. Measured at the
-       shipped defaults on 1264x1680: a tap at (1049,1125), which is row 7 of
-       the browser, produced buttons=0x0100 and UI_NONE; a tap at (834,1276),
-       row 8, produced 0x0001 and UI_PAGE_NEXT. Rows 6, 7 and 8 were unusable
-       over ~17% of the panel width each, on every panel, because the layout is
-       permille.
+       In every UI mode the faceplate is still underneath, and recompute()
+       hit-tests A and B against the layout permille unconditionally -- it has
+       no notion of a UI mode. ui_list_feed tests a rising A/B FIRST and returns
+       early, so those synthesised bits were consumed as page-turns before any
+       row hit-test. MEASURED at the shipped defaults on 1264x1680: a tap at
+       (1049,1125), row 7 of the browser, produced buttons=0x0100 and UI_NONE;
+       (834,1276), row 8, produced 0x0001 and UI_PAGE_NEXT. Rows 6, 7 and 8
+       were unusable over ~17% of the panel width each, on every panel.
 
-       Driven through input_feed on purpose. tests/test_ui.c never touched
-       input.c before, which is exactly why this shipped: a test that builds
-       its own koboy_input_state reproduces the blind spot instead of closing
-       it. */
+       Driven through input_feed ON PURPOSE: this file never touched input.c
+       before, which is why the bug shipped -- a test that builds its own
+       koboy_input_state reproduces the blind spot instead of closing it. */
     {
         const int W = 1264, H = 1680;
         koboy_config c; config_defaults(&c);

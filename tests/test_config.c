@@ -142,36 +142,25 @@ TEST_MAIN({
         }
     }
 
-    /* Extends the sweep above past the one resolution the Game Boy core can
-       ever report. A sweep that only ever exercised 160x144 would leave the
-       entire point of this task -- deriving scale/the game rect from the
-       CORE's geometry instead of KOBOY_GB_W/KOBOY_GB_H -- unguarded: every
-       assertion above would pass identically whether or not
-       config_resolve_profile's fitting loop actually reads base_w/max_w/h
-       or silently still used the compiled-in Game Boy constants.
+    /* Extends the sweep past the one resolution the Game Boy core can report.
+       A sweep that only exercised 160x144 leaves the whole point unguarded --
+       deriving the scale and rect from the CORE's geometry rather than
+       KOBOY_GB_W/H -- because every assertion above passes identically whether
+       or not the fitting loop reads base_w/max_w/h at all.
 
-       Three of the four cases are REAL geometry, measured by running the
-       actual gw-libretro core (build/gw_libretro_host.so) against titles
-       from a real 59-title Game & Watch collection -- Parachute, Mario
-       Bros., and Donkey Kong -- not values transcribed from the design doc.
-       The fourth is a synthetic base != max case (a plausible "folds to a
-       smaller view" shape for a multi-screen title, not a reproduction of
-       any specific title's behaviour observed here) to exercise the one
-       field pairing this sweep exists to distinguish: in KOBOY_LAYOUT_DMG
-       game_w/game_h come from base_w/base_h, NOT max_w/max_h, which base ==
-       max in the first three cases cannot tell apart.
-
-       That pairing was the other way round until the rect started being
-       sized from the frame a core actually draws (see the long note in
-       config.c where rect_w is computed). The synthetic row is what moved:
-       its scale went from a flat 1 on every panel to 2/2/3/3, because a
+       Three of the four cases are REAL geometry, measured by running
+       gw-libretro against Parachute, Mario Bros. and Donkey Kong -- not values
+       transcribed from the design doc. The fourth is a SYNTHETIC base != max
+       case, to exercise the pairing this sweep exists to distinguish: in
+       KOBOY_LAYOUT_DMG game_w/game_h come from BASE, not max, which base == max
+       in the first three cannot tell apart. That pairing was the other way
+       round until the rect started being sized from the frame a core draws;
+       the synthetic row's scale went from a flat 1 to 2/2/3/3, because a
        431x322 rect fits where a 692x759 one did not.
 
-       want_scale[] is MEASURED the same way the Game Boy's "5" above is --
-       by running config_resolve_profile itself against the shipped
-       defaults -- so a fitting-loop change that quietly picks a different
-       (even if still valid) scale still fails this test, not just an
-       out-of-range one. */
+       want_scale[] is MEASURED the way the Game Boy's 5 is, by running
+       config_resolve_profile against the shipped defaults, so a fitting-loop
+       change that picks a different but still valid scale fails this too. */
     {
         koboy_config dc; config_defaults(&dc);
         static const struct { int w, h; const char *name; } panels[] = {
@@ -415,27 +404,22 @@ TEST_MAIN({
         CHECK_EQ_INT(dp.game_x, gp.game_x);
     }
 
-    /* THE PER-SYSTEM SCALE CEILING SURVIVES THE MOVE TO THE LCD LAYOUT.
+    /* THE PER-SYSTEM SCALE CEILING SURVIVES THE MOVE TO THE LCD LAYOUT -- the
+     * whole trap in moving SNES. The ceiling of 3 exists because sizing the
+     * rect from the frame a core really draws quadrupled SNES's picture and
+     * cost measured device speed (Star Fox 93% -> 67%, Kirby 96% -> 78%). The
+     * LCD layout fits FRACTIONALLY to the full panel width, so an uncapped
+     * .sfc gets 1264x1106: 2.3x the capped area, most of the way back to what
+     * the ceiling avoids.
      *
-     * This is the whole trap in moving SNES. The ceiling of 3 was added
-     * because sizing the rect from the frame a core really draws quadrupled
-     * SNES's picture and cost its heaviest titles measured device speed --
-     * Star Fox 93% -> 67%, Kirby Super Star 96% -> 78%. The LCD layout fits
-     * FRACTIONALLY and to the full panel width, so an uncapped .sfc would get
-     * 1264x1106 on the verified panel: 2.3x the area the ceiling holds it to,
-     * which is most of the way back to the cost the ceiling was added to
-     * avoid.
-     *
-     * Asserted as a PAIR at identical geometry with only the ceiling
-     * differing, which is the only shape that measures the ceiling rather
-     * than the arithmetic: a test that asserted 897x672 alone would pass
-     * against a resolver that had simply picked a smaller fit for some other
-     * reason.
+     * Asserted as a PAIR at identical geometry with ONLY the ceiling
+     * differing, the only shape that measures the ceiling rather than the
+     * arithmetic: asserting 897x672 alone would pass against a resolver that
+     * had picked a smaller fit for some other reason.
      *
      * 299x224 is the SNES's rect on the device -- 256 source columns widened
-     * by snes9x2005's reported 4:3 display aspect (config_resolve_profile_par
-     * does the widening; it is passed pre-widened here so this stays a test
-     * of the cap). */
+     * by snes9x2005's 4:3 display aspect, passed pre-widened so this stays a
+     * test of the cap. */
     {
         koboy_config sc; config_defaults(&sc);
         sc.layout_mode = KOBOY_LAYOUT_LCD;
@@ -544,10 +528,10 @@ TEST_MAIN({
         CHECK(config_resolve_profile(&mp2, &mc, 1264, 1680, 654, 396, 654, 396));
         CHECK_EQ_INT(mp2.game_w, 1264);
 
-        /* THE WHOLE CEILING TABLE, because four systems carry one now and
-           each number is a device measurement rather than arithmetic. A
-           regression here is a silent speed or picture change on a real
-           panel, and the values are the only record of what was measured:
+        /* THE WHOLE CEILING TABLE: four systems carry one and each number is a
+           DEVICE MEASUREMENT, not arithmetic. A regression here is a silent
+           speed or picture change on a real panel, and these values are the
+           only record:
 
              SNES        3   Star Fox 67% -> 79%, Kirby 78% -> 95%
              Master Sys  3   Sonic Chaos 1172x768 83% -> 879x576 98%
@@ -555,9 +539,9 @@ TEST_MAIN({
              Mega Drive  3   Sonic 1264x966 -> 879x672
 
            The Game Gear's 5 is asserted as DIFFERENT from its neighbours', not
-           just as nonzero: it shares Genesis Plus GX with the other two, and
-           a table that gave one number to "the GPGX systems" would pass every
-           check that only asked for a cap. */
+           merely nonzero: it shares Genesis Plus GX with the other two, and a
+           table giving one number to "the GPGX systems" would pass any check
+           that only asked for a cap. */
         CHECK_EQ_INT(config_scale_ceiling_for_rom("Star Fox.sfc"), 3);
         CHECK_EQ_INT(config_scale_ceiling_for_rom("Metroid.smc"), 3);
         CHECK_EQ_INT(config_scale_ceiling_for_rom("Sonic Chaos.sms"), 3);
@@ -1247,20 +1231,17 @@ TEST_MAIN({
         CHECK(strcmp(config_core_for_rom("A.md"), config_core_for_rom("A.sms")) == 0);
         CHECK(strcmp(config_core_for_rom("A.md"), config_core_for_rom("A.gg")) == 0);
 
-        /* THE MEGA DRIVE'S OTHER TWO EXTENSIONS ARE REFUSED, and this is the
-           assertion that makes that a decision instead of a gap. The owner
-           ruled: .md only. 31 .bin and 5 .gen files in their collection do
-           not list and do not load.
+        /* THE MEGA DRIVE'S OTHER TWO EXTENSIONS ARE REFUSED, and this makes
+           that a decision instead of a gap. .md only; 31 .bin and 5 .gen files
+           in the owner's collection do not list and do not load.
 
-           `.bin` is the load-bearing half. koboy picks a core from the
-           extension and has NO other signal, and .bin was counted across the
-           author's whole collection before this was settled: 723 TI-99/4A,
-           234 Odyssey 2, 119 Atari 5200, 72 Arcadia 2001, 71 Vectrex, 68
-           Astrocade, 56 VC 4000, 38 Jaguar -- and only then 36 Mega Drive.
-           Two more of them are exec.bin and grom.bin, the Intellivision BIOS
-           this project asks the owner to install by hand. Claiming .bin
-           would route all of that to a 68000 emulator, so the exec.bin case
-           below is not a curiosity: it is the file the rule exists for. */
+           `.bin` is the load-bearing half: koboy picks a core from the
+           extension and has NO other signal, and .bin was COUNTED across the
+           author's collection -- 723 TI-99/4A, 234 Odyssey 2, 119 Atari 5200,
+           72 Arcadia 2001, 71 Vectrex, 68 Astrocade, 56 VC 4000, 38 Jaguar,
+           and only then 36 Mega Drive. Two more are exec.bin and grom.bin, the
+           Intellivision BIOS. So the exec.bin case below is not a curiosity:
+           it is the file the rule exists for. */
         CHECK(strcmp(config_core_for_rom("A.bin"),    "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("A.BIN"),    "gambatte_libretro.so") == 0);
         CHECK(strcmp(config_core_for_rom("exec.bin"), "gambatte_libretro.so") == 0);
@@ -1544,23 +1525,19 @@ TEST_MAIN({
         CHECK(strcmp(c.core_path, "gambatte_libretro.so") == 0);
         CHECK(!c.core_explicit);
 
-        /* THE UPGRADE CASE, and the reason this is not just a duplicate of
-           the "explicit" case above. Every koboy.ini written before
-           choice-by-extension existed carries a literal
+        /* THE UPGRADE CASE, not a duplicate of the "explicit" case above.
+           Every koboy.ini written before choice-by-extension carries a literal
            `core = gambatte_libretro.so`, because v1 shipped that line
-           uncommented. It records what was packaged, not what anyone chose,
-           so it must NOT pin the core -- otherwise every pre-existing install
-           lists .mgw files and then refuses to load them, with nothing in the
-           unit suite going red.
+           uncommented. It records PACKAGING, not choice, so it must NOT pin
+           the core -- otherwise every pre-existing install lists .mgw files
+           and refuses to load them, with nothing in the suite going red.
 
-           core_path is stomped with a sentinel between config_defaults and
-           config_load ON PURPOSE. config_defaults writes the legacy value
-           itself, so asserting core_path == legacy after loading a
-           `core = <legacy>` line would hold whether or not config_load read
-           the key at all -- a check that cannot fail is not a check. The
-           sentinel makes the assertion mean "the line was parsed and its
-           value honoured", which is the half that must keep working while
-           the flag half deliberately does not. */
+           core_path is STOMPED WITH A SENTINEL between config_defaults and
+           config_load on purpose: config_defaults writes the legacy value
+           itself, so asserting core_path == legacy afterwards would hold
+           whether or not config_load read the key at all. The sentinel makes
+           the assertion mean "the line was parsed and honoured", the half that
+           must keep working while the flag half deliberately does not. */
         snprintf(path, sizeof path, "%s/legacy.ini", dir);
         f = fopen(path, "w");
         CHECK(f != NULL);

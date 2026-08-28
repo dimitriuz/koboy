@@ -18,21 +18,19 @@
 
 /* The six full-panel screens, driven directly.
  *
- * NONE OF THIS WAS POSSIBLE BEFORE src/screens.c EXISTED. These functions were
- * static inside src/main.c, which the Makefile filters out of $(SRC), so the
- * only instrument that could reach them was tests/smoke_host.sh launching the
- * whole binary with --ui-script and reading its exit code and stdout. That
- * script drives the MENU by HARDCODED PANEL PIXELS with the arithmetic written
- * out in a comment (see src/screens.h's note on the MENU_* order), which is a
- * fifth hand-derivation of geometry ui.c already computes -- so it can tell you
- * a run selected SOMETHING, and it cannot tell you which row, what was drawn,
- * or with which waveform.
+ * NONE OF THIS WAS POSSIBLE BEFORE src/screens.c EXISTED: these functions were
+ * static inside main.c, which the Makefile filters out of $(SRC), so the only
+ * instrument that could reach them was tests/smoke_host.sh reading an exit code
+ * and stdout. That script drives the MENU by HARDCODED PANEL PIXELS -- a fifth
+ * hand-derivation of geometry ui.c already computes -- so it can say a run
+ * selected SOMETHING and cannot say which row, what was drawn, or with which
+ * waveform.
  *
  * EVERY TAP COORDINATE HERE IS COMPUTED FROM THE WIDGET, never typed in: a
- * probe koboy_ui_list is built with the same geometry every screen uses and its
- * own row_h/y answer "where is row k". A row height that changed would move
- * these taps with it instead of stranding them, which is the exact failure the
- * smoke script's comment warns about and cannot prevent. */
+ * probe koboy_ui_list built with the same geometry every screen uses answers
+ * "where is row k" from its own row_h/y. A changed row height moves these taps
+ * with it instead of stranding them -- the exact failure the smoke script's
+ * comment warns about and cannot prevent. */
 
 #define PW 1264      /* the verified Libra 2 panel */
 #define PH 1680

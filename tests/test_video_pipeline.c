@@ -107,20 +107,16 @@ TEST_MAIN({
         video_destroy(dv);
     }
 
-    /* THE SAME CLAIM, but through video_set_dither on a LIVE pipeline -- the
-       path the in-game MOTION row takes. video_create's force_dither argument
-       above proves the flag is honoured at construction; nothing proved it
-       could be flipped afterwards, and "the setting only takes effect next
-       launch" is precisely the failure that would make the row useless
-       (nobody compares two renderings a relaunch apart).
+    /* THE SAME CLAIM through video_set_dither on a LIVE pipeline -- the path
+       the in-game MOTION row takes. The construction argument above proves the
+       flag is honoured at video_create; nothing proved it could be flipped
+       afterwards, and "only takes effect next launch" makes the row useless.
 
        Counted BOTH WAYS, four levels -> two -> four, so a setter that latched
-       on and never off fails here. Each flip is followed by
-       video_invalidate + a resubmit of the SAME frame, which is exactly the
-       discipline main.c's return-from-menu path uses: without it the dirty
-       diff suppresses the frame entirely (nothing in the source changed) and
-       the buffer keeps the old rendering, which is the bug the invalidate
-       exists to prevent rather than a quirk of this test. */
+       on and never off fails. Each flip is followed by video_invalidate + a
+       resubmit of the SAME frame, the discipline main.c's return-from-menu
+       path uses: without it the dirty diff suppresses the frame entirely and
+       the buffer keeps the old rendering. */
     {
         koboy_video *lv = video_create(&p, false, KOBOY_GRAY_DEFAULT);
         CHECK(lv != NULL);
@@ -225,40 +221,36 @@ TEST_MAIN({
                           200 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
         CHECK(gr.w > 0);
         CHECK_EQ_INT(video_buffer(gv)[0], 0x00);                 /* new corner: black */
-        /* Far corner is now BLACK too, and this assertion is the regression
-           test for a bug a real user hit on a real device.
+        /* Far corner is now BLACK too -- the regression test for a bug a real
+           user hit on a real device.
 
            This used to assert 0xFF, on the reasoning that a smaller frame
-           "does not blank the area a bigger one used to cover, it just leaves
-           it alone" -- called a documented tradeoff. It was a defect. A Game
-           & Watch title alternates between the whole unit (654x396) and the
-           LCD alone (305x191) several times a second; under the old rule the
-           smaller view drew at 1:1 in the top-left corner of the rect the
-           bigger one had sized, with the rest left black. On the panel that
-           is a postage stamp in the corner of an empty bezel.
+           "leaves alone" the area a bigger one covered. It was a DEFECT: a
+           Game & Watch title alternates between the whole unit (654x396) and
+           the LCD alone (305x191) several times a second, and under the old
+           rule the smaller view drew at 1:1 in the corner of the rect the
+           bigger one sized -- a postage stamp in an empty bezel.
 
-           video_fit now scales the smaller frame UP to fill the rect it was
-           given: 100x75 into a 1000x750 rect is 10x, offsets zero, so every
-           pixel including this far corner is the new frame's black. The
-           first frame (200x150, the max) still fits at exactly p.scale with
-           zero offset, which is the Game Boy path and is unchanged. */
+           video_fit now scales the smaller frame UP to fill the rect: 100x75
+           into 1000x750 is 10x at zero offset, so every pixel including this
+           corner is the new frame's black. The first frame (200x150, the max)
+           still fits at exactly p.scale, the unchanged Game Boy path. */
         CHECK_EQ_INT(video_buffer(gv)[999 + (size_t)749 * video_stride(gv)], 0x00);
 
-        /* THE ASSERTION THAT ACTUALLY DISCRIMINATES, and the one above is
-           kept only as documentation of the old behaviour's shape.
+        /* THE ASSERTION THAT ACTUALLY DISCRIMINATES; the one above is kept only
+           as documentation of the old behaviour's shape.
 
-           The check above cannot fail on its own. A size change clears the
+           The check above CANNOT FAIL on its own: a size change clears the
            margin before scaling, so with the fit reverted to the old
            corner-parked p.scale the rect is memset to 0 and a solid BLACK
-           frame is drawn into its corner -- far corner reads 0x00 either way,
-           and the mutant passes. Confirmed by running exactly that mutant.
+           frame is drawn into its corner -- 0x00 either way. Confirmed by
+           running that mutant.
 
            A same-size frame in a DIFFERENT colour separates them: no margin
            clear fires (100x75 both times), so the far corner can only become
-           white if the frame was scaled up to reach it. Fitted, 100x75 goes
-           to 10x = 1000x750 and covers the whole rect. Corner-parked at
-           p.scale it is 500x375 in the top-left and this corner keeps the
-           previous frame's black. */
+           white if the frame scaled up to reach it. Fitted, 100x75 becomes
+           1000x750; corner-parked it is 500x375 and this corner keeps the
+           previous black. */
         fill_solid565(gfb, 100, 75, 200, 0xFFFF);
         gr = video_submit(gv, gfb, 100, 75,
                           200 * sizeof(uint16_t), KOBOY_PIXFMT_RGB565);
@@ -344,27 +336,22 @@ TEST_MAIN({
 
         video_destroy(gv);
 
-        /* THE SAME MARGIN, UNDER force_dither: it is the lightest level and
-           stays there.
+        /* THE SAME MARGIN UNDER force_dither: lightest level, and it stays
+           there.
 
-           HISTORY, because this check's teeth moved. It was written when the
-           ditherer thresholded against the raw Bayer matrix, where
-           `255 > 255` is false and one cell per 16x16 tile of the CLEARED
-           margin came out black -- a static speckled band around every
-           frame. That is fixed at the source now (video.c's g_thresh: pure
-           white is pure white wherever it appears), so this no longer
-           distinguishes "the margin is outside the dithered region" from
-           "the margin is inside it and dithers to white anyway". Both are
-           correct output; keeping the margin out of the pass is now a cost
-           argument, not a correctness one.
+           THIS CHECK'S TEETH MOVED. It was written when the ditherer
+           thresholded against the raw Bayer matrix, where `255 > 255` is false
+           and one cell per 16x16 tile of the cleared margin came out black --
+           a static speckled band around every frame. Fixed at the source
+           (video.c's g_thresh), so this no longer distinguishes "the margin is
+           outside the dithered region" from "inside it and dithers to white
+           anyway"; keeping the margin out of the pass is now a COST argument.
 
-           It stays because what it asserts is still worth asserting and can
-           still fail: the margin must be the lightest level and must not
-           acquire content. A size-change clear that wrote the wrong value,
-           or a fit that placed the picture at the wrong offset, shows up
-           here. Asserted over the whole top band rather than at one probe,
-           because a pattern is only visible if you look at more than one
-           pixel. */
+           It stays because what it asserts can still fail: the margin must be
+           the lightest level and must not acquire content, so a size-change
+           clear writing the wrong value or a fit at the wrong offset shows up
+           here. Over the whole top band rather than one probe, because a
+           pattern needs more than one pixel to see. */
         koboy_video *dv2 = video_create(&gp, true, KOBOY_GRAY_DEFAULT);
         CHECK(dv2 != NULL);
         fill_solid565(gfb, 90, 70, 200, 0xFFFF);
@@ -573,33 +560,28 @@ TEST_MAIN({
     }
 
     /* ---- CONTAINMENT: every frame in [1, max] fits the base-sized rect ---- */
-    /* THE SAFETY ARGUMENT FOR THE WHOLE RECT-SIZING CHANGE, swept rather than
+    /* THE SAFETY ARGUMENT FOR THE WHOLE RECT-SIZING CHANGE, SWEPT rather than
        argued.
 
-       The DMG rect used to be max_w x max_h times an integer, so "a frame the
-       core is allowed to send fits the rect it will be drawn into" was true
-       by construction and needed no test. The rect now comes from the core's
-       BASE geometry (config.c), which buys a SNES 4x its old picture area and
-       gives up that construction: a frame between base and max is bigger than
-       the rect, and video_fit_par's scale floor of 1 means the integer fit
-       cannot shrink it. video_fit_rect falls back to the fractional fit for
-       exactly those frames, and if it did not, video_pipeline_run's scaler
-       would write past the end of v->cur -- silent memory corruption, not a
-       wrong-looking picture.
+       The DMG rect used to be max times an integer, so "any frame the core may
+       send fits the rect it is drawn into" held by construction. The rect now
+       comes from BASE geometry, which buys a SNES 4x its picture area and
+       gives that up: a frame between base and max is bigger than the rect, and
+       video_fit_par's scale floor of 1 means the integer fit cannot shrink it.
+       video_fit_rect falls back to the fractional fit for exactly those
+       frames, and without that video_pipeline_run's scaler writes past the end
+       of v->cur -- SILENT MEMORY CORRUPTION, not a wrong-looking picture.
 
-       Swept over every system koboy runs, at its MEASURED base/max/display
-       aspect (TESTED.md and scripts/probe_core.c), on all four panels the
-       design spec supports, against a grid of frame sizes covering the whole
+       Swept over every system at its MEASURED base/max/display aspect, on all
+       four supported panels, against a grid of frame sizes covering the whole
        legal range including both corners. The pixel aspect is re-derived per
-       FRAME, which is what video_pipeline_run does.
+       FRAME, as video_pipeline_run does.
 
-       THE ROW THAT ACTUALLY FIRES THE FALLBACK is FinalBurn Neo's Tapper:
-       base 512x480 at 5:4 pixels is a 640x480 rect at scale 1 on the Libra 2,
-       and FBNeo declares a SQUARE max (side = max(w,h), so both orientations
-       fit one buffer) of 512x512 -- 32 rows taller than the rect. It is a
-       shipped board and not a hypothetical, which is why no synthetic
-       geometry is needed here. Asserted by name below the sweep so that a
-       future geometry change cannot quietly make this sweep vacuous. */
+       THE ROW THAT ACTUALLY FIRES THE FALLBACK is FBNeo's Tapper: base 512x480
+       at 5:4 pixels is a 640x480 rect at scale 1 on the Libra 2, and FBNeo
+       declares a SQUARE max of 512x512 -- 32 rows taller than the rect. A
+       shipped board, not a hypothetical, asserted by name below the sweep so a
+       future geometry change cannot quietly make the sweep vacuous. */
     {
         static const struct {
             const char *name; int bw, bh, mw, mh; double dar;
@@ -855,19 +837,16 @@ TEST_MAIN({
     }
 
     /* ------------------------------------------------------------ rotation
-       A golden-age arcade board turned its MONITOR on its side: FinalBurn Neo
-       renders Galaga into a 288x224 LANDSCAPE buffer and asks the frontend,
-       through RETRO_ENVIRONMENT_SET_ROTATION, to turn it a quarter turn. This
-       block checks the turn itself, on a source small enough to write out by
-       hand, and then the two properties that a plausible-looking wrong
+       An arcade board turned its MONITOR on its side: FBNeo renders Galaga
+       into a 288x224 LANDSCAPE buffer and asks, through SET_ROTATION, for a
+       quarter turn. This checks the turn itself on a source small enough to
+       write out by hand, then the two properties a plausible-looking wrong
        implementation would still satisfy.
 
-       The source is 4 wide by 2 tall with a DISTINCT VALUE PER PIXEL, so
-       every one of the eight can be traced to exactly one destination. Values
-       are picked to be already-quantised greys (0x0000 -> 0, 0xFFFF -> 255,
-       and two mid RGB565 greys), and the profile below is built at scale 1 so
-       the destination is the rotated source pixel for pixel with no scaling
-       in the way. */
+       The source is 4x2 with a DISTINCT VALUE PER PIXEL, so all eight trace to
+       exactly one destination. Values are already-quantised greys, and the
+       profile is built at scale 1 so the destination is the rotated source
+       pixel for pixel. */
     {
         /* RGB565 greys the four-level quantiser maps to 0/85/170/255. Chosen
            by asking video_rgb565_to_gray rather than by assuming, because a
@@ -895,22 +874,19 @@ TEST_MAIN({
         for (int y = 0; y < 2; y++)
             for (int x = 0; x < 4; x++) src[y * 4 + x] = GREY[SRC[y][x]];
 
-        /* A profile whose max is the SQUARE 4x4 -- which is what FBNeo really
-           reports (side = max(w,h)) precisely so that both orientations fit
-           one buffer -- resolved on a panel big enough that the scale search
-           cannot demote below 1. Scale is pinned to 1 explicitly so the
-           destination is the rotated frame with nothing added.
+        /* A profile whose max is the SQUARE 4x4 -- what FBNeo really reports
+           (side = max(w,h)), so both orientations fit one buffer -- on a panel
+           big enough that the scale search cannot demote below 1. Scale is
+           pinned to 1 so the destination is the rotated frame with nothing
+           added.
 
-           BASE IS PER-ROTATION, and that is not a convenience: core.c's
-           core_get_geometry transposes base and max for an odd rotation
-           precisely so every consumer sees the picture AS PRESENTED, and
-           main.c re-resolves the profile when the rotation changes (core.c
-           sets geom_dirty for it). So a rot-1 board really does reach
-           config_resolve_profile as 2x4, not as the 4x2 the core renders
-           into, and resolving one profile for all four rotations models a
-           call sequence koboy cannot produce. It went unnoticed while the
-           rect came from the SQUARE max, which is the same either way; the
-           base-sized rect is what makes the two different. */
+           BASE IS PER-ROTATION, and that is not a convenience: core_get_geometry
+           TRANSPOSES base and max for an odd rotation so every consumer sees
+           the picture AS PRESENTED, and main.c re-resolves when the rotation
+           changes. So a rot-1 board really does reach config_resolve_profile as
+           2x4, and resolving ONE profile for all four rotations models a call
+           sequence koboy cannot produce. Unnoticed while the rect came from the
+           square max, which is the same either way. */
         koboy_config rc; config_defaults(&rc);
         rc.scale = 1; rc.scale_explicit = true;
         /* The two shapes the four rotations resolve to, hoisted because the

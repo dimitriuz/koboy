@@ -23,11 +23,10 @@
      fbneo galaga    288x224   288x288   0.75      288x224     0.9643  (rot 3)
      fbneo defender  292x240   292x292   1.33333   292x240     1.0959
 
-   Two of those rows are why this file is shaped the way it is. race reports a
-   ROUNDED aspect -- 1.05 for a ratio that is 1.0526 -- so "not exactly square"
-   cannot be the trigger. And stella's base_width is a LIE (320 declared, 160
-   delivered), which is why the aspect_ratio field, not the base geometry, is
-   the signal. */
+   Two rows shape this file. race reports a ROUNDED aspect -- 1.05 for a ratio
+   that is 1.0526 -- so "not exactly square" cannot be the trigger. And
+   stella's base_width is a LIE (320 declared, 160 delivered), which is why the
+   ASPECT_RATIO field, not the base geometry, is the signal. */
 #include "test.h"
 #include "video.h"
 #include "config.h"
@@ -291,19 +290,17 @@ TEST_MAIN({
         video_fit_rect(&lp, 654, 396, KOBOY_ASPECT_ONE, &dw, &dh, &ox, &oy);
         CHECK_EQ_INT(dw, lp.game_w); CHECK_EQ_INT(dh, lp.game_h);
 
-        /* THE SAME FRAME, THE SAME SQUARE PIXELS, ON A CONSOLE'S RECT: also
-           not the shortcut. The rect there is fitted from BASE and may then
-           be cut by the per-system scale ceiling, so max geometry is neither
-           its shape nor its size -- taking the shortcut would stretch the
-           frame to fill a rect it does not match. This is the case that
-           `rect_from_max` exists for, and it cannot be reached through
-           layout_mode: both profiles below are KOBOY_LAYOUT_LCD.
+        /* THE SAME FRAME AND SQUARE PIXELS ON A CONSOLE'S RECT: also not the
+           shortcut. That rect is fitted from BASE and may be cut by the scale
+           ceiling, so max geometry is neither its shape nor its size, and the
+           shortcut would STRETCH the frame to a rect it does not match. This
+           is what `rect_from_max` exists for, and it cannot be reached through
+           layout_mode -- both profiles below are KOBOY_LAYOUT_LCD.
 
-           Built from the SAME geometry as the run above so the only thing
-           that differs is the flag, which is what makes this measure the
-           flag. base 305x191 is Donkey Kong zoomed to its LCD alone; a
+           Built from the SAME geometry as the run above so the ONLY difference
+           is the flag. base 305x191 is Donkey Kong zoomed to its LCD alone; a
            console rect fitted from that is 1264x791, and a frame arriving at
-           the 654x396 max must be fitted INTO it, not handed all of it. */
+           the 654x396 max must be fitted INTO it. */
         {
             koboy_config bc = lc;
             bc.lcd_rect_from_max = false;
@@ -481,22 +478,21 @@ TEST_MAIN({
         video_destroy(v);
     }
 
-    /* THE LCD LAYOUT KEEPS THE FRACTIONAL SCALER even when its fit lands on
-       an exact integer multiple, and this is the case that proves the
-       exclusion in video_pipeline_run is not redundant.
+    /* THE LCD LAYOUT KEEPS THE FRACTIONAL SCALER even when its fit lands on an
+       exact integer multiple -- the case proving video_pipeline_run's
+       exclusion is not redundant.
 
-       400x420 into the LCD layout's 1264x1260 available area fits at exactly
-       3x on both axes (height binds: 420 * 3 == 1260). The two scalers do NOT
-       agree there. video_scale_gray_frac's step is floored -- (400 << 16) /
-       1200 is 21845, not 21845.33 -- so source column 0 covers FOUR
-       destination columns and the rest cover three, while the block scaler
-       gives every column exactly three. That one-pixel difference is a
-       property the Game & Watch presentation has always had; this change has
-       no business altering it, and the Game Boy must never acquire it.
+       400x420 into the LCD layout's 1264x1260 fits at exactly 3x on both axes
+       (height binds: 420 * 3 == 1260), and the two scalers do NOT agree there.
+       video_scale_gray_frac's step is FLOORED -- (400 << 16) / 1200 is 21845,
+       not 21845.33 -- so source column 0 covers FOUR destination columns and
+       the rest cover three, while the block scaler gives every column exactly
+       three. That one-pixel difference is a property the Game & Watch
+       presentation has always had, and the Game Boy must never acquire it.
 
-       Written as a first-run width because that is where the two disagree,
-       not as a buffer comparison against a golden: a golden would go stale for
-       any reason at all, and this asserts the actual mechanism. */
+       Written as a first-run WIDTH, where the two disagree, rather than as a
+       comparison against a golden: a golden goes stale for any reason, and
+       this asserts the actual mechanism. */
     {
         koboy_config lc; config_defaults(&lc);
         lc.layout_mode = KOBOY_LAYOUT_LCD;
@@ -518,19 +514,17 @@ TEST_MAIN({
         video_destroy(v);
 
         /* AND THE SAME EXACT-MULTIPLE FIT ON A CONSOLE'S RECT TAKES THE BLOCK
-           PATH, which is the other half of that decision and the half that
-           arrived with SNES and Mega Drive. The skew above is a property the
-           Game & Watch presentation has always had and must keep; there is no
-           reason to hand it to two systems that only share the layout, and
-           the block scaler is the better one -- it is what the Game Boy gets.
-           Same panel, same geometry, same exactly-3x rect: the ONLY
-           difference is which geometry the rect was fitted from, so runs of 3
-           against runs of 4 is the block path against the fractional one and
-           nothing else.
+           PATH -- the other half of that decision, which arrived with SNES and
+           Mega Drive. The skew above is the Game & Watch presentation's own
+           property; there is no reason to hand it to two systems that merely
+           share the layout, and the block scaler is what the Game Boy gets.
+           Same panel, geometry and exactly-3x rect: the ONLY difference is
+           which geometry the rect was fitted from, so runs of 3 against runs
+           of 4 is the block path against the fractional one.
 
-           Mutant that made this necessary: keying block_ok on
-           `layout_mode != KOBOY_LAYOUT_LCD` (its shape before this change)
-           instead of on `!rect_from_max`. Nothing else in the suite noticed. */
+           MUTANT that made this necessary: keying block_ok on
+           `layout_mode != KOBOY_LAYOUT_LCD` instead of `!rect_from_max`.
+           Nothing else in the suite noticed. */
         koboy_config bc = lc;
         bc.lcd_rect_from_max = false;
         koboy_profile bp;
@@ -606,22 +600,19 @@ TEST_MAIN({
         CHECK_EQ_INT(memcmp(&square, &got, sizeof got), 0);
     }
 
-    /* THE ROUNDING MODE, as an invariant rather than as an example.
+    /* THE ROUNDING MODE, as an INVARIANT rather than an example.
 
        THE RECT IS SIZED FOR MAX GEOMETRY, SO A FRAME AT MAX MUST REACH THE
-       RECT'S OWN SCALE. That is the property the whole two-step arrangement
-       rests on -- config_resolve_profile_par picks a scale, video_fit_par has
-       to be able to reach it -- and it is exactly what a rounded-DOWN rect
-       width breaks: one source column short is `fx` one whole integer step
-       short, which is the 585x480 regression again, reintroduced by a
-       rounding mode rather than by ignoring the aspect.
+       RECT'S OWN SCALE -- the property the whole two-step arrangement rests
+       on, and exactly what a rounded-DOWN rect width breaks: one source column
+       short is `fx` one whole integer step short, the 585x480 regression
+       reintroduced by a rounding mode.
 
-       Swept over ten real core geometries and the whole plausible aspect
-       range rather than asserted at a point, because which (geometry, aspect)
-       pairs land on a fraction below a half is not something worth predicting
-       by hand. Measured: 0 misses rounding up, 4672 rounding to nearest. The
-       counter rather than a CHECK per iteration keeps ~14000 combinations
-       from swamping this file's check count with one fact. */
+       SWEPT over ten real core geometries and the whole plausible aspect range
+       rather than asserted at a point, because which (geometry, aspect) pairs
+       land below a half is not worth predicting by hand. MEASURED: 0 misses
+       rounding up, 4672 rounding to nearest. A counter rather than a CHECK per
+       iteration keeps ~14000 combinations from swamping the check count. */
     {
         const int geo[][2] = { {160,144},{256,240},{284,240},{320,256},{224,224},
                                {292,292},{288,288},{96,64},{348,240},{160,152} };
@@ -643,19 +634,15 @@ TEST_MAIN({
                    within the one pixel the ceiling adds. */
                 if (fs == p.scale && dw > p.game_w) misses++;
             }
-        /* THE SWEEP MUST ACTUALLY HAVE SWEPT, and without this line it did
-           not have to. All three assertions below are satisfied by the
-           INITIALISERS, so a config_resolve_profile_par that returned false
-           for every combination took the `continue` 1200 times, ran the body
-           zero times and passed on three checks -- the file's own comment
-           above even states the counts it expects and never asserted one.
-           tests/test_chrome.c (search `checked > 1000`) and
-           tests/test_video_pipeline.c (`shrunk > 0`) already carry exactly
-           this guard; this sweep was the sibling without it.
-           1000 rather than the exact 1200: ten geometries times the 120
-           `par` steps in [32768, 196608] is the count today, and pinning it
-           exactly would make adding a geometry to the table look like a
-           regression. The number that matters is "not zero, and not three". */
+        /* THE SWEEP MUST ACTUALLY HAVE SWEPT. All three assertions below are
+           satisfied by the INITIALISERS, so a config_resolve_profile_par that
+           returned false for every combination took the `continue` 1200 times,
+           ran the body zero times and passed on three checks.
+           tests/test_chrome.c (`checked > 1000`) and
+           tests/test_video_pipeline.c (`shrunk > 0`) carry the same guard.
+           1000 rather than the exact 1200 (ten geometries times 120 `par`
+           steps) so adding a geometry does not look like a regression. The
+           number that matters is "not zero, and not three". */
         CHECK(swept > 1000);
         CHECK_EQ_INT(misses, 0);
         CHECK_EQ_INT(first_g, -1);

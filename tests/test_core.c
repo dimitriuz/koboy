@@ -136,19 +136,17 @@ TEST_MAIN({
             CHECK_EQ_INT(((const uint16_t *)last_data)[0], KOBOY_BTN_B | KOBOY_BTN_UP);
             CHECK_EQ_INT(*pp, 1);
 
-            /* THE NEW RETROPAD BITS REACH THE IDS THEY CLAIM TO. koboy's
-               KOBOY_BTN_* are RETRO_DEVICE_ID_JOYPAD_* by BIT POSITION, which
-               is what makes core.c's forwarding a plain `latched >> id`, and
-               a Game & Watch title's binding is chosen by id: Mickey Mouse
-               (Wide Screen) puts NORTHEAST on id 9 and its GAME A / GAME B
-               switches on ids 10 and 11. Renumber a bit and koboy silently
-               presses a different button on every one of these titles.
+            /* THE RETROPAD BITS REACH THE IDS THEY CLAIM TO. KOBOY_BTN_* are
+               RETRO_DEVICE_ID_JOYPAD_* by BIT POSITION, which is what makes
+               core.c's forwarding a plain `latched >> id`, and a Game & Watch
+               binding is chosen by id: Mickey Mouse puts NORTHEAST on id 9 and
+               GAME A / GAME B on 10 and 11. Renumber a bit and koboy silently
+               presses a different button on every one of those titles.
 
                stub_core.c queries ids 0..15 one at a time and repacks each
-               answer as 1u << id, so the LITERAL on the right-hand side below
-               is the id the core actually asked about -- deliberately written
-               as a shift and not as the KOBOY_BTN_* name, which would compare
-               the constant with itself and pass whatever it was changed to. */
+               answer as 1u << id, so the LITERAL below is the id the core
+               asked about -- written as a SHIFT and not as the KOBOY_BTN_*
+               name, which would compare the constant with itself. */
             {
                 static const struct { uint16_t bit; unsigned id; const char *n; } abi[] = {
                     { KOBOY_BTN_B,      0,  "B"      },
@@ -204,21 +202,16 @@ TEST_MAIN({
     CHECK(ser_calls != NULL);
 
     /* THE POKEMON MINI CORE OPTIONS koboy answers, read back as the strings
-       the core actually received. Both are corrections for the medium, not
-       taste, and both are argued at length in core.c's env_cb:
-         video_scale 1x        -- the core's default 4x makes it report
-                                  384x256 and bakes a dot-matrix LCD filter
-                                  into every frame; quantised to four greys
-                                  that filter is full-rect noise, and the
-                                  upscaling is work koboy's own integer
-                                  scaler does for free.
-         palette Monochrome Vector -- the default paints the game rect 83%
-                                  black (measured mean luma 0.174). E-ink is
-                                  reflective paper.
-       Asserted as exact strings, because these are matched by strcmp inside
-       the real core: "video_scale = 1" or "monochrome vector" would be
-       silently ignored and the core would keep its default, which is
-       precisely the failure this pins. */
+       the core actually received. Both are corrections for the MEDIUM, argued
+       in core.c's env_cb:
+         video_scale 1x            -- the default 4x reports 384x256 and bakes
+                                      a dot-matrix filter into every frame,
+                                      which at four greys is full-rect noise.
+         palette Monochrome Vector -- the default paints the rect 83% black
+                                      (mean luma 0.174) on reflective paper.
+       EXACT strings, because the real core matches them with strcmp:
+       "video_scale = 1" or "monochrome vector" would be silently ignored and
+       the core would keep its default. */
     const char *pm_scale   = (const char *)dlsym(so, "stub_pm_video_scale");
     const char *pm_palette = (const char *)dlsym(so, "stub_pm_palette");
     int *unknown_refused   = (int *)dlsym(so, "stub_unknown_option_refused");
@@ -232,39 +225,33 @@ TEST_MAIN({
        with a frontend that answers every key with something. */
     if (unknown_refused) CHECK_EQ_INT(*unknown_refused, 1);
 
-    /* THE ARCADE HIGH-SCORE SWITCH, and it is not a preference. An arcade
-       board has no battery: retro_get_memory_size(RETRO_MEMORY_SAVE_RAM) is 0
-       on all 227 romsets measured, so there is no .srm for any of them and
-       FinalBurn Neo's hiscore.dat mechanism is the ONLY thing that persists
-       anything at all. The core's own stated default for `fbneo-hiscores` is
-       "enabled" -- and the code that reads it leaves the flag at its BSS zero
-       when the frontend REFUSES the query, which is what koboy does with
-       every key it has no opinion about. So saying nothing gets the opposite
-       of the documented default, and this assertion is what stops that
-       reverting. Verified end to end on the real core: with it answered,
-       Ms. Pac-Man writes fbneo/mspacman.hi on unload and its attract screen
-       reads back HIGH SCORE 220 on the next launch; without it, nothing is
-       written. Exact string, because the core matches it with strcmp. */
+    /* THE ARCADE HIGH-SCORE SWITCH, and NOT a preference. An arcade board has
+       no battery: retro_get_memory_size(SAVE_RAM) is 0 on all 227 romsets
+       measured, so FBNeo's hiscore.dat is the ONLY thing that persists
+       anything. The core's stated default for `fbneo-hiscores` is "enabled" --
+       but the code reading it leaves the flag at its BSS zero when the
+       frontend REFUSES the query, which is what koboy does with every key it
+       has no opinion about, so saying nothing gets the OPPOSITE of the
+       documented default. VERIFIED end to end: answered, Ms. Pac-Man writes
+       fbneo/mspacman.hi on unload and reads back HIGH SCORE 220 next launch;
+       unanswered, nothing is written. Exact string (strcmp). */
     const char *fb_hi = (const char *)dlsym(so, "stub_fbneo_hiscores");
     CHECK(fb_hi != NULL);
     if (fb_hi) CHECK(strcmp(fb_hi, "enabled") == 0);
 
-    /* THE SAVE DIRECTORY, which for one whole system IS the save path.
-       Neo Geo Pocket cartridges save into flash rather than into
-       RETRO_MEMORY_SAVE_RAM -- measured with scripts/probe_core.c:
-       retro_get_memory_size(SAVE_RAM) is 0 for every one of the author's ten
-       .ngp titles, on both available cores -- and RACE writes that flash
-       itself, into whatever directory this query answers. So koboy's answer
-       has to be the save_dir it was opened with, exactly, and it has to be an
-       answer rather than a refusal. Nothing else in this suite pins it: every
-       other system reaches disk through sram.c, and a refused query here
-       would lose every Neo Geo Pocket save while looking identical to a
-       working build.
+    /* THE SAVE DIRECTORY, which for one whole system IS the save path. Neo Geo
+       Pocket cartridges save into FLASH rather than RETRO_MEMORY_SAVE_RAM --
+       measured with scripts/probe_core.c, retro_get_memory_size(SAVE_RAM) is 0
+       for all ten of the author's .ngp titles on both cores -- and RACE writes
+       that flash itself into whatever directory this query answers. So koboy's
+       answer must be exactly the save_dir it was opened with, and must be an
+       ANSWER rather than a refusal. Nothing else pins it: every other system
+       reaches disk through sram.c, and a refused query would lose every Neo
+       Geo Pocket save while looking identical to a working build.
 
-       The SYSTEM directory is asserted alongside it because core.c answers
-       both from the same field, and a core that asks for one and not the
-       other is common (RACE asks only for the save directory, beetle-ngp for
-       both). "build" is the save_dir this test's core_open was given. */
+       The SYSTEM directory is asserted alongside because core.c answers both
+       from the same field, and a core asking for one and not the other is
+       common. "build" is this test's save_dir. */
     const char *sdir = (const char *)dlsym(so, "stub_save_dir");
     const char *ydir = (const char *)dlsym(so, "stub_system_dir");
     int *sdir_ans = (int *)dlsym(so, "stub_save_dir_answered");
@@ -331,23 +318,19 @@ TEST_MAIN({
     CHECK(core_sram(c, &sl2) != NULL);
     CHECK_EQ_INT(sl2, 8);
 
-    /* THE LENGTH IS LOAD-ONCE EVEN THOUGH THE POINTER IS NOT, and this is the
-       assertion that says so. Genesis Plus GX -- the Master System / Game
-       Gear core -- answers retro_get_memory_size(SAVE_RAM) with the buffer's
-       real size before emulation starts and with a SMALLER "how much is worth
-       writing" number once it is running. main.c calls core_sram() again
-       mid-session (after a save-state load, where the pointer really can
-       move), and if that call also picked up the shrunken length, the next
-       flush would rewrite a full-size .srm at the short length and the launch
-       after it could not read the file whole -- a destroyed save that
-       announces itself as "Save file unreadable".
+    /* THE LENGTH IS LOAD-ONCE EVEN THOUGH THE POINTER IS NOT. Genesis Plus GX
+       answers retro_get_memory_size(SAVE_RAM) with the buffer's real size
+       before emulation starts and a SMALLER "how much is worth writing" once
+       running. main.c calls core_sram() again mid-session (after a state load,
+       where the pointer really can move), and picking up the shrunken length
+       there would rewrite a full-size .srm short -- a destroyed save
+       announcing itself as "Save file unreadable".
 
-       stub_sram_shrink_when_running reproduces exactly that: 8 bytes at load,
-       3 once retro_run has been called. What core_sram reports must not move.
+       stub_sram_shrink_when_running reproduces it: 8 bytes at load, 3 once
+       retro_run has been called. What core_sram reports must not move.
 
-       MUTANT-VERIFIED: with core.c's `*len = p ? c->sram_len : 0` changed
-       back to a live `c->get_memory_size(RETRO_MEMORY_SAVE_RAM)`, the
-       CHECK_EQ_INT below fails with 3 != 8. */
+       MUTANT-VERIFIED: with core.c's `*len = p ? c->sram_len : 0` changed back
+       to a live get_memory_size, the CHECK_EQ_INT below fails 3 != 8. */
     {
         int *shrink = (int *)dlsym(so, "stub_sram_shrink_when_running");
         CHECK(shrink != NULL);

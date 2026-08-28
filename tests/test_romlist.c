@@ -401,26 +401,21 @@ TEST_MAIN({
 
     /* ------------------------------------------------------------------
        REGRESSION: the reported bug. A user copied 303 ROMs into roms/;
-       ROMLIST_MAX was 256, applied inside the readdir loop before the
-       qsort, so 47 ROMs vanished -- chosen by filesystem order, not
-       alphabetically. Shantae (USA).gbc was one of the ones that
-       disappeared. This builds a collection past the OLD cap (300+ files),
-       including that exact name, a long real-world name, and a
-       subdirectory (roms/gbc/ exists on the user's device) holding a file
-       with the SAME basename as one at the top level -- and asserts every
-       one of them is not just counted but present, loadable, and
-       distinguishable. A test that only checked count == 3, or count ==
-       303, would not have caught the original bug: the count was never
-       wrong in a way "== 303" would show (256 were still counted as valid
-       entries; which 256 was the bug).
+       ROMLIST_MAX was 256, applied INSIDE the readdir loop before the qsort,
+       so 47 ROMs vanished -- chosen by filesystem order, not alphabetically.
+       Shantae (USA).gbc was one. This builds a collection past the OLD cap
+       (300+ files) including that exact name, a long real-world name, and a
+       subdirectory holding a file with the SAME basename as one at the top
+       level, and asserts each is present, loadable and distinguishable. A test
+       checking only count == 303 would not have caught the original bug: 256
+       were still counted as valid entries, and WHICH 256 was the bug.
 
-       It now doubles as the navigation test, because the same fixture is
-       exactly what navigation has to get right: the subdirectory is one row
-       at the TOP of the root listing rather than a prefix on every file
-       inside it, and the file inside it must still resolve to the SAME
-       absolute path the flattened list produced -- which is what keeps an
-       existing .srm, save state or RECENT entry pointing at the game it was
-       written for. */
+       It doubles as the navigation test, because the same fixture is what
+       navigation has to get right: the subdirectory is one row at the TOP of
+       the root listing rather than a prefix on every file inside it, and the
+       file inside must still resolve to the SAME absolute path the flattened
+       list produced -- which is what keeps an existing .srm, save state or
+       RECENT entry pointing at the game it was written for. */
     {
         char root[] = "/tmp/koboy_romlist_big_XXXXXX";
         CHECK(mkdtemp(root) != NULL);

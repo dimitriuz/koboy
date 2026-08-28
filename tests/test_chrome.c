@@ -289,19 +289,15 @@ TEST_MAIN({
 
     free(guarded);
 
-    /* The clamp itself, asserted directly rather than by watching for an
-       overrun. This exists because the sentinel guard band above CANNOT cover
-       the right-hand band: with the `rx > W` clamp removed, `W - rx` is a
-       length near SIZE_MAX, and what glibc 2.41/x86-64 does with that is write
-       a short block near the destination -- which for an overhanging rect lands
-       inside the panel, not in the guard. The `over` profile above therefore
-       reports zero corruption whether or not that clamp is present, which was
-       verified by deleting the clamp and watching all 222 checks still pass.
-       A test that cannot fail is not coverage, so the contract gets asserted
-       where it is deterministic: chrome_bands' clamped output, which is the
-       same arithmetic chrome_render depends on, on every libc, with no
-       undefined behaviour needed to observe it. Remove either clamp in
-       chrome_bands and the matching CHECK below fails. */
+    /* The clamp asserted DIRECTLY rather than by watching for an overrun,
+       because the sentinel guard band above CANNOT cover the right-hand band:
+       with the `rx > W` clamp removed, `W - rx` is a length near SIZE_MAX, and
+       glibc 2.41/x86-64 writes a short block near the destination -- inside
+       the panel, not in the guard. VERIFIED: deleting the clamp left all 222
+       checks passing. A test that cannot fail is not coverage, so the contract
+       is asserted where it is deterministic on every libc, with no UB needed
+       to observe it. Remove either clamp in chrome_bands and the CHECK below
+       fails. */
     koboy_profile b;
     int lx = -1, rx = -1;
     memset(&b, 0, sizeof b);
@@ -425,39 +421,28 @@ TEST_MAIN({
     CHECK_EQ_INT(chrome_intruded, 0);
     CHECK_EQ_INT(zone_hits, 0);
 
-    /* GENERAL guard, carried forward from Task 8, REDESIGNED after a review
-       found the first version too weak. That version compared each control's
-       rendered pixels against chrome_controls_top()'s RETURN VALUE, which is
-       a min() over seven terms (two for the d-pad's arms, one each for A, B,
-       Start, Select, Menu). Deleting a non-binding term leaves the min()
-       unchanged, so nothing the pixel probe looked at moved -- the review
-       deleted each of the seven terms in turn and only one (`a`, the term
-       that happened to be the binding minimum on the one profile tested) was
-       caught. The other six were provably unguarded. A second, independent
-       bug in that version: the `menu` column probe (750..950 permille) and
-       the `a` probe (745..915 permille) overlap, so the menu check was
-       silently reading A's pixels rather than the MENU box's.
+    /* REDESIGNED after a review found the first version too weak. That version
+       compared each control's rendered pixels against chrome_controls_top()'s
+       RETURN VALUE, which is a min() over seven terms -- so deleting a
+       NON-BINDING term leaves the min() unchanged and nothing the probe looked
+       at moved. Deleting each of the seven in turn caught exactly one (`a`,
+       the binding minimum on the one profile tested); the other six were
+       provably unguarded. A second bug in that version: the `menu` probe
+       (750..950 permille) overlapped the `a` probe (745..915), so the menu
+       check was reading A's pixels.
 
-       The fix: compute the SAME seven-term minimum independently here, from
-       koboy_layout and the panel size, and assert EQUALITY with
-       chrome_controls_top()'s actual return value -- not an inequality
-       against a pixel sample. This deliberately duplicates chrome.c's min2
-       chain. That duplication IS the guard: a future edit to the chain
-       either updates this expected value to match (which is a deliberate,
-       visible part of the same diff) or it does not, and then EVERY one of
-       the seven terms makes this fail, not just whichever one happens to be
-       binding on whichever panel is tested -- because any single term
-       increasing means chrome_controls_top()'s actual minimum can only stay
-       the same or drop, while this independently-computed value tracks
-       whatever the test author believes each control's real top edge is.
-       There is no pixel sampling left to overlap, either.
+       THE FIX: compute the SAME seven-term minimum INDEPENDENTLY here, from
+       koboy_layout and the panel size, and assert EQUALITY -- not an
+       inequality against a pixel sample. The duplication IS the guard: a
+       future edit either updates this expected value in the same diff or every
+       one of the seven terms makes this fail, because any term increasing can
+       only leave the real minimum equal or lower while this value tracks what
+       the test author believes each control's top edge is.
 
-       Run at all four supported panel sizes, not only the Libra 2 this file
-       otherwise defaults to: Clara (1072x1448) is the one where the margin
-       between the bezel and chrome_controls_top is tightest (nine pixels
-       before this task's fix-round redesign of the bezel/decoration sizing),
-       which is exactly where a future strapline or bezel change would erode
-       it first without this catching it. */
+       At all FOUR supported panel sizes, not only the Libra 2: Clara
+       (1072x1448) has the tightest margin between the bezel and
+       chrome_controls_top, which is where a future strapline or bezel change
+       erodes it first. */
     {
         static const int panels[][2] = {
             { 1072, 1448 },   /* Clara family, 6"     -- tightest margin  */
@@ -537,27 +522,19 @@ TEST_MAIN({
         }
     }
 
-    /* The default-layout, 4-panel check above is necessary but not
-       sufficient: on the SHIPPED layout, `a` beats every other term on all
-       four supported panels by a comfortable margin (measured -- see the
-       task report's table), which means deleting any of the other six terms
-       leaves chrome_controls_top()'s return value completely unchanged and
-       an equality check against it, however it is computed, cannot observe
-       the deletion. That is not a flaw in comparing with equality instead of
-       inequality; it is a property of min(): whichever comparison operator
-       is used, a term that is never the actual minimum is invisible to any
-       test that only inspects the aggregate result on a layout where it
-       never wins.
+    /* The 4-panel check above is necessary but NOT SUFFICIENT: on the shipped
+       layout `a` beats every other term on all four panels by a comfortable
+       margin (measured), so deleting any of the other six leaves the return
+       value unchanged. That is a property of min(), not of the comparison
+       operator: a term that is never the actual minimum is invisible to any
+       test inspecting only the aggregate.
 
-       So each term is isolated in its own synthetic layout instead: every
-       OTHER control is parked far down the panel with a negligible radius
-       (cy = 990 permille, r/half-extent = 5 permille), and the one control
-       under test is brought up to an unmistakably dominant position (cy =
-       300 permille, a generous size). With every rival out of contention,
-       chrome_controls_top()'s return value can only equal what that term's
-       own formula produces (if the term is present) or something larger --
-       whatever the next surviving term computes -- if it has been deleted.
-       That is what makes each of these individually decisive. */
+       So each term is ISOLATED in its own synthetic layout: every other
+       control parked far down the panel with a negligible radius (cy = 990
+       permille, r = 5), the one under test brought to cy = 300 with a generous
+       size. With every rival out of contention the return value can only equal
+       that term's own formula, or -- if it has been deleted -- whatever the
+       next surviving term computes. */
     {
         const int W = 1264, H = 1680;
 
@@ -628,25 +605,18 @@ TEST_MAIN({
             CHECK_EQ_INT(got, expected);
         }
 
-        /* The d-pad's HORIZONTAL arm term cannot be isolated the same way,
-           and this is a proven mathematical property of the current code,
-           not a gap in this test: arm = dr / 3 inside chrome_controls_top,
-           and dcy - dr - 1 <= dcy - arm / 2 - 1 for every dr >= 0 (equal
-           only at the degenerate dr = 0, otherwise strictly less), because
-           the vertical bar of a plus-shaped d-pad is always taller than the
-           horizontal bar is thick. So the horizontal-arm term can never be
-           chrome_controls_top's binding minimum under any layout, and
-           deleting it changes the function's return value for NO input --
-           verified exhaustively for dr in [0, 2000). No test that only
-           observes chrome_controls_top's aggregate output -- this one
-           included -- can distinguish "the term is present" from "the term
-           is absent" for that reason alone; the two are behaviourally
-           identical. It stays in the chain because it is what the actual
-           frame() call for the horizontal arm draws (see the function's own
-           doc comment), matching drawing to formula the same way the other
-           six terms do, and because a future change to how `arm` relates to
-           `dr` could make it stop being dominated -- at which point this
-           very comment is what should be revisited. */
+        /* The d-pad's HORIZONTAL arm term cannot be isolated, and that is a
+           PROVEN property of the code, not a gap: arm = dr / 3, and
+           dcy - dr - 1 <= dcy - arm/2 - 1 for every dr >= 0 (equal only at
+           dr = 0), because a plus-shaped d-pad's vertical bar is always taller
+           than its horizontal bar is thick. So that term can never be the
+           binding minimum and deleting it changes the return value for NO
+           input -- verified exhaustively for dr in [0, 2000). No test
+           observing only the aggregate output can distinguish present from
+           absent. It stays because it is what the horizontal arm's frame()
+           call actually draws, and because a future change to how `arm`
+           relates to `dr` could make it stop being dominated -- at which point
+           revisit this comment. */
     }
 
     /* The faceplate must be LABELLED. Before this task A, B, Start and Select
@@ -727,22 +697,16 @@ TEST_MAIN({
                produces and therefore the hardest case for a disc to stay
                clear of. */
             { "/roms/galaga.zip",         2, 512, 512 },
-            /* MEGA DRIVE AND SNES ARE NOT IN THIS TABLE ANY MORE, and their
-               absence is the deliberate kind. They used to be, with two discs
-               each, and they were here for a reason the others were not:
-               their extra discs stopped a REAL button being unreachable
-               rather than merely adding one. That is exactly why they LEFT --
-               two discs were not enough for a pad with six face buttons, so
-               config_layout_for_rom now sends .md/.sfc/.smc to
-               KOBOY_LAYOUT_LCD, whose strip carries the whole set. Their
-               labels are asserted in the LCD section below, and
-               config_extra_buttons_for_rom's empty case for them is asserted
-               in test_config.c.
+            /* MEGA DRIVE AND SNES ARE DELIBERATELY ABSENT. They used to have
+               two discs each, and left because two were not enough for a pad
+               with six face buttons: config_layout_for_rom now sends
+               .md/.sfc/.smc to KOBOY_LAYOUT_LCD. Their labels are asserted in
+               the LCD section below and their empty extra-button case in
+               test_config.c.
 
-               PC Engine is absent for the opposite reason and always was: a
-               standard PC Engine pad is I, II, RUN and Select, which the DMG
-               faceplate carries in full, so it has NO extra discs and is
-               asserted as such separately below. */
+               PC Engine is absent for the OPPOSITE reason: its pad is I, II,
+               RUN and Select, which the DMG faceplate carries in full, so it
+               has no extra discs -- asserted separately below. */
         };
         static uint8_t fbc[1440 * 1920], fbn[1440 * 1920];
 
@@ -1083,19 +1047,16 @@ TEST_MAIN({
                 if (a[y * W + x] != 0x7F) intruded++;
         CHECK_EQ_INT(intruded, 0);
 
-        /* THE FILL IS A CHORD OF THE LAMP, not a band across its bounding
-           box. Reported from the device as "the battery fill is a rectangle":
-           the fill ran hline from cx - r to cx + r, so the level was painted
-           the full width of the disc's bounding box and spilled outside the
-           circle; the ring() drawn afterwards just outlined a circle over the
-           overspill.
+        /* THE FILL IS A CHORD OF THE LAMP, not a band across its bounding box.
+           Reported from the device as "the battery fill is a rectangle": the
+           fill ran hline from cx - r to cx + r, so the level painted the full
+           bounding-box width and spilled outside the circle, with ring()
+           outlining over the overspill.
 
-           Neither existing assertion could catch that. "100% and 5% render
-           differently" is true of a rectangle too, and so is "unknown does not
-           intrude". So: diff each level against the 0% render -- which cancels
-           the disc, the ring and the label, leaving only the fill -- and
-           require every differing pixel to lie within radius r of the lamp
-           centre. */
+           Neither existing assertion could catch it -- "100% and 5% render
+           differently" is true of a rectangle too. So: diff each level against
+           the 0% render (which cancels disc, ring and label, leaving only the
+           fill) and require every differing pixel within radius r. */
         {
             int cx = p.game_x / 2;
             int cy = p.game_y + p.game_h / 2;
@@ -1183,35 +1144,27 @@ TEST_MAIN({
         CHECK_EQ_INT(intruding_combos, 0);
     }
 
-    /* Case tone, task 15's user-chosen ordering -- CORRECTED in round 2
-       against the reference photo. Round 1 shipped the controls LIGHTER
-       than the case (near-white d-pad/A/B/pills on a grey case), which
-       read as holes punched in the case rather than raised controls; the
-       photo's actual ordering, darkest to lightest, is d-pad, bezel,
-       A/B, Start/Select/MENU, case. "Clearly" is pinned at more than one
-       GC16 waveform step (~17 levels of 256) apart, so relationships
-       survive being quantised down to the panel's real 16-level driver,
-       not just on this exact 8-bit render; the pill-vs-case gap is
-       deliberately NOT held to that bar -- the photo's pills sit much
-       closer to the case tone than the buttons do ("a little darker",
-       not "clearly darker").
-       Sampled from coordinates guaranteed to land on exactly one tone
-       regardless of layout: (2,2) is above and left of the bezel on every
-       supported panel; the A disc's own centre is always BUTTON; the
-       Start pill's own centre is always PILL; game_x - 3 at the rect's
-       own vertical middle sits inside the LEFT bezel band, solid DARK for
-       every side_t >= 3 (side_t floors at 5); and the d-pad's vertical
-       arm at dr/2 above centre is always DPAD fill -- above the hub disc
-       (radius arm/2 = dr/6) and below where the tip ridges start
-       (>= ~3*dr/4), for every dr > 0.
-       Swept over all four supported panels, matching the sibling
-       chrome_controls_top guard just above: the tones themselves are
-       panel-size-independent constants (BG/DARK/DPAD/BUTTON/PILL never vary
-       with W or H), so this was never a live coverage gap the way the
-       margin/invariant tests were -- but sampling only 1264x1680 left it the
-       one tonal check in this file that was not symmetric with the rest,
-       and a future change that made a tone panel-size-dependent by accident
-       would only be caught here if the sweep were already in place. */
+    /* THE TONE ORDERING, corrected against the reference photo after an
+       earlier round shipped the controls LIGHTER than the case (near-white
+       d-pad/A/B/pills), which read as holes punched in the case. The photo's
+       ordering, darkest to lightest: d-pad, bezel, A/B, Start/Select/MENU,
+       case. "Clearly" is pinned at more than one GC16 step (~17 levels of 256)
+       so the relationships survive quantisation to the panel's real 16-level
+       driver; the pill-vs-case gap is deliberately NOT held to that bar --
+       the photo's pills sit much closer to the case tone than the buttons.
+
+       Sampled from coordinates guaranteed to land on exactly one tone whatever
+       the layout: (2,2) is above and left of the bezel on every panel; the A
+       disc's centre is always BUTTON; the Start pill's centre always PILL;
+       game_x - 3 at the rect's vertical middle is inside the LEFT bezel band,
+       solid DARK for every side_t >= 3 (it floors at 5); and the d-pad's
+       vertical arm at dr/2 above centre is always DPAD fill -- above the hub
+       (radius dr/6) and below the tip ridges (>= ~3*dr/4) for every dr > 0.
+
+       Swept over all four panels for symmetry with the guard above. The tones
+       are panel-size-independent constants, so this was never a live gap --
+       but a future change that made one size-dependent by accident is only
+       caught here if the sweep is already in place. */
     {
         static const int panels[][2] = {
             { 1072, 1448 }, { 1264, 1680 }, { 1404, 1872 }, { 1440, 1920 },
@@ -1268,25 +1221,18 @@ TEST_MAIN({
         CHECK(strstr(src, "GAMEBOY") == NULL);
     }
 
-    /* STRAPLINE WORDING. A deliberate honesty ruling: this build is silent
-       end to end, and the historic DMG strap's "DOT MATRIX WITH STEREO
-       SOUND" claim would be a false statement about the product if printed
-       on the faceplate (see STRAPLINE's own comment in chrome.c). Before
-       this check the wording was protected only indirectly, by the golden
-       pixel-diff -- a real gate, but not a direct one, and not one that
-       names what it is protecting against.
-       This cannot reuse the trademark check's shape exactly (scan the
-       WHOLE file, upper-cased, for the forbidden phrase): chrome.c's own
-       comment quotes "STEREO SOUND" by name to explain why it was rejected,
-       so a whole-file scan for that phrase would fail on the explanation
-       forever, not on a real regression -- unlike NINTENDO/GAME BOY/GAMEBOY,
-       which have no legitimate reason to appear anywhere in this file.
-       So this reads the STRAPLINE string literal itself, not the whole
-       file, and checks only what the faceplate actually prints: it must not
-       read the historic stereo-sound claim, and it must read the wording
-       this build ships. Case-sensitive and unmodified (no upper-casing),
-       since STRAPLINE is already all caps in source and an accidental
-       lower-case edit should also be caught. */
+    /* STRAPLINE WORDING -- an honesty ruling: this build is silent end to end,
+       so the historic DMG strap's "DOT MATRIX WITH STEREO SOUND" would be a
+       FALSE STATEMENT printed on the faceplate. Previously protected only
+       indirectly by the golden pixel-diff.
+
+       This cannot reuse the trademark check's shape (scan the WHOLE file for
+       the forbidden phrase): chrome.c's own comment quotes "STEREO SOUND" to
+       explain the rejection, so a whole-file scan would fail on the
+       explanation forever -- unlike NINTENDO/GAME BOY/GAMEBOY, which have no
+       legitimate reason to appear at all. So this reads the STRAPLINE literal
+       itself. Case-sensitive and unmodified, since STRAPLINE is already all
+       caps and an accidental lower-case edit should be caught too. */
     {
         FILE *f = fopen("src/chrome.c", "rb");
         CHECK(f != NULL);
@@ -1583,22 +1529,20 @@ TEST_MAIN({
 
     /* ================================ THE STRIP'S PER-SYSTEM LABELS
      *
-     * The strip's GEOMETRY is one thing for all three systems that reach this
-     * layout; only what the controls SAY changes. That matters more than it
-     * sounds: Genesis Plus GX maps JOYPAD_A to the Mega Drive's **C**, so a
-     * disc drawn "A" over that bit is a lie a player acts on -- press the
-     * button marked A in Streets of Rage 2 and you get C. The retropad names
-     * the strip shipped with are right for Game & Watch (gw-libretro's own
-     * overlay speaks retropad) and wrong for a console.
+     * The GEOMETRY is one thing for every system reaching this layout; only
+     * what the controls SAY changes. Genesis Plus GX maps JOYPAD_A to the Mega
+     * Drive's C, so a disc drawn "A" over that bit is a lie a player acts on:
+     * press A in Streets of Rage 2 and you get C. The retropad names the strip
+     * shipped with are right for Game & Watch and wrong for a console.
      *
-     * Asserted two ways, because either alone is weak. (1) EXACT LABEL PIXEL
-     * COUNTS, against a string rendered independently through text.c -- that
-     * pins WHAT each control says. (2) A SAME/DIFFER MATRIX between the three
-     * systems -- that pins WHICH control says it, and catches a swap of two
-     * labels whose glyph counts happen to match.
+     * Asserted TWO ways, because either alone is weak. (1) EXACT LABEL PIXEL
+     * COUNTS against a string rendered independently through text.c -- pins
+     * WHAT each control says. (2) A SAME/DIFFER MATRIX between the systems --
+     * pins WHICH control says it, catching a swap of two labels whose glyph
+     * counts happen to match.
      *
-     * One profile for all three renders, so the ONLY thing that differs
-     * between the buffers is the label table. */
+     * One profile for all the renders, so the ONLY difference between the
+     * buffers is the label table. */
     {
         koboy_config gwc; config_defaults(&gwc);
         gwc.layout_mode = KOBOY_LAYOUT_LCD;
@@ -1726,23 +1670,21 @@ TEST_MAIN({
 
     /* ============ THE SIX-BUTTON MEGA DRIVE ARRANGEMENT (KOBOY_LCD_FACE_ROWS6)
      *
-     * The strip's diamond is right for Game & Watch (the gw core's overlay
-     * draws one) and for SNES (its real pad is one). It is wrong for a Mega
+     * The diamond is right for Game & Watch and SNES and WRONG for a Mega
      * Drive, whose pad is two rows of three:
      *
      *     X  Y  Z
      *     A  B  C
      *
-     * Somebody who has held that pad knows where C is; a diamond makes them
-     * learn an arbitrary map instead. So this is the labelling argument
-     * applied to POSITION, and it is asserted the same way -- by reading the
-     * LABEL off the shipped table and checking where THAT ends up, never by
-     * checking where a retropad bit ends up. A version of this that asserted
-     * `l1_cx < x_cx` would pass with every label transposed.
+     * Somebody who has held that pad knows where C is. This is the labelling
+     * argument applied to POSITION, asserted the same way: read the LABEL off
+     * the shipped table and check where THAT ends up, never where a retropad
+     * BIT ends up -- a version asserting `l1_cx < x_cx` would pass with every
+     * label transposed.
      *
-     * Swept over all four supported panels, because the grid is the widest
-     * thing this strip has ever had to seat and the narrowest panel is where
-     * it would collide with MENU or run off the edge.
+     * Swept over all four panels: the grid is the widest thing this strip has
+     * had to seat, and the narrowest panel is where it would collide with MENU
+     * or run off the edge.
      */
     {
         static const struct { int w, h; const char *name; } pn[] = {
@@ -1965,22 +1907,20 @@ TEST_MAIN({
 
     /* ============ THE TWO-BUTTON ARRANGEMENT (KOBOY_LCD_FACE_PAIR2)
      *
-     * A Game Boy Advance has two face buttons, and the diamond would give it
-     * four. That is not a poor fit but an INVENTION: the two extra bits are
-     * bound by gpSP to Turbo A and Turbo B, so a diamond would put a disc
-     * labelled X on the panel that fires A twenty times a second -- a control
-     * the hardware never had, which is the same defect as the Mega Drive's
-     * disc labelled A that produced C, from the other direction.
+     * A GBA has two face buttons and the diamond would give it four -- not a
+     * poor fit but an INVENTION: gpSP binds the two extra bits to Turbo A and
+     * Turbo B, so a disc labelled X would fire A twenty times a second. Same
+     * defect as the Mega Drive's disc labelled A that produced C.
      *
-     * Asserted the ROWS6 way -- find each disc BY ITS LABEL, then check where
-     * that one ended up. A version that asserted `a_cx > b_cx` would pass
-     * with the two labels swapped.
+     * Asserted the ROWS6 way: find each disc BY ITS LABEL, then check where it
+     * ended up. A version asserting `a_cx > b_cx` would pass with the labels
+     * swapped.
      *
-     * Swept over all four supported panels, and it carries one check no other
-     * arrangement needs: the two UNUSED discs sit at the origin, and a disc at
-     * the origin is not inert. in_circle(x, y, 0, 0, face_r) matches every
-     * touch within face_r of the panel's top-left corner, which is inside the
-     * game rect on all four.
+     * Swept over all four panels, and carrying one check no other arrangement
+     * needs: the two UNUSED discs sit at the origin, and a disc at the origin
+     * is NOT inert -- in_circle(x, y, 0, 0, face_r) matches every touch within
+     * face_r of the top-left corner, which is inside the game rect on all
+     * four.
      */
     {
         static const struct { int w, h; const char *name; } gn[] = {

@@ -17,19 +17,16 @@ static uint16_t fb[STUB_FB_MAX];
 static uint8_t  sram[8];
 /* KOBOY_STUB_ANIMATE: make every frame differ from every other one.
 
-   OFF by default and it must stay that way -- every other run in the suite
-   depends on the stub frame being static (koboy's dirty-rect diff suppresses
-   an unchanged frame entirely, so a static stub presents exactly once and the
-   existing `presented=` assertions are written against that).
+   OFF by default and it MUST stay that way -- every other run depends on the
+   stub frame being static, so it presents exactly once and the `presented=`
+   assertions are written against that.
 
-   It exists because present_divisor is otherwise INVISIBLE end to end: it
-   selects which core frames reach the panel, and a core whose frames are all
-   identical reaches the panel once whatever the divisor is. With this on, the
-   presented count is the divisor's own signature, which is what lets
-   tests/smoke_host.sh tell 1 from 8 rather than merely reading a log line
-   back. A WALKING pixel and not a flashing one, deliberately: a two-state
-   flash is identical on every even frame, so a divisor of 2 would present
-   once and the check would report the opposite of the truth. */
+   present_divisor is otherwise INVISIBLE end to end: a core whose frames are
+   all identical reaches the panel once whatever the divisor is. With this on
+   the presented count is the divisor's signature, which is what lets
+   tests/smoke_host.sh tell 1 from 8. A WALKING pixel and not a flashing one:
+   a two-state flash is identical on every even frame, so a divisor of 2 would
+   present once and the check would report the opposite of the truth. */
 static int      stub_animate = 0;
 static unsigned stub_anim_pos = 0;
 int stub_saw_mix_frames_disabled = 0;
@@ -96,20 +93,17 @@ int stub_ptr_count = -1;
 int stub_base_w = 160, stub_base_h = 144;
 int stub_max_w  = 160, stub_max_h  = 144;
 
-/* The other two things retro_get_system_av_info reports, poked the same way
-   and for the same reason -- both are consumed for the first time by the task
-   that gave koboy per-core pacing and non-square pixels.
+/* The other two retro_get_system_av_info fields, poked the same way.
 
-   stub_aspect 0.0 is not a placeholder: it is libretro's "no answer, assume
-   base_width/base_height", one shipped core (gearcoleco) really does report
-   it, and it is what every OTHER test in this binary keeps seeing, so the
-   fallback path in core_display_aspect is the default rather than a corner.
+   stub_aspect 0.0 is NOT a placeholder: it is libretro's "no answer, assume
+   base_width/base_height", gearcoleco really does report it, and it is what
+   every other test here sees -- so core_display_aspect's fallback path is the
+   default rather than a corner.
 
-   stub_fps is also readable from the environment as KOBOY_STUB_FPS, which
-   dlsym-poking cannot cover: tests/smoke_host.sh drives the real binary as a
-   subprocess and times it, and a wall-clock check is the only thing in this
-   project that can prove main.c actually PACES at the rate it resolved rather
-   than merely logging it. */
+   stub_fps is also readable as KOBOY_STUB_FPS, which dlsym-poking cannot
+   cover: tests/smoke_host.sh drives the real binary as a subprocess and TIMES
+   it, the only check that can prove main.c actually PACES at the rate it
+   resolved rather than merely logging it. */
 double stub_aspect = 0.0;
 double stub_fps    = 59.7275;
 /* The rate a MID-RUN SET_SYSTEM_AV_INFO announces, when that differs from the
@@ -133,27 +127,23 @@ static int stub_fps_late_env = 0;
 int stub_late_geometry = 0;
 static int stub_late_fired = 0;
 
-/* Base-only geometry churn, driven by the environment rather than by a global
-   because the test that needs it (tests/smoke_host.sh) runs koboy as a
-   SEPARATE PROCESS and cannot poke this binary's globals.
+/* Geometry churn, driven by the ENVIRONMENT rather than a global because
+   tests/smoke_host.sh runs koboy as a separate process.
 
    KOBOY_STUB_OSCILLATE=1 alternates base between max and half of max every 10
-   frames, leaving max alone -- the measured Game & Watch behaviour, where a
-   title flips between showing the whole unit and the LCD alone several times
-   a second. KOBOY_STUB_MAXGROW=1 instead announces a LARGER max once, at
-   frame 30, base moving with it. The pair exists so a test can assert both
-   directions: base churn must not provoke a re-fit in the layout whose rect
-   comes from max, a rect change MUST. Asserting only the first would pass
-   against a frontend that ignored geometry entirely.
+   frames, leaving max alone -- the measured Game & Watch behaviour.
+   KOBOY_STUB_MAXGROW=1 announces a LARGER max once, at frame 30, base moving
+   with it. The pair lets a test assert BOTH directions: base churn must not
+   provoke a re-fit in the layout whose rect comes from max, a rect change
+   MUST. Asserting only the first passes against a frontend that ignored
+   geometry entirely.
 
-   KOBOY_STUB_MAXONLY=1 is the third case and the one neither of those can
-   reach: max grows at frame 30 and BASE DOES NOT MOVE. In KOBOY_LAYOUT_DMG
-   the rect is sized from base, so the presentation is identical either side
-   of that announcement -- and a re-fit is still required, because
-   video_create's intermediate buffer is sized from max and a frame the
-   bounds guard now accepts would not fit the old one. It exists because a
-   main.c that compared everything about the resolved profile EXCEPT max
-   passed every other check in this project. */
+   KOBOY_STUB_MAXONLY=1 is the case neither reaches: max grows at frame 30 and
+   BASE DOES NOT MOVE, so the DMG presentation is identical either side -- and
+   a re-fit is STILL required, because video_create's buffer is sized from max
+   and a frame the bounds guard now accepts would not fit the old one. A main.c
+   that compared everything about the resolved profile EXCEPT max passed every
+   other check in this project. */
 static int stub_osc = -1, stub_maxgrow = -1, stub_maxonly = -1, stub_tick = 0;
 #define STUB_PLACEHOLDER_W 128
 #define STUB_PLACEHOLDER_H 128
@@ -175,24 +165,21 @@ int stub_sram_shrink_when_running = 0;
 static int stub_ran_since_load = 0;
 #define STUB_SRAM_SHRUNK 3
 
-/* Rotation, and this stub reproduces the two DIFFERENT core behaviours that
-   made it necessary, because they are different questions.
+/* Rotation, reproducing the two DIFFERENT core behaviours that made it
+   necessary, because they are different questions.
 
    stub_rotation >= 0 makes retro_load_game announce that many quarter turns
-   through RETRO_ENVIRONMENT_SET_ROTATION, which is what FinalBurn Neo does
-   (SetRotation, called from inside retro_load_game -- 3 for Galaga, 0 for
-   Donkey Kong Jr., out of the same .so).
+   through SET_ROTATION, which is what FBNeo does (3 for Galaga, 0 for Donkey
+   Kong Jr., out of the same .so).
 
-   stub_rotation_accepted records WHAT KOBOY ANSWERED, and that is the half
-   that is not decoration: beetle-wswan asks this same question and REMEMBERS
-   the answer (third_party/wswan/libretro.c, hw_rotate_enabled). On false it
-   keeps rotating in software; on true it stops, and hands over frames that
-   the frontend now owes a turn. A koboy that recorded the number but
-   answered false would look correct in every geometry assertion and would
-   present a WonderSwan sideways. Only the answer catches that.
+   stub_rotation_accepted records WHAT KOBOY ANSWERED, and that half is not
+   decoration: beetle-wswan asks the same question and REMEMBERS the answer
+   (hw_rotate_enabled). On false it keeps rotating in software; on true it
+   stops and hands over frames the frontend now owes a turn. A koboy that
+   recorded the number but answered false would look correct in every geometry
+   assertion and present a WonderSwan SIDEWAYS.
 
-   -1 (the default) never asks at all, which is every other core koboy ships
-   and every other test in this binary. */
+   -1 (the default) never asks, which is every other core koboy ships. */
 int stub_rotation = -1;
 int stub_rotation_accepted = -1;
 

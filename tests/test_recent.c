@@ -288,22 +288,19 @@ TEST_MAIN({
         CHECK(strcmp(recent_display(&rc, 0), "Pokemon Emerald.gba") == 0);
         CHECK(strcmp(recent_display(&rc, 1), "Advance Wars 2.gba") == 0);
 
-        /* THE BUG, reported from the device: re-touching entry 1 the way
-           main.c does -- with pointers INTO the list -- used to read them
-           AFTER the shift had overwritten that slot, so the moved entry took
-           its neighbour's name. The recent list showed "Pokemon Emerald"
-           twice, and the second row started Advance Wars when tapped.
+        /* THE BUG, reported from the device: re-touching entry 1 the way main.c
+           does -- with pointers INTO the list -- used to read them AFTER the
+           shift had overwritten that slot, so the moved entry took its
+           neighbour's name. The list showed "Pokemon Emerald" twice and the
+           second row started Advance Wars.
 
-           The display argument is gone (the name is derived now), so this
-           re-touch passes the one pointer that still aliases: recent_path
-           returns &rc.entries[1].path, which the shift below overwrites with
-           entry 0's path. Unsnapshotted, the moved entry would come back
-           naming Pokemon Emerald -- the same wrong row, now in both fields
-           rather than one.
+           The display argument is gone (the name is derived), so this passes
+           the one pointer that still aliases: recent_path returns
+           &rc.entries[1].path, which the shift overwrites with entry 0's.
+           Unsnapshotted, the moved entry comes back naming Pokemon Emerald.
 
-           Asserted on the DISPLAY of the moved entry, not merely on the
-           count: the count was always right, which is why nothing caught
-           this. */
+           Asserted on the DISPLAY of the moved entry, not the count: the count
+           was always right, which is why nothing caught this. */
         recent_touch(&rc, recent_path(&rc, 1));
         CHECK_EQ_INT(rc.count, 2);
         CHECK(strcmp(recent_path(&rc, 0), "roms/GBA/Advance Wars 2.gba") == 0);

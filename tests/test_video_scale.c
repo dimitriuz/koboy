@@ -91,19 +91,18 @@ TEST_MAIN({
         for (size_t i = 0; i < sizeof d; i++) CHECK_EQ_INT(d[i], 0x5A);
     }
 
-    /* THE ROW-REPEAT OPTIMISATION, checked against the same mapping written
-       out longhand with no memcpy shortcut -- the one part of the scaler that
-       is an optimisation rather than a definition, and therefore the one part
-       that can be wrong while every hand-computed case above still passes
-       (a shortcut that copies the WRONG previous row, or copies when the
-       source row actually advanced, only shows up on a real image).
+    /* THE ROW-REPEAT OPTIMISATION, against the same mapping written longhand
+       with no memcpy shortcut -- the one part of the scaler that is an
+       OPTIMISATION rather than a definition, and so the one part that can be
+       wrong while every hand-computed case above passes (a shortcut copying
+       the WRONG previous row, or copying when the source row advanced, only
+       shows up on a real image).
 
-       Run at the measured LCD geometry (654x396 Mickey Mouse -> the 1264x765
-       rect config_resolve_profile produces for it on a 1264x1680 panel) and
-       at a downscale, so both the repeat-heavy and the skip-heavy directions
-       are covered. The destination is guarded on both sides: a stride wider
-       than dst_w must leave the pad untouched, and nothing may run past the
-       end. */
+       At the measured LCD geometry (654x396 Mickey Mouse -> the 1264x765 rect
+       on a 1264x1680 panel) and at a downscale, covering the repeat-heavy and
+       skip-heavy directions. The destination is guarded on both sides: a
+       stride wider than dst_w must leave the pad untouched, and nothing may
+       run past the end. */
     {
         static uint8_t src[654 * 396];
         for (int y = 0; y < 396; y++)

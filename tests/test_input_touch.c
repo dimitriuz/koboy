@@ -435,20 +435,16 @@ TEST_MAIN({
         CHECK_EQ_INT(input_state(li)->buttons, 0);
         input_feed(li, up, 2);
 
-        /* THE PROBE THAT MAKES THE LINE ABOVE MEAN SOMETHING.
-           (0,397) is the game rect's own corner: no DMG control lives there
-           either, so `buttons == 0` holds whether or not the faceplate's
-           zones are still live and the check cannot fail. Found by scanning
-           the panel: 12864 points press a DMG control and nothing under LCD;
-           (1032,1020) is one of them -- dead centre of the DMG A button
-           (buttons 0x100 in the DMG layout), and under LCD it is the gap
-           between the game rect's bottom edge (247+765 = 1012) and the top
-           of the control strip (1260), where nothing at all is drawn.
+        /* THE PROBE THAT MAKES THE LINE ABOVE MEAN SOMETHING. (0,397) is the
+           game rect's corner, where no DMG control lives either, so
+           `buttons == 0` holds whether or not the faceplate's zones are live
+           -- that check CANNOT FAIL. Found by scanning the panel: 12864 points
+           press a DMG control and nothing under LCD, and (1032,1020) is one --
+           dead centre of the DMG A button (0x100), and under LCD the gap
+           between the rect's bottom (247+765 = 1012) and the strip (1260).
 
-           So this asserts what the comment above claims: feed the same touch
-           under LCD and no joypad bit appears. Mutant: delete the
-           KOBOY_LAYOUT_LCD branch in input.c's recompute() so LCD falls
-           through to the faceplate's zones -- this line then reports 0x100
+           MUTANT: delete the KOBOY_LAYOUT_LCD branch in recompute() so LCD
+           falls through to the faceplate's zones -- this line reports 0x100
            and fails, while the corner probe above stays green. */
         koboy_ev dmg_a[5] = {
             { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
@@ -868,21 +864,16 @@ TEST_MAIN({
 
     /* ============ the LCD strip under a CONSOLE: the label IS the contract
      *
-     * SNES and Mega Drive were moved to this layout because their pads do not
-     * fit the DMG faceplate, and the strip's discs are labelled per system as
-     * a result. That makes a new thing checkable, and it is the thing that
-     * actually matters to a player: TAPPING THE DISC THAT SAYS "C" MUST
-     * PRODUCE THE MEGA DRIVE'S C.
+     * TAPPING THE DISC THAT SAYS "C" MUST PRODUCE THE MEGA DRIVE'S C.
      *
-     * The geometry below is not under test -- the block above already pins
-     * every zone. What is under test is the AGREEMENT between the label
-     * config_lcd_pad_for_rom writes and the bit input.c reports at that
-     * control, against the core's own descriptor table. Those two live in
-     * different files and nothing else compares them: a label table with two
-     * fields transposed draws a perfectly sensible strip and silently swaps
-     * two buttons.
+     * The geometry is not under test -- the block above pins every zone. What
+     * is under test is the AGREEMENT between the label config_lcd_pad_for_rom
+     * writes and the bit input.c reports at that control, against the core's
+     * own descriptor table. Those live in different files and nothing else
+     * compares them: a label table with two fields transposed draws a
+     * perfectly sensible strip and silently swaps two buttons.
      *
-     * Built exactly the way src/main.c builds it for a loaded ROM -- layout,
+     * Built exactly the way main.c builds it for a loaded ROM -- layout,
      * labels and rect sizing all from the extension -- so this also catches a
      * main.c that set one of the three and not the others.
      */

@@ -2,29 +2,26 @@
 #define KOBOY_TESTS_FAKEPLAT_H
 /* A koboy_platform a test can assert against.
  *
- * WHY THIS EXISTS. Until src/screens.c was split out of main.c, everything
- * that took a koboy_platform * lived in the one file no test binary links, so
- * the only instrument that could reach a screen was tests/smoke_host.sh
- * driving the whole binary through --ui-script and reading stdout. That
- * observes an exit code and a log line. It cannot say what was DRAWN, or that
- * the panel was refreshed FULL rather than FAST, or how many times.
+ * WHY IT EXISTS: until screens.c was split out, everything taking a
+ * koboy_platform * lived in the one file no test binary links, so the only
+ * instrument that could reach a screen was tests/smoke_host.sh reading an exit
+ * code and a log line. That cannot say what was DRAWN, or that the panel was
+ * refreshed FULL rather than FAST, or how many times.
  *
- * A HEADER OF static FUNCTIONS AND NOT A .c FILE, and that is forced rather
- * than chosen: the Makefile's test rule compiles `$< $(SRC)`, so a shared
- * a shared .c file under tests/ is never compiled into anything. Both
- * tests/test.h and tests/pgm.h are
- * the same shape for the same reason.
+ * A HEADER OF static FUNCTIONS AND NOT A .c FILE, forced rather than chosen:
+ * the Makefile's test rule compiles `$< $(SRC)`, so a shared .c under tests/
+ * is never compiled into anything. tests/test.h and tests/pgm.h are the same
+ * shape for the same reason.
  *
- * IT IS DELIBERATELY DUMB. A fake platform that grows behaviour becomes a
- * second implementation nobody maintains, and one that LIES is worse than
- * none -- so it records and it bounds, and it does not decide anything. Every
- * field below is read by a live assertion in tests/test_screens.c.
+ * DELIBERATELY DUMB. A fake platform that grows behaviour becomes a second
+ * implementation nobody maintains, and one that LIES is worse than none -- so
+ * it records and bounds and decides nothing. Every field below is read by a
+ * live assertion in tests/test_screens.c.
  *
- * THE BOUND IS THE POINT OF should_quit. screen_list's unscripted branch
- * polls until something is selected or the platform says stop; a test that
- * forgot to arm `quit_after_polls` would not fail, it would HANG. So the
- * default is armed by fakeplat_init and a test has to go out of its way to
- * unarm it. */
+ * THE BOUND IS THE POINT OF should_quit: screen_list's unscripted branch polls
+ * until something is selected or the platform says stop, so a test that forgot
+ * to arm `quit_after_polls` would not fail, it would HANG. fakeplat_init arms
+ * it by default and a test has to go out of its way to unarm it. */
 #include "input.h"          /* must precede platform_if.h: declares struct koboy_input */
 #include "platform_if.h"
 

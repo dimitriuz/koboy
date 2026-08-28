@@ -59,21 +59,16 @@ TEST_MAIN({
     CHECK(leftover == NULL);
     if (leftover) fclose(leftover);
 
-    /* ATOMICITY, ASSERTED POSITIVELY.
+    /* ATOMICITY, ASSERTED POSITIVELY. The check above used to be all there
+       was, and mutating safefile.c's "%s.tmp" to "%s" -- no temp file, no
+       fsync, no rename -- left the whole suite green, because "no .tmp left
+       behind" is equally true of an implementation that never makes one.
 
-       The check above is not enough on its own and used to be all there was:
-       mutating safefile.c's "%s.tmp" to "%s" -- no temp file, no fsync, no
-       rename, a plain truncating write straight onto the destination -- left
-       the whole suite green, because "no .tmp left behind" is equally true of
-       an implementation that never makes one.
-
-       So make the temp path IMPOSSIBLE to open and watch what happens. A
-       DIRECTORY at "<path>.tmp" cannot be fopen'd for writing, so an atomic
-       implementation must fail the write and, crucially, leave the existing
-       destination byte-for-byte intact -- which is the whole property. A
-       non-atomic one opens the destination directly, succeeds, and destroys
-       the previous contents. Both halves are asserted: the return value AND
-       the surviving file. */
+       So make the temp path IMPOSSIBLE to open: a DIRECTORY at "<path>.tmp"
+       cannot be fopen'd for writing, so an atomic implementation must fail the
+       write AND leave the destination byte-for-byte intact. A non-atomic one
+       opens the destination directly, succeeds, and destroys it. Both halves
+       are asserted: the return value and the surviving file. */
     {
         CHECK_EQ_INT(mkdir(tmp, 0700), 0);
 

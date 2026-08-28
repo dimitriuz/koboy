@@ -9,19 +9,16 @@
 #include <unistd.h>
 
 /* ------------------------------------------------------------------------
-   AN INDEPENDENT DECODER, and independence is the whole point of this file.
-   Every routine below is written from the PNG/zlib specifications rather
-   than from src/png.c: the CRC is computed BITWISE where the encoder uses a
-   table, and the Adler32 is a straight two-accumulator loop where the
-   encoder folds it into its emit path. A test that reused the encoder's own
-   helpers would agree with it about a wrong answer, which is the exact shape
-   of "a test that passes whether or not the code it guards is correct" this
-   project keeps having to fix.
+   AN INDEPENDENT DECODER, and the independence is the point. Every routine
+   below is written from the PNG/zlib SPECIFICATIONS rather than from
+   src/png.c: the CRC is computed BITWISE where the encoder uses a table, and
+   the Adler32 is a two-accumulator loop where the encoder folds it into its
+   emit path. A test reusing the encoder's own helpers would agree with it
+   about a wrong answer.
 
-   tests/smoke_host.sh puts the same bytes through a REAL zlib (python3) end
-   to end. This decoder is here because it runs everywhere `make test` runs,
-   and because it can point at which field is wrong instead of just saying
-   "not a PNG".
+   tests/smoke_host.sh puts the same bytes through a REAL zlib end to end.
+   This decoder is here because it runs everywhere `make test` runs and can
+   point at which FIELD is wrong instead of saying "not a PNG".
    ------------------------------------------------------------------------ */
 
 static uint32_t bitwise_crc32(const uint8_t *p, size_t n)

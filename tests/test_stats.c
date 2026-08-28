@@ -32,22 +32,22 @@ TEST_MAIN({
     CHECK(strstr(buf, "core=") != NULL);
     CHECK(strstr(buf, "refresh=") != NULL);
 
-    /* Must not overrun a short buffer -- and this has to be PROVED, not
-       merely implied by a strlen that a runaway sprintf would satisfy anyway.
+    /* Must not overrun a short buffer, and that has to be PROVED rather than
+       implied by a strlen a runaway sprintf would satisfy anyway.
 
-       The old version passed a bare char tiny[8] and only checked that the
-       result fit. Mutating stats.c's snprintf to sprintf -- a 66-byte overrun
-       of an 8-byte buffer -- left this file at 13 checks and 0 failures: the
-       overrun ran off into whatever followed on the stack, and the assertion
-       could only ever have failed by the process happening to crash. A test
-       that can only fail via undefined behaviour is not a test.
+       The old version passed a bare char tiny[8] and only checked the result
+       fit. Mutating stats.c's snprintf to sprintf -- a 66-byte overrun of an
+       8-byte buffer -- left this file at 13 checks and 0 failures: the overrun
+       ran off into whatever followed on the stack, so the assertion could only
+       fail by the process happening to crash. A test that can only fail via UB
+       is not a test.
 
-       So the short buffer is a WINDOW into a larger, fully owned object,
-       exactly as tests/test_text.c's GW/GH/PAD block does it. Overflow is
-       positive only (stats_format writes forward from `out`), the padding
-       belongs to the same array, and reading it back is defined on every
-       libc -- so an overrun is observed as changed padding rather than as a
-       segfault that may or may not happen. */
+       So the short buffer is a WINDOW into a larger, fully owned object, as
+       tests/test_text.c's GW/GH/PAD block does it. Overflow is positive only
+       (stats_format writes forward), the padding belongs to the same array,
+       and reading it back is defined on every libc -- so an overrun is
+       observed as CHANGED PADDING rather than a segfault that may or may not
+       happen. */
     {
         enum { WIN = 8, PAD = 128 };
         static char win[WIN + PAD];

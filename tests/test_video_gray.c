@@ -194,47 +194,41 @@ TEST_MAIN({
         CHECK_EQ_INT((int)g, (int)KOBOY_GRAY_VALUE);
     }
 
-    /* THE GAME GEAR IS A COLOUR SYSTEM AND MUST NOT BE GIVEN THE GAME BOY'S
-       TREATMENT, and this is the check that says so.
+    /* THE GAME GEAR IS A COLOUR SYSTEM AND MUST NOT GET THE GAME BOY'S
+       TREATMENT.
 
-       The trap is specific and it is already half-sprung elsewhere in this
-       codebase: a Game Gear frame is 160x144, EXACTLY the Game Boy's
-       geometry, and config_resolve_profile really does key its scale default
-       on that geometry (`is_game_boy`). For SCALE that is right -- 5 was
-       measured for 160x144 and a Game Gear looks good at it. For COLOUR it
-       would be a disaster: the whole point of the gray_map work is that the
-       DMG's four fixed shades need no mapping and a colour system does, so an
-       exemption keyed on 160x144 would silently route every Game Gear title
-       through the Game Boy's identity path and render Sonic's sky black.
+       The trap is specific and half-sprung elsewhere already: a Game Gear
+       frame is 160x144, EXACTLY the Game Boy's geometry, and
+       config_resolve_profile really does key its scale default on that
+       (`is_game_boy`). For SCALE that is right. For COLOUR it would be a
+       disaster: the gray_map work exists because the DMG's four fixed shades
+       need no mapping and a colour system does, so an exemption keyed on
+       160x144 would route every Game Gear title through the identity path and
+       render Sonic's sky black.
 
-       Two assertions, both of which a future exemption would have to break:
+       Two assertions a future exemption would have to break:
 
-       1. Geometry does not reach the reduction at all. The same colour
-          reduces to the same grey through a Game-Boy-shaped pipeline
-          (max 160x144) and a Game-Gear-shaped one (base 160x144, max
-          284x240 -- the numbers Genesis Plus GX actually reports, measured).
-          Read out of the rendered buffer, not from the scalar helper, so an
-          exemption applied anywhere in video_create/video_submit is caught
-          and not just one in video_rgb565_to_gray.
+       1. Geometry does not reach the reduction at all. The same colour reduces
+          to the same grey through a Game-Boy-shaped pipeline (max 160x144) and
+          a Game-Gear-shaped one (base 160x144, max 284x240 -- what Genesis
+          Plus GX reports, measured). Read out of the RENDERED BUFFER, not the
+          scalar helper, so an exemption anywhere in video_create/video_submit
+          is caught.
 
-       2. The presentation the Game Gear ends up with, stated as a number.
-          THIS CLAIM HAS BEEN WRONG TWICE and both corrections are worth
-          keeping, because the shape of the mistake was the same each time:
-          a number that came out right by arithmetic, with the reasoning in a
-          comment and nothing watching it.
-            - It was "800x720, pixel for pixel the Game Boy's scale-5
-              picture, so a Game Gear needs no exemption". True until the
-              rect started being sized from base rather than max (ae03e76).
-            - It became 960x864, asserted below. True until `pixel_aspect`
-              made the rect 192 columns wide, at which point the auto-fit
-              went to 6 and the DEVICE picture became 1152x864 -- 1.73x the
-              area of the Game Boy's, on the same 160x144 frame, and slow
-              enough that the owner reported it (78.7% of full speed on
-              Sonic Chaos, measured).
-          So the Game Gear DID need an exemption in the end, and it is a
-          `ceiling` in g_core_by_ext like the SNES's -- asserted separately
-          below, because the two profiles in this block are built with
-          config_defaults and carry no ceiling at all.
+       2. The presentation the Game Gear ends up with, as a number. THIS CLAIM
+          HAS BEEN WRONG TWICE, the same way each time -- a number right by
+          arithmetic, with the reasoning in a comment and nothing watching it:
+            - "800x720, pixel for pixel the Game Boy's scale-5 picture, so no
+              exemption is needed". True until the rect came from base rather
+              than max (ae03e76).
+            - Then 960x864. True until `pixel_aspect` made the rect 192 columns
+              wide, the auto-fit went to 6 and the DEVICE picture became
+              1152x864 -- 1.73x the Game Boy's area on the same 160x144 frame,
+              and slow enough to be reported (78.7% of full speed on Sonic
+              Chaos, measured).
+          So the Game Gear DID need an exemption: a `ceiling` in g_core_by_ext
+          like the SNES's, asserted separately below because the profiles here
+          are built with config_defaults and carry none.
 
        MUTANT-VERIFIED: adding `if (p->max_w == KOBOY_GB_W && p->max_h ==
        KOBOY_GB_H) map = KOBOY_GRAY_LUMA;` to video_create makes the first
@@ -269,21 +263,18 @@ TEST_MAIN({
                be what is being read. */
             out[i] = video_buffer(v)[(size_t)(fr.y + fr.h / 2) * video_stride(v)
                                      + fr.x + fr.w / 2];
-            /* Claim 2 USED TO BE "both end up as the same 800x720 picture",
-               and that stopped being true when the reserved rect started
-               being sized from the frame a core actually draws rather than
-               from its max (config.c, where rect_w is computed). The Game
-               Boy is unchanged -- its configured 5 against a rect exactly
-               the frame's size, 800x720. The Game Gear's rect used to come
-               from Genesis Plus GX's 284x240 max, which is a Master System
-               frame the Game Gear never renders; from its own 160x144 base
-               at 6:5 pixels it now fits 960x864.
+            /* Claim 2 used to be "both end up as the same 800x720 picture",
+               which stopped being true when the rect started being sized from
+               the frame a core actually draws. The Game Boy is unchanged (its
+               configured 5 against a rect exactly the frame's size). The Game
+               Gear's rect used to come from GPGX's 284x240 max -- a Master
+               System frame the Game Gear never renders -- and from its own
+               160x144 base at 6:5 pixels it now fits 960x864.
 
-               The claim this block is actually making is the one below --
-               that the two are the same GREY -- and it never depended on
-               them being the same size. The sizes are asserted anyway,
-               separately, because "the Game Gear got bigger" is a visible
-               change somebody should have to justify rather than discover. */
+               The claim below is that the two are the same GREY, which never
+               depended on their being the same size. The sizes are asserted
+               separately because "the Game Gear got bigger" is a visible
+               change somebody should justify rather than discover. */
             CHECK_EQ_INT(fr.w, i == 0 ? 800 : 960);
             CHECK_EQ_INT(fr.h, i == 0 ? 720 : 864);
             video_destroy(v);
