@@ -2,18 +2,15 @@
 #define KOBOY_SCREENS_H
 /* The full-panel UI screens: one list widget driven six different ways.
  *
- * WHY THESE ARE NOT IN main.c ANY MORE, and it is not that main.c was long.
- * main.c is filtered out of $(SRC) in the Makefile, so no test binary links
- * it -- it was the highest-churn file in the project (56 of the last 200 src
- * commits) and the only one with zero executed coverage, which is the same
- * sentence four separate FOLLOWUPS entries were written to say. Everything
- * here goes through the koboy_platform vtable and names no platform_kobo_* /
- * platform_sdl_* symbol, which is the one condition a file has to meet to
- * link into all 28 test binaries. That is the whole argument for the split.
+ * WHY THESE ARE NOT IN main.c, and it is not that main.c was long: main.c is
+ * filtered out of $(SRC), so no test binary links it -- the highest-churn file
+ * in the project (56 of the last 200 src commits) and the only one with zero
+ * executed coverage. Everything here goes through the koboy_platform vtable
+ * and names no platform_kobo_* / platform_sdl_* symbol, which is the one
+ * condition for linking into every test binary.
  *
- * Each function's rationale stayed with its body in screens.c rather than
- * being copied up here: those comments are the asset, and a header that
- * paraphrases them is a second copy that goes stale.
+ * Each function's rationale stays with its body in screens.c; a header that
+ * paraphrases it is a second copy that goes stale.
  */
 #include "input.h"          /* must precede platform_if.h: declares struct koboy_input */
 #include "platform_if.h"
@@ -28,22 +25,17 @@
 /* The process-wide "stop now" flag, set by main.c's SIGINT/SIGTERM handler
    and polled by every screen loop below alongside pf->should_quit().
 
-   DEFINED IN screens.c AND NOT IN main.c, which looks backwards until you
-   remember what this file is for: screens.c has to link into 28 test
-   binaries that contain no main.c at all, so an extern whose definition
-   lived there would not link. main.c's handler remains its only writer in
-   the shipped binary. A test may set it to 1 to prove a screen loop honours
-   it, and MUST set it back to 0 afterwards -- it is a global, and the test
-   binaries run every case in one process. */
+   DEFINED IN screens.c AND NOT IN main.c: screens.c links into test binaries
+   containing no main.c, so an extern defined there would not link. main.c's
+   handler is still its only writer in the shipped binary. A test may set it to
+   1 to prove a screen loop honours it and MUST set it back to 0 -- it is a
+   global, and each test binary runs every case in one process. */
 extern volatile sig_atomic_t koboy_stop;
 
-/* MOTION sits BELOW FRAMES, and SCREENSHOT below MOTION: the order is not
-   free, because tests/smoke_host.sh drives this menu by hardcoded pixel
-   coordinates derived from the row index, so a row inserted ABOVE an existing
-   one silently strands every tap below it outside the row it names. Adding at
-   the end of the settings group costs one comment update per tap below it and
-   nothing else -- and SCREENSHOT going in above CHOOSE ROM moved every one of
-   those, which is what that sentence is worth. */
+/* THE ORDER IS NOT FREE: tests/smoke_host.sh drives this menu by hardcoded
+   pixel coordinates derived from the row index, so a row inserted ABOVE an
+   existing one silently strands every tap below it outside the row it names.
+   Add at the END of the settings group. */
 enum {
     MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_FRAMES, MENU_MOTION,
     MENU_SHOT, MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
