@@ -631,6 +631,34 @@ are coarser here than on the hardware. Nothing is unplayable; nothing is
 exact either. A touch d-pad that reported an ANGLE rather than a bitmask
 could feed the analog axes, which is a real feature and not a small one.
 
+### 107. The DMG pill is drawn one column narrower than its touch zone
+
+`chrome.c`'s `box()` and `input.c`'s `in_rect()` disagree by one column on an
+even width: the drawn pill covers `[cx-w/2, cx+w/2-1]`, exactly `w`; the hit
+test covers `[cx-w/2, cx+w/2]`, `w+1`. Rows agree (both inclusive, `h+1`), so
+`box()` is also internally asymmetric -- inclusive in rows, exact-width in
+columns. START, SELECT and MENU are the affected controls.
+
+**It is one pixel and it is filed, not fixed.** A touch zone deliberately a
+shade more generous than the drawn control is a defensible choice on a
+finger-driven panel; nothing anywhere records it either way, and the row/column
+inconsistency is what makes it look accidental rather than chosen. The owner
+has not ruled on it.
+
+The category is the useful part, and it is bigger than the pixel: nothing
+asserts *"a touch at the centre of the DRAWN A disc reports `KOBOY_BTN_A`"*.
+`tests/test_input_touch.c` never calls `chrome_render`; `tests/test_chrome.c`
+never hit-tests a rendered buffer, and says the split is deliberate. What both
+sides assert is "a touch at the layout's A permille reports BTN_A" -- derived
+INDEPENDENTLY on each side, so it cannot catch the two drifting apart. Do not
+"fix" the pixel before that invariant exists, because until then there is no
+way to see whether the fix was right.
+
+The d-pad is the larger instance of the same split and IS deliberate:
+`chrome.c` draws a plus, `input.c` claims a full circle, so the diagonal
+quadrants are live and undrawn. `chrome.h` acknowledges the one-row frame
+difference and not the diagonals.
+
 ### 62. Six-button boards lose their shoulder buttons, and Defender loses Reverse
 
 Counted across all 227 romsets: 45 boards bind JOYPAD_L, 48 bind R, 45/46
@@ -874,6 +902,25 @@ framing change: a version byte, or a length that is allowed to vary. Nobody
 needs it yet. Written down so that "why is this field here?" has an answer
 other than "nobody noticed".
 
+### 108. The empty-directory message still names three extensions out of twenty
+
+`src/main.c`: `"no .gb, .gbc or .mgw files in\n%s"`. koboy has claimed twenty
+extensions since that string was written, so a user whose `roms/` holds only
+`.md` files is told, on a panel with no terminal, that there are no Game Boy
+or Game & Watch files there -- which is true and is not the question they
+asked. It is the wording `--message` exists to deliver, and `notify()`/
+`fatal()` pick between two variants of it depending on whether a game has
+already run.
+
+Surfaced by `make lint`, indirectly: clang's `-Wformat-nonliteral` points at
+the two call sites (the format string is a variable holding one of two
+literals, which is fine), and reading them is what found the text. Not fixed
+here because it sits in `main.c`, which the extraction work is about to move.
+
+The fix is not "list twenty extensions" -- that is a sentence nobody reads.
+"no games in\n%s" says the same thing and cannot go stale, and
+`packaging/roms-README.txt` is where the list belongs and already is.
+
 ### 63. The `.zip` row will claim a zipped ROM for any other system
 
 `config_core_for_rom` routes every `.zip` to FinalBurn Neo, which is correct
@@ -932,6 +979,54 @@ nobody ships plus CD emulation and a different save path. None of these is a
 bug report; if one is reopened it should be reopened as a decision.
 
 ## Coverage gaps: no automated test exists for these
+
+### 105. `TEST_MAIN` makes every test body invisible to `gcov`
+
+`make coverage` (added 2026-08-28) gives a real per-file number for `src/` and
+**nothing at all for `tests/`**, and the cause is one macro. `tests/test.h`:
+
+```c
+#define TEST_MAIN(...) int main(void) { __VA_ARGS__; ... }
+```
+
+Every test file is `TEST_MAIN({ ...600 lines... })`, so gcc attributes the
+whole body to the macro's expansion point. Measured on
+`tests/test_video_aspect.c`: gcov reports **ten** instrumented lines for a
+663-line file, the last of them `4636*: 53: TEST_MAIN({` -- one count for the
+entire test.
+
+**Verified, not inferred.** The same file with `TEST_MAIN({` hand-expanded to
+`int main(void) {` gives full per-line and per-branch data: the 1200-iteration
+sweep at line 630 reports 1200, and `misses++` at 639 reports `#####`.
+
+Why it matters: the architecture review's whole argument for a coverage target
+was that it "mechanically finds the zero-iteration loop class" -- the shape of
+`tests/test_video_aspect.c`'s sweep and `tests/test_text.c`'s glyph
+comparison. **It cannot, as the harness is written**, and both of those were
+found by a human reading code instead. Coverage of `src/` is unaffected and
+correct; this is only about seeing inside a test.
+
+The fix is a `TEST_BEGIN` / `TEST_END` pair instead of one variadic macro,
+which is a mechanical edit of all 28 test files and one header -- cheap, but a
+28-file diff, so it wants its own commit and not a corner of a tooling one.
+Note the second prize: branch coverage inside tests would also show the
+`if (a2 == UI_SELECT)`-gated assertion class directly.
+
+### 106. `config_profile_presentation_same` is at 0%, measured
+
+The review predicted it (§2.8) and `make coverage` confirms it: `src/config.c`
+lines 1594-1603, the whole function, are never executed by any of the 28 test
+binaries. Its callers are `main.c` (not linked into any test binary) and two
+*comments* in `tests/smoke_host.sh`.
+
+What is unpinned is not the comparison but the deliberate OMISSION of
+`base_w`/`base_h` from it, argued at length in `config.h`. Adding those two
+fields would reintroduce the Game & Watch full-repaint-at-video-rate
+regression and nothing anywhere would go red. It is a pure function of two
+structs; a test is a dozen lines and needs no fixture.
+
+Nine of the twelve uncovered lines in `config.c` are this function. The other
+three are `fclose`/`rename` failure paths in the ini writer.
 
 ### 18. `MENU -> CHOOSE ROM` and `MENU -> QUIT` are driven by nothing
 
@@ -1015,6 +1110,31 @@ function's return value is identical whether the line is there or not --
 only a term-by-term audit finds it.
 
 ## Decisions on record, so nobody re-derives them
+
+### 109. What `make lint` reports with its optional flags on, and why they are off
+
+Three classes are real, none is a defect, and each is here so the next person
+to widen `LINTFLAGS` does not re-derive them:
+
+- **80 `-Wshadow` warnings, every one in `tests/`.** `src/` is clean on all
+  three lint groups. They are the `int i` reused in a nested block that a
+  600-line test body is made of. `-Wshadow` is therefore ON for `src/` and OFF
+  for `tests/`; `make lint LINT_TEST_EXTRA=-Wshadow` shows them. Fixing them
+  is 80 renames in six files for no defect, and it would collide with whatever
+  #105 does to those files.
+- **4 `-Wmissing-format-attribute` on `main.c`'s `say`, `message_v`, `notify`
+  and `fatal`.** They are printf wrappers with no `format(printf, n, m)`
+  attribute, so no call site's format string is checked. Adding the four
+  attributes was TRIED on a scratch copy and both gcc and clang then report
+  **zero** new warnings across the host and Kobo builds -- so it is insurance
+  against a future call site, not a fix for a present bug, which is why it did
+  not go into a tooling commit. Worth doing when `main.c` is next opened.
+- **1 `-Wformat-truncation` on `src/probe.c`, from gcc and not clang.**
+  `snprintf(path, sizeof path, "/proc/%s/comm", de->d_name)` into `char[64]`,
+  where `d_name` can be 256. It is a false positive -- the loop has already
+  refused any entry whose name does not start with a digit, and a PID is at
+  most ten characters -- and it needs `-O1` or better, so `make lint`
+  (`-fsyntax-only`) never sees it and `make kobo` has always printed it.
 
 ### 46. The shipped `gray_map` default was chosen on a host monitor, and the owner's device disagrees with it
 
