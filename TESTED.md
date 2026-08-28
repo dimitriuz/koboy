@@ -1,10 +1,9 @@
 # Tested devices
 
 koboy derives everything it can from the hardware at runtime --- panel size,
-stride, framebuffer depth, the touch layer's raw range and rotation, whether the
-fast DU4 waveform is available --- so it has a fair chance of working on a Kobo
-nobody has tried. "A fair chance" is not the same as tested, and this file is
-the difference.
+stride, framebuffer depth, the touch layer's raw range and rotation, whether
+DU4 is available --- so it has a fair chance on a Kobo nobody has tried. A fair
+chance is not the same as tested, and this file is the difference.
 
 **Exactly one device is verified.** Every other Kobo is *unverified*: not known
 broken, just unmeasured. If you run koboy on one, please add a row.
@@ -13,22 +12,21 @@ broken, just unmeasured. If you run koboy on one, please add a row.
 |---|---|---|---|---|---|---|---|
 | Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, KEY_F23(193)/KEY_F24(194) --- the shipped default pair, though this device's own calibration assigned them the other way round (`key_a = 194`) | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
 
-That row was verified with the shipped defaults, which is the point of shipping
-them: `waveform_fast = auto`, `full_refresh_permille = 1000` (never force a
-flash), `cleanup_interval = 0` and `cleanup_max_ms = 0` (no periodic flash --- 
-AUTO already erases where erasing is needed), and `dpad_mode = cross`. A full
-game of Tetris on those settings: controls responsive, **no flashing at all**,
-and slight ghosting the player was happy to live with. The earlier defaults
-(`450` / `60` / `3000`) were mitigations for a forced-DU4 pipeline and, once
-measured, turned out to cause every flash between them while fixing nothing.
+Verified with the SHIPPED defaults, which is the point of shipping them:
+`waveform_fast = auto`, `full_refresh_permille = 1000` (never force a flash),
+`cleanup_interval = 0` and `cleanup_max_ms = 0` (AUTO already erases where
+erasing is needed), `dpad_mode = cross`. A full game of Tetris on those:
+controls responsive, **no flashing at all**, slight ghosting the player was
+happy with. The earlier defaults (`450` / `60` / `3000`) were mitigations for a
+forced-DU4 pipeline and, once measured, caused every flash between them while
+fixing nothing.
 
 ### NES and Pokemon Mini: NOT RUN ON THE DEVICE, 2026-08-26
 
-Both systems were added and wired on the same day and **neither has been on
-a Kobo**. Everything below was measured on the x86_64 dev host with
-`scripts/probe_core.c` against ROMs from a real collection; the ARM cores
-were cross-built and passed `scripts/verify-core.sh` (libm + libc only, for
-both), and that is the whole of the device-side evidence.
+Both wired on the same day and **neither has been on a Kobo**. Measured on the
+x86_64 dev host with `scripts/probe_core.c` against ROMs from a real
+collection; the ARM cores cross-built and passed `scripts/verify-core.sh`
+(libm + libc only, both), and that is the whole of the device-side evidence.
 
 | | NES (fceumm) | Pokemon Mini (PokeMini) |
 |---|---|---|
@@ -44,8 +42,8 @@ both), and that is the whole of the device-side evidence.
 | ARM closure | `libm.so.6`, `libc.so.6` | `libm.so.6`, `libc.so.6` |
 | ARM size, stripped | 2.2 MB | 217 KB |
 
-Neither reports a placeholder geometry, unlike gw-libretro -- but that was
-established by asking, which is the only reason it is written here.
+Neither reports a placeholder geometry, unlike gw-libretro -- established by
+asking, which is the only reason it is written here.
 
 Resolved presentation, from `config_resolve_profile` at the shipped
 `scale = 5`, with `video_submit` estimated from #23's 4.7 ms + 20.7 ns/px:
@@ -65,12 +63,11 @@ still one of the nine uncapped systems, `docs/FOLLOWUPS.md` #73 and #78.
 
 ### WonderSwan and Neo Geo Pocket: NOT RUN ON THE DEVICE, 2026-08-26
 
-Both systems were added and wired on the same day and **neither has been on
-a Kobo**. Everything below was measured on the x86_64 dev host with
-`scripts/probe_core.c` and a throwaway harness driving koboy's own
-`config.c`/`video.c`/`chrome.c` against ROMs from a real collection; the ARM
-cores were cross-built and passed `scripts/verify-core.sh`, and that is the
-whole of the device-side evidence.
+Both wired on the same day and **neither has been on a Kobo**. Measured on the
+x86_64 dev host with `scripts/probe_core.c` and a throwaway harness driving
+koboy's own `config.c`/`video.c`/`chrome.c` against ROMs from a real
+collection; the ARM cores cross-built and passed `scripts/verify-core.sh`, and
+that is the whole of the device-side evidence.
 
 | | WonderSwan (beetle-wswan) | Neo Geo Pocket (RACE) |
 |---|---|---|
@@ -91,26 +88,24 @@ Neither reports a placeholder geometry, unlike gw-libretro -- established by
 asking, which is the only reason it is written here.
 
 **The rotation question, settled by measurement.** A WonderSwan has two grips
-and many titles are played with the console on its side. beetle-wswan does not
-detect that per title (the header bit that would is `#if 0`'d out upstream)
-and does not report rotated geometry at load. What it does is offer
-`wswan_rotate_display = manual`, which toggles rotation on SELECT, and
-`wswan_rotate_keymap = auto`, which swaps the button map to match. koboy
-answers neither option, so both keep those defaults, and that turns out to be
-exactly right: koboy returns false for `SET_ROTATION` (it is an unknown
-command), so the core rotates the pixels itself and announces `144x224` base
-with max unchanged -- which main.c's base-only branch already absorbs without
-re-fitting anything. Verified end to end: GunPey renders sideways in a 896x576
-box, and after one SELECT press upright in a 576x896 one, with no koboy change
-at all.
+and many titles are played on its side. beetle-wswan does not detect that per
+title (the header bit that would is `#if 0`'d out upstream) and does not report
+rotated geometry at load; it offers `wswan_rotate_display = manual`, toggling
+rotation on SELECT, and `wswan_rotate_keymap = auto`, swapping the button map
+to match. koboy answers neither option so both keep those defaults, which turns
+out to be exactly right: koboy returns false for `SET_ROTATION`, so the core
+rotates the pixels itself and announces `144x224` base with max unchanged --
+which main.c's base-only branch absorbs without re-fitting. Verified end to
+end: GunPey renders sideways in a 896x576 box and, after one SELECT press,
+upright in a 576x896 one, with no koboy change at all.
 
 **What the rotation costs.** `wswan_rotate_keymap = auto` also moves the
-console's own A and B onto `JOYPAD_L` / `JOYPAD_R`, which the DMG faceplate
-had no buttons for. Measured on a real title: `Kaze no Klonoa - Moonlight
-Museum` in portrait responds to exactly two inputs, START and `JOYPAD_L`, so
-without those buttons it cannot be started. The faceplate now draws an L1 and
-an R1 disc for `.ws`/`.wsc`. Still **not** reachable: the rotated map's
-X-cursor up/right, on `JOYPAD_Y` / `JOYPAD_X` -- see `docs/FOLLOWUPS.md` #42.
+console's own A and B onto `JOYPAD_L` / `JOYPAD_R`, which the DMG faceplate had
+no buttons for. Measured: `Kaze no Klonoa - Moonlight Museum` in portrait
+responds to exactly START and `JOYPAD_L`, so without those buttons it cannot be
+started. The faceplate now draws L1 and R1 discs for `.ws`/`.wsc`. Still **not**
+reachable: the rotated map's X-cursor up/right, on `JOYPAD_Y` / `JOYPAD_X` --
+`docs/FOLLOWUPS.md` #42.
 
 Resolved presentation, from `config_resolve_profile`, with `video_submit`
 estimated from #23's 4.7 ms + 20.7 ns per destination pixel:
@@ -184,11 +179,11 @@ no WonderSwan `.srm` or Neo Geo Pocket `.ngf` has survived a real session.
 
 ### Atari 2600, ColecoVision, Intellivision, Master System + Game Gear: NOT RUN ON THE DEVICE, 2026-08-27
 
-Four systems added on one day and **none has been on a Kobo**. Everything
-below was measured on the x86_64 dev host with `scripts/probe_core.c` and a
-throwaway harness driving koboy's own `config.c`/`video.c`/`chrome.c` against
-ROMs from a real collection; the ARM cores were cross-built and passed
-`scripts/verify-core.sh`, and that is the whole of the device-side evidence.
+Four systems added on one day and **none has been on a Kobo**. Measured on the
+x86_64 dev host with `scripts/probe_core.c` and a throwaway harness driving
+koboy's own `config.c`/`video.c`/`chrome.c` against ROMs from a real
+collection; the ARM cores cross-built and passed `scripts/verify-core.sh`, and
+that is the whole of the device-side evidence.
 
 | | Atari 2600 (stella2014) | ColecoVision (Gearcoleco) | Intellivision (FreeIntv) | SMS + Game Gear (Genesis Plus GX) |
 |---|---|---|---|---|
@@ -718,13 +713,13 @@ battery saves are the NORM rather than the exception.
 
 ### Arcade (FinalBurn Neo): NOT RUN ON THE DEVICE, 2026-08-27
 
-The eleventh system, and **it has not been on a Kobo**. The test device was
-off the LAN for the whole session and this host has no `qemu-arm`, so every
-number below is x86_64. The ARM core cross-builds, strips to 41 MB and passes
+The eleventh system, and **it has not been on a Kobo**. The test device was off
+the LAN all session and this host has no `qemu-arm`, so every number below is
+x86_64. The ARM core cross-builds, strips to 41 MB and passes
 `scripts/verify-core.sh`; that is the whole of the device-side evidence.
-Everything else was measured with `scripts/probe_core.c`, a throwaway probe
-that drives the core directly, and a harness running koboy's own
-`config.c`/`video.c` against the author's 227-romset collection.
+Everything else was measured with `scripts/probe_core.c` and a harness running
+koboy's own `config.c`/`video.c` against the author's 227-romset
+collection.
 
 | | Arcade (FinalBurn Neo v1.0.0.03, rev ae41c16e of 2025-07-24) |
 |---|---|

@@ -45,36 +45,29 @@ panel still has no regression test, and those entries are grouped under
 
 ### 23. `video_submit` is the real optimisation target, not "presentation."
 
-2026-08-26 device session, Zelda at scale 5, `present_divisor = 3`,
-per-stage means: core 2.3 ms, **submit 17.0 ms**, blit 2.8 ms, refresh
-0.4-0.75 ms (max 29.2 ms, the fixed cost + unreliable-timing spread
-`TESTED.md` already documents). `video_submit` -- the RGB565->gray LUT,
-integer scale, quantise and 8x8-tile diff, `src/video.c` -- dominates the
-other three stages combined by roughly 5x. That contradicts the v1
-design spec §5's stated premise ("Emulation is cheap; presentation is
-the entire bottleneck"): `video_submit` is neither emulation nor
-presentation (panel refresh) in that dichotomy, it is the pixel pipeline
-sitting between them, and it is the bottleneck. Confirmed pixel-bound by
-a render-scale sweep (submit time only): scale 3 / 207,360 px / 8,997
-µs, scale 4 / 368,640 px / 12,462 µs, scale 5 / 576,000 px / 16,639 µs --
-linear fit `submit ~= 4.7 ms + 20.7 ns/px` predicts the scale-4 point
-within 1%. v2-core's multi-rect work (§7 of the v2 design spec) reduces
-`refresh`, which this measurement shows is already the cheapest of the
-four stages -- the optimisation that would actually move the needle is
-in `video_submit`'s per-pixel work, unstarted.
+2026-08-26 device session, Zelda at scale 5, `present_divisor = 3`, per-stage
+means: core 2.3 ms, **submit 17.0 ms**, blit 2.8 ms, refresh 0.4-0.75 ms (max
+29.2 ms, the fixed cost + unreliable-timing spread `TESTED.md` documents).
+`video_submit` dominates the other three combined by roughly 5x, which
+contradicts the v1 spec §5's premise ("Emulation is cheap; presentation is the
+entire bottleneck"): it is neither emulation nor panel refresh, it is the pixel
+pipeline between them. Confirmed pixel-bound by a render-scale sweep: scale 3 /
+207,360 px / 8,997 µs, scale 4 / 368,640 px / 12,462 µs, scale 5 / 576,000 px /
+16,639 µs -- fit `submit ~= 4.7 ms + 20.7 ns/px`, predicting the scale-4 point
+within 1%. v2-core's multi-rect work reduces `refresh`, already the cheapest of
+the four; the optimisation that would move the needle is in `video_submit`'s
+per-pixel work, unstarted.
 
 ### 25. Full-screen scrollers smear — substantially fixed, not solved
 
 **Status, 2026-08-27: 1-bit output shipped as the default and the owner
-confirms it fixes the smearing** (`TESTED.md`, "1-bit output fixes the motion
-smearing"). This entry stays open because "substantially" is the honest word:
-the mechanism below explains why a four-level picture on a two-level waveform
-could never be erased cleanly, and 1-bit output removes the intermediate
-pixels rather than making the panel faster. What it costs is priced in
-`TESTED.md`'s refresh table — clean transitions at 153.5 ms a full-rect
-refresh against DU4's 24.1 ms, a factor of 6.4, which is what area-aware
-pacing (#100) now paces to. Anyone tempted to revert `force_dither` should
-read the diagnosis first.
+confirms it fixes the smearing** (`TESTED.md`). Open because "substantially" is
+the honest word: the mechanism below explains why a four-level picture on a
+two-level waveform could never be erased cleanly, and 1-bit output removes the
+intermediate pixels rather than making the panel faster. The cost is priced in
+`TESTED.md`'s refresh table — clean transitions at 153.5 ms a full-rect refresh
+against DU4's 24.1 ms, a factor of 6.4, which area-aware pacing (#100) paces
+to. Anyone tempted to revert `force_dither` should read the diagnosis first.
 
 **The artifact was PHOTOGRAPHED, and a photograph says two things a frame
 counter cannot.** The
@@ -111,16 +104,14 @@ So there are TWO levers, and they compose:
    putting the HUD text there too (#48). Lever 2 is real and is NOT currently
    reachable without losing something else.
 
-Lever 1 shipped this session, together with the two-level waveform it is
-meant to pair with (`waveform_fast = du`, new) and one in-game row that
-cycles the pair: **MENU -> MOTION**, rungs `4 GREYS / AUTO`, `1-BIT / AUTO`,
-`1-BIT / DU`. **The visual claim is UNTESTED.** A `--frames` run cannot see
-ghosting — residue is panel-side and koboy's dirty diff only ever compares
-koboy's own output buffers — which is why this defect has outlived two
-attempts at it. What was verified is that the content really is two-valued end
-to end, that both halves reach the live pipeline and the live backend, and
-that both keys persist. Whether it LOOKS better is the owner's call, on the
-panel.
+Lever 1 shipped with the two-level waveform it pairs with
+(`waveform_fast = du`) and one in-game row cycling the pair: **MENU -> MOTION**,
+rungs `4 GREYS / AUTO`, `1-BIT / AUTO`, `1-BIT / DU`. **The visual claim is
+UNTESTED.** A `--frames` run cannot see ghosting — residue is panel-side and
+koboy's dirty diff only compares koboy's own buffers — which is why this defect
+outlived two attempts. Verified: the content really is two-valued end to end,
+both halves reach the live pipeline and backend, and both keys persist. Whether
+it LOOKS better is the owner's call.
 
 Why this is not the forced-DU4 experiment again: DU4 is the FOUR-level
 variant, and FBInk's header says a DU-class waveform leaves on-screen pixels
@@ -150,12 +141,12 @@ rect changes and the controller still picks a fast one.
 The lever tried before dithering was `full_refresh_permille`, which promotes a
 frame to a flashing erasing refresh once the changed area crosses a threshold.
 It ships at **1000 — tuned on Tetris, where it essentially never fires** — and
-that value was carried into v2 unexamined. It is still unexamined, and it is
-now the *second*-best lever rather than the only one: 400 was tried once with
-the result unrecorded, and re-enabling `cleanup_interval` was the other
-candidate. Both are policy questions about when to spend a flash, which is why
-the v1 design spec's prediction ("Full-screen scrollers get no benefit and hit
-the worst case") was right about the mechanism and wrong about the remedy.
+is still unexamined, now the *second*-best lever rather than the only one: 400
+was tried once with the result unrecorded, and re-enabling `cleanup_interval`
+was the other candidate. Both are policy questions about when to spend a flash,
+which is why the v1 spec's prediction ("Full-screen scrollers get no benefit
+and hit the worst case") was right about the mechanism and wrong about the
+remedy.
 
 ### 26. `present_divisor` trades frame rate directly against smearing
 
@@ -292,23 +283,20 @@ pin it. If it stays, its ini comment should say that is what it is for.
 
 ### 24. `refresh_fixed_tiles` tuning (20 vs 40 vs 80 vs split-off) is inconclusive by construction, not just unmeasured
 
-2026-08-26 device session, same Zelda run as #23, `--frames 900`: 20/40/80
-all produced the same 339 rects over 292 frames (604 / 750 / 488 µs mean
-`refresh`) -- behaviourally identical on real content, exactly as a host reviewer
-predicted from the code before any device was available. Splitting off
-entirely (100000) dropped to 292 rects / 368 µs, which is the expected
-mechanical cost of one ioctl per extra rect, not evidence against
-splitting. The reason none of this settles the tuning question: refresh
-submission is non-blocking by design (see "What the hardware overruled"
-in `CLAUDE.md`), so the in-process `refresh` timer measures submission
-only, never the panel's actual asynchronous work -- which is what the
-fixed-cost-per-rect model in the v2 design spec §7 is actually trying to
-amortise. Measuring the real benefit needs blocking refreshes, and this
-device reports `unreliable_wait_for=1`, which applies to exactly the
-ioctl a blocking measurement waits on -- so those figures would be
-suspect by construction too. `refresh_fixed_tiles` stays shipped at 40
-(the untuned starting guess) with this recorded as a limit of the
-measurement method, not a verdict on the split heuristic.
+2026-08-26 device session, same Zelda run as #23, `--frames 900`: 20/40/80 all
+produced the same 339 rects over 292 frames (604 / 750 / 488 µs mean
+`refresh`) -- behaviourally identical on real content, as a host reviewer
+predicted from the code. Splitting off entirely (100000) dropped to 292 rects /
+368 µs, the expected mechanical cost of one ioctl per extra rect, not evidence
+against splitting.
+
+None of it settles the tuning question: refresh submission is NON-BLOCKING by
+design, so the in-process `refresh` timer measures submission only, never the
+panel's asynchronous work -- which is what the fixed-cost-per-rect model is
+trying to amortise. Measuring the real benefit needs blocking refreshes, and
+this device reports `unreliable_wait_for=1`, which applies to exactly that
+ioctl. `refresh_fixed_tiles` stays at 40 with this recorded as a LIMIT OF THE
+MEASUREMENT METHOD, not a verdict on the heuristic.
 
 ### 27. Multi-rect splitting shows no measurable benefit on real content
 
@@ -602,16 +590,15 @@ somewhere to put them) or a MENU toggle that remaps the two drawn face discs.
 
 ### 49. Ten of the ColecoVision's twelve keypad keys are unreachable
 
-The DMG faceplate has room for two extra discs and a ColecoVision controller
-has a twelve-key keypad. `config_extra_buttons_for_rom` spends both slots on
-keypad 1 and 2, because those are the two the console's own BIOS option
-screen asks for and without keypad 1 a cartridge cannot be started at all.
-Gearcoleco puts 3-8 on the shoulders and thumbsticks and 9/0 on an analog
-axis; koboy answers `RETRO_DEVICE_JOYPAD` only, so those eight are gone.
-`*` and `#` are reachable, but only because the core binds them to
-`JOYPAD_START` / `JOYPAD_SELECT`, which means koboy's START and SELECT discs
-are LYING about what they do on this system -- the faceplate's labels are
-moulded into `chrome.c` and are not per-system.
+The DMG faceplate has room for two extra discs; a ColecoVision controller has a
+twelve-key keypad. `config_extra_buttons_for_rom` spends both slots on keypad 1
+and 2, the two the console's own BIOS option screen asks for -- without keypad
+1 a cartridge cannot be started at all. Gearcoleco puts 3-8 on the shoulders
+and thumbsticks and 9/0 on an analog axis, and koboy answers
+`RETRO_DEVICE_JOYPAD` only, so those eight are gone. `*` and `#` are reachable
+only because the core binds them to `JOYPAD_START` / `JOYPAD_SELECT`, which
+means koboy's START and SELECT discs are LYING on this system -- the
+faceplate's labels are moulded into `chrome.c` and are not per-system.
 
 The titles this actually costs are the ones with in-play menus (Fortune
 Builder, the Super Action titles), not the ones with a start screen. Two ways
@@ -860,18 +847,16 @@ concluding anything about the file.
 
 ### 39. `ROMLIST_NAME` is 128 and a real NES collection overflows it
 
-Found by pointing the browser at the owner's actual `NES/` directory: one
-file is skipped and reported as "1 entry not shown", because ROM names in a
-translated NES set run long --
-`Go Go! Nekketu Hockey Club - Multi-Sport Battle (Japan) [T-En by
-Disconnected Translations v0.99] [Add by GAFF Translations v1.00] [n].nes`
-is 138 characters. The cap behaves exactly as designed (a name that would
-truncate is skipped, and the count is shown rather than swallowed), so this
-is a size question, not a bug: 128 was chosen when "Tetris (World).gb" was
-the shape of a filename. A dirent name is at most 255 bytes, and the row is
-elided for display anyway, so 256 would cost 128 bytes per entry -- 2.5 MB
-across a 20000-ROM hard cap, which is the real reason to think about it
-rather than just raising it.
+Found by pointing the browser at the owner's actual `NES/` directory: one file
+is skipped and reported as "1 entry not shown", because ROM names in a
+translated NES set run long -- `Go Go! Nekketu Hockey Club - Multi-Sport Battle
+(Japan) [T-En by Disconnected Translations v0.99] [Add by GAFF Translations
+v1.00] [n].nes` is 138 characters. The cap behaves as designed (a name that
+would truncate is SKIPPED and counted rather than swallowed), so this is a size
+question, not a bug: 128 was chosen when "Tetris (World).gb" was the shape of a
+filename. A dirent name is at most 255 bytes and the row is elided for display
+anyway, so 256 would cost 128 bytes per entry -- 2.5 MB across a 20000-ROM hard
+cap, which is the reason to think about it rather than just raise it.
 
 ### 31. RECENT can show two identically-named rows
 
@@ -1156,24 +1141,22 @@ Three classes are real, none is a defect, and each is here so the next person
 to widen `LINTFLAGS` does not re-derive them:
 
 - **80 `-Wshadow` warnings, every one in `tests/`.** `src/` is clean on all
-  three lint groups. They are the `int i` reused in a nested block that a
-  600-line test body is made of. `-Wshadow` is therefore ON for `src/` and OFF
-  for `tests/`; `make lint LINT_TEST_EXTRA=-Wshadow` shows them. Fixing them
-  is 80 renames in six files for no defect, and it would collide with whatever
-  #105 does to those files.
+  three lint groups. They are the `int i` reused in a nested block a 600-line
+  test body is made of, so `-Wshadow` is ON for `src/` and OFF for `tests/`
+  (`make lint LINT_TEST_EXTRA=-Wshadow` shows them). Fixing them is 80 renames
+  in six files for no defect, and would collide with whatever #105 does.
 - **4 `-Wmissing-format-attribute` on `main.c`'s `say`, `message_v`, `notify`
-  and `fatal`.** They are printf wrappers with no `format(printf, n, m)`
-  attribute, so no call site's format string is checked. Adding the four
-  attributes was TRIED on a scratch copy and both gcc and clang then report
-  **zero** new warnings across the host and Kobo builds -- so it is insurance
-  against a future call site, not a fix for a present bug, which is why it did
-  not go into a tooling commit. Worth doing when `main.c` is next opened.
+  and `fatal`** -- printf wrappers with no `format(printf, n, m)` attribute, so
+  no call site's format string is checked. Adding the four was TRIED on a
+  scratch copy and both gcc and clang then report **zero** new warnings across
+  both builds: insurance against a future call site, not a present bug. Worth
+  doing when `main.c` is next opened.
 - **1 `-Wformat-truncation` on `src/probe.c`, from gcc and not clang.**
-  `snprintf(path, sizeof path, "/proc/%s/comm", de->d_name)` into `char[64]`,
-  where `d_name` can be 256. It is a false positive -- the loop has already
-  refused any entry whose name does not start with a digit, and a PID is at
-  most ten characters -- and it needs `-O1` or better, so `make lint`
-  (`-fsyntax-only`) never sees it and `make kobo` has always printed it.
+  `snprintf(path, sizeof path, "/proc/%s/comm", de->d_name)` into `char[64]`
+  where `d_name` can be 256. A FALSE POSITIVE -- the loop already refused any
+  entry whose name does not start with a digit, and a PID is at most ten
+  characters -- and it needs `-O1` or better, so `make lint` (`-fsyntax-only`)
+  never sees it and `make kobo` has always printed it.
 
 ### 46. The shipped `gray_map` default was chosen on a host monitor, and the owner's device disagrees with it
 
