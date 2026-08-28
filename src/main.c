@@ -37,6 +37,7 @@
 #include "recent.h"
 #include "romlist.h"
 #include "safefile.h"
+#include "screens.h"
 #include "shot.h"
 #include "sram.h"
 #include "state.h"
@@ -70,8 +71,10 @@ extern void            platform_sdl_set_panel(koboy_platform *pf, int w, int h);
 
 #define DEFAULT_INI "config/koboy.ini"
 
-static volatile sig_atomic_t g_stop;
-static void on_signal(int sig) { (void)sig; g_stop = 1; }
+/* koboy_stop itself is DEFINED IN screens.c, and screens.h says why: the
+   screen loops poll it, and that file has to link into 28 test binaries that
+   contain no main.c. This handler is still its only writer. */
+static void on_signal(int sig) { (void)sig; koboy_stop = 1; }
 
 /* set by the frame callback each time the core emits a frame */
 static const void *g_frame; static unsigned g_fw, g_fh; static size_t g_fpitch;
@@ -237,7 +240,7 @@ static void usage(const char *argv0)
 }
 
 /* MODE_BROWSE is gone: the startup file browser is now reached only via
-   MODE_MAIN -> ALL GAMES (run_list, inline in main()), not a mode of its
+   MODE_MAIN -> ALL GAMES (screen_browser, in screens.c), not a mode of its
    own -- see task 5's MAIN MENU. */
 typedef enum { MODE_MAIN, MODE_PLAY, MODE_MENU, MODE_QUIT } koboy_mode;
 
@@ -313,102 +316,6 @@ static bool shot_note_rect(const koboy_profile *prof, const koboy_layout *layout
     return true;
 }
 
-/* Drives one list widget to a selection. Returns the chosen index, or -1 if
-   the user quit, the run was stopped, or a script ran out.
-
-   `script`/`script_n` make the startup flow reachable in a bounded unattended
-   run. Without them every automated test would pass --rom and skip every
-   list screen entirely -- the same blind spot that hid v1's first-run
-   deadlock through twenty reviews. MODE_MENU joined them with the `menu`
-   verb: run_menu is scripted, and so is everything CHOOSE ROM opens
-   underneath it. run_slot_picker is the one screen nothing drives yet -- it
-   is wired for a script (see its own comment) but no test walks into it, and
-   saying otherwise here would overclaim coverage the suite does not have.
-
-   `script_i`, when not NULL, is a CURSOR shared across every screen one
-   --ui-script run drives (MAIN MENU, then RECENT or ALL GAMES; then, past a
-   `menu` verb, the in-game MENU and the same two lists again) -- a pointer
-   rather than a local index so a script written as one flat sequence of taps
-   can walk through several run_list calls in a row, each screen picking up
-   exactly where the previous one's last consumed state left off. Every call
-   still primes with one synthetic released state regardless of the cursor's
-   position (see the `primed` logic below): each fresh koboy_ui_list demands
-   its own release before its first tap, independent of what the PREVIOUS
-   screen's script tap left the finger doing. Callers that never script
-   (run_menu, run_slot_picker) pass NULL here, same as they pass NULL for
-   `script`.
-
-   `disabled_index`, when not -1, is a row that SELECTS nothing: the ROM
-   browser's synthetic "+N MORE ROMS NOT SHOWN" row uses this so a tap on it
-   cannot be handed to romlist_path as if it were a real ROM (which would try
-   to load a file that does not exist). The loop just keeps polling instead
-   of breaking, the same as any other no-op input. */
-static int run_list(koboy_platform *pf, koboy_input *in, koboy_ui_list *u,
-                    uint8_t *panel, int stride, int pw, int ph,
-                    const koboy_input_state *script, int *script_i, int script_n,
-                    int disabled_index)
-{
-    int  chosen = -1;
-    int  si = script_i ? *script_i : 0;
-    bool need_draw = true;
-    bool primed = false;
-
-    while (!g_stop && !pf->should_quit(pf->ctx)) {
-        if (need_draw) {
-            need_draw = false;
-            memset(panel, 0xFF, (size_t)stride * (size_t)ph);
-            ui_list_render(u, panel, stride, pw, ph);
-            pf->blit_gray8(pf->ctx, panel, pw, ph, stride, 0, 0);
-            /* FULL, i.e. GC16: a list is about to sit still, and the game
-               rect's four-level ceiling does not apply to it. */
-            pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
-        }
-
-        const koboy_input_state *st;
-        koboy_input_state synth;
-        if (script) {
-            /* One RELEASED state before the script's first entry, always.
-               ui_list_init sets prev_touch = true (a fresh list demands a
-               release before it accepts a tap, so a still-down finger cannot
-               carry a selection in from the previous screen), so a script
-               whose first verb is `tap` had its press swallowed and its
-               release consumed as the priming edge -- selecting nothing and
-               exiting 0, i.e. a green CI run that tested nothing. Confirmed
-               on hardware with `printf 'tap 300 300\n'`.
-               Primed here rather than documented in uiscript.h: a note relies
-               on every future author reading it, and the scripted path is
-               precisely the one nobody's tests exercise honestly. */
-            if (!primed) {
-                primed = true;
-                memset(&synth, 0, sizeof synth);
-                st = &synth;
-            } else if (si >= script_n) {
-                break;                      /* script exhausted: give up */
-            } else {
-                st = &script[si++];
-            }
-        } else {
-            pf->poll_input(pf->ctx, in);
-            /* NOT input_state(): the faceplate's A/B touch zones stay live
-               under a full-panel list, and their synthesised joypad bits are
-               eaten by ui_list_feed as page-turns before any row hit-test
-               runs. input_ui_state passes the hardware keys and the touch
-               coordinates and drops the synthesised bits -- see input.h. */
-            input_ui_state(in, &synth);
-            st = &synth;
-        }
-
-        int idx = -1;
-        ui_action a = ui_list_feed(u, st, &idx);
-        if (a == UI_SELECT && idx != disabled_index) { chosen = idx; break; }
-        if (a == UI_PAGE_NEXT || a == UI_PAGE_PREV || a == UI_JUMP) need_draw = true;
-
-        if (!script) usleep(5000);
-    }
-    if (script_i) *script_i = si;
-    return chosen;
-}
-
 /* Everything that must happen when a ROM becomes the current game, in the one
    order that is safe.
 
@@ -475,271 +382,6 @@ static bool load_rom_into(koboy_core *core, koboy_config *cfg,
     sb->mem = core_sram(core, &sb->len);
     sb->writeback = true;
     return true;
-}
-
-/* MOTION sits BELOW FRAMES, and SCREENSHOT below MOTION: the order is not
-   free, because tests/smoke_host.sh drives this menu by hardcoded pixel
-   coordinates derived from the row index, so a row inserted ABOVE an existing
-   one silently strands every tap below it outside the row it names. Adding at
-   the end of the settings group costs one comment update per tap below it and
-   nothing else -- and SCREENSHOT going in above CHOOSE ROM moved every one of
-   those, which is what that sentence is worth. */
-enum {
-    MENU_SAVE = 0, MENU_LOAD, MENU_RESET, MENU_GRAY, MENU_FRAMES, MENU_MOTION,
-    MENU_SHOT, MENU_CHOOSE_ROM, MENU_RESUME, MENU_QUIT,
-    MENU_COUNT
-};
-
-/* Returns the chosen MENU_* action, or MENU_RESUME if the user backed out.
-   `has_states` greys nothing out visually -- the label says so instead, which
-   is cheaper on a panel with no colour and no hover. `map` is likewise shown
-   in the row rather than behind it: on a panel with no hover and no second
-   screen, a setting you cannot read without opening something is a setting
-   nobody knows the value of. */
-static int run_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
-                    int stride, int pw, int ph, bool has_states,
-                    koboy_gray_map map, int divisor,
-                    bool dither, koboy_wfm_policy wfm, int shot_next,
-                    const koboy_input_state *script, int *script_i, int script_n)
-{
-    const char *items[MENU_COUNT];
-    static char gray_label[48], divisor_label[48], motion_label[48], shot_label[48];
-    ui_gray_label(gray_label, sizeof gray_label, map);
-    ui_divisor_label(divisor_label, sizeof divisor_label, divisor);
-    ui_motion_label(motion_label, sizeof motion_label, dither, wfm);
-    ui_shot_label(shot_label, sizeof shot_label, shot_next);
-    items[MENU_SAVE]        = has_states ? "SAVE STATE" : "SAVE STATE (UNSUPPORTED)";
-    items[MENU_LOAD]        = has_states ? "LOAD STATE" : "LOAD STATE (UNSUPPORTED)";
-    items[MENU_RESET]       = "RESET GAME";
-    items[MENU_GRAY]        = gray_label;
-    items[MENU_FRAMES]      = divisor_label;
-    items[MENU_MOTION]      = motion_label;
-    items[MENU_SHOT]        = shot_label;
-    items[MENU_CHOOSE_ROM]  = "CHOOSE ROM";
-    items[MENU_RESUME]      = "RESUME";
-    items[MENU_QUIT]        = "QUIT";
-
-    koboy_ui_list list;
-    ui_list_init(&list, "MENU", items, MENU_COUNT,
-                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-
-    /* The cursor is shared with every other screen a --ui-script run drives:
-       the `menu` verb opens this screen from inside the emulator loop, and
-       whatever the script has left over goes on driving it. See run_list's
-       script_i comment. */
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
-    if (pick < 0) return MENU_RESUME;
-    if ((pick == MENU_SAVE || pick == MENU_LOAD) && !has_states) return MENU_RESUME;
-    return pick;
-}
-
-/* Returns the chosen slot (1-based), or 0 if the user backed out. */
-static int run_slot_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
-                           int stride, int pw, int ph, const char *title,
-                           const char *save_dir, const char *rom_path,
-                           const koboy_input_state *script, int *script_i,
-                           int script_n)
-{
-    static char labels[KOBOY_STATE_SLOTS + 1][64];
-    const char *items[KOBOY_STATE_SLOTS + 1];
-    for (int s = 1; s <= KOBOY_STATE_SLOTS; s++) {
-        state_slot_label(labels[s - 1], sizeof labels[s - 1], save_dir, rom_path, s);
-        items[s - 1] = labels[s - 1];
-    }
-    snprintf(labels[KOBOY_STATE_SLOTS], sizeof labels[KOBOY_STATE_SLOTS], "BACK");
-    items[KOBOY_STATE_SLOTS] = labels[KOBOY_STATE_SLOTS];
-
-    koboy_ui_list list;
-    ui_list_init(&list, title, items, KOBOY_STATE_SLOTS + 1,
-                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-
-    /* The same shared cursor run_menu uses. Wired even though nothing scripts
-       SAVE/LOAD yet, because the alternative is a TRAP: this screen is one
-       tap past a row a script can now reach, and an unscripted run_list with
-       no live input does not exit -- it polls until the run is killed. A
-       script that tapped SAVE STATE would hang rather than fail. */
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
-    if (pick < 0 || pick >= KOBOY_STATE_SLOTS) return 0;
-    return pick + 1;
-}
-
-enum { MAIN_RECENT = 0, MAIN_ALL_GAMES, MAIN_QUIT, MAIN_COUNT };
-
-/* Returns the chosen MAIN_* action, or -1 if the run was stopped (signal, or
-   should_quit()) or a script ran out before choosing anything. Unlike
-   run_menu/run_slot_picker, THIS screen IS scripted -- it is the new first
-   screen of the startup flow, in front of both the ROM browser and the
-   RECENT picker, so a --ui-script run has to navigate it to reach either. */
-static int run_main_menu(koboy_platform *pf, koboy_input *in, uint8_t *panel,
-                         int stride, int pw, int ph,
-                         const koboy_input_state *script, int *script_i, int script_n)
-{
-    static const char *const items[MAIN_COUNT] = { "RECENT", "ALL GAMES", "QUIT" };
-
-    koboy_ui_list list;
-    ui_list_init(&list, "KOBOY", items, MAIN_COUNT,
-                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-
-    return run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n, -1);
-}
-
-/* Returns the chosen index into `rc` (0-based), or -1 if the user backed out
-   by tapping BACK.
-
-   BACK is a real, always-present trailing row -- the same device
-   run_slot_picker uses -- rather than "no cancel gesture" the way the
-   top-level MAIN MENU and the ROM browser both get away with (their only
-   ways out are picking something or the whole app quitting, which is fine
-   because THEY are reachable only by deliberate user choice already). A
-   RECENT list can be genuinely empty on a first run or right after clearing
-   history, and staring at a screen with nothing to tap and no way back is a
-   worse first experience than one more row. When `rc` is empty, a single
-   disabled placeholder row explains why, using run_list's disabled_index the
-   same way the ROM browser's "+N MORE ROMS" overflow row does. */
-static int run_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
-                             int stride, int pw, int ph, const koboy_recent *rc,
-                             const koboy_input_state *script, int *script_i, int script_n)
-{
-    enum { RECENT_UI_MAX = KOBOY_RECENT_MAX + 2 };   /* entries + placeholder + BACK */
-    static char labels[RECENT_UI_MAX][KOBOY_RECENT_DISPLAY];
-    const char *items[RECENT_UI_MAX];
-    int n = 0, placeholder = -1;
-
-    if (rc->count == 0) {
-        snprintf(labels[n], sizeof labels[n], "NO RECENT GAMES YET");
-        items[n] = labels[n];
-        placeholder = n;
-        n++;
-    } else {
-        for (int i = 0; i < rc->count; i++) {
-            snprintf(labels[n], sizeof labels[n], "%s", recent_display(rc, i));
-            items[n] = labels[n];
-            n++;
-        }
-    }
-    snprintf(labels[n], sizeof labels[n], "BACK");
-    items[n] = labels[n];
-    int back_index = n;
-    n++;
-
-    koboy_ui_list list;
-    ui_list_init(&list, "RECENT", items, n,
-                 KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                 pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-
-    int pick = run_list(pf, in, &list, panel, stride, pw, ph, script, script_i, script_n,
-                        placeholder);
-    if (pick < 0 || pick == back_index) return -1;
-    return pick;    /* placeholder, when present, is index 0 and never reached here */
-}
-
-/* ------------------------------------------------------------- the browser
-   One directory at a time, not the whole tree flattened. The flatten was
-   fine for a hundred ROMs in one folder and unreadable for a real collection:
-   59 Game & Watch titles under roms/Game and Watch/ produced 59 rows whose
-   first 15 characters were identical, and ui_fit_label's middle ellipsis then
-   spent the row's width on that shared prefix and ate the actual title.
-
-   The header says where you are, so a folder you descended into is not a
-   mystery -- ui_path_title builds it (and owns the truncation rule), because
-   how much a title row can carry is the list widget's fact, not the
-   browser's. "ALL GAMES" rather than the old "CHOOSE A GAME" so the header
-   names the MAIN MENU row that got you here, and the breadcrumb below it
-   reads as a path. */
-#define BROWSER_TITLE_HEAD "ALL GAMES"
-
-/* Drives the ROM browser until the user picks a ROM, backs out of the root, or
-   the run ends. Returns a BROWSE_*; on BROWSE_PICKED it writes the ROM's full
-   path into out_path. It used to hand back the row's TEXT as well, for the
-   RECENT list to store; the row text is the path's last component and
-   recent.c derives it (recent_name_from_path), so a second output that could
-   disagree with the first no longer exists.
-
-   Both entry points -- startup ALL GAMES and the in-game MENU's CHOOSE ROM --
-   call this. They used to carry a hand-copied browser each, which was already
-   two copies of the scan/geometry/alpha-strip setup before navigation added a
-   loop to each of them. */
-enum { BROWSE_PICKED = 0, BROWSE_NONE, BROWSE_ERR_DIR, BROWSE_ERR_EMPTY };
-
-static int run_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
-                       int stride, int pw, int ph, const char *rom_dir,
-                       char *out_path, size_t out_path_n,
-                       const koboy_input_state *script, int *script_i,
-                       int script_n)
-{
-    /* memset, not `= {0}`: the Linaro 4.9 cross compiler warns
-       -Wmissing-braces on `= {0}` for a struct whose first member is itself
-       an array, and this project ships at zero warnings. */
-    koboy_romlist rl;
-    memset(&rl, 0, sizeof rl);
-
-    int n = romlist_scan(&rl, rom_dir);
-    if (n < 0) { romlist_free(&rl); return BROWSE_ERR_DIR; }
-    /* rl.count, not n: n also counts the synthetic overflow row when
-       rl.hidden > 0, and a rom_dir holding nothing but one oversized-name ROM
-       (hidden > 0, count == 0) must still report "no roms" rather than open a
-       browser whose only row selects nothing. count rather than rl.roms
-       because a root with no loose ROMs but a folder full of them is a
-       perfectly good collection -- it just needs one tap first. */
-    if (rl.count == 0) { romlist_free(&rl); return BROWSE_ERR_EMPTY; }
-
-    int result = BROWSE_NONE;
-    for (;;) {
-        char title[UI_TITLE_CHARS + 8];
-        ui_path_title(title, sizeof title, BROWSER_TITLE_HEAD,
-                      romlist_subpath(&rl));
-
-        /* Rebuilt after every navigation, never reused: romlist's arrays are
-           reallocated wholesale by each rescan (see romlist.h), so a
-           koboy_ui_list that outlived one would be holding freed pointers. */
-        koboy_ui_list list;
-        ui_list_init(&list, title, romlist_items(&rl), n,
-                     KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
-                     pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
-        /* Letter index strip: only the ROM browser gets one, never MENU,
-           MAIN MENU, RECENT or the slot picker, which are all short
-           fixed-ish lists a strip would just clutter. */
-        ui_list_enable_alpha_jump(&list, true);
-
-        int pick = run_list(pf, in, &list, panel, stride, pw, ph,
-                            script, script_i, script_n,
-                            rl.hidden > 0 ? rl.count : -1);
-        if (pick < 0) {
-            /* Stopped (signal or should_quit) or the script ran out. This
-               leaves the BROWSER, from whatever directory it happened to be
-               in -- it does not walk back up one level per iteration, which
-               would make a Ctrl-C in a nested folder take several passes to
-               notice. Backing out of the ROOT is the same thing and therefore
-               still behaves exactly as it did before navigation existed; the
-               ".." row is what goes up one level. */
-            result = BROWSE_NONE;
-            break;
-        }
-
-        int kind = romlist_kind(&rl, pick);
-        if (kind == ROMLIST_ROM) {
-            romlist_path(&rl, pick, out_path, out_path_n);
-            result = BROWSE_PICKED;
-            break;
-        }
-        if (kind == ROMLIST_DIR)      n = romlist_enter(&rl, pick);
-        else if (kind == ROMLIST_UP)  n = romlist_up(&rl);
-        else                          continue;   /* the overflow row: not selectable */
-
-        if (n < 0) {
-            /* The directory we navigated to could not be listed at all, and
-               romlist has already tried to fall back to where we were. There
-               is nothing left to show. */
-            result = BROWSE_ERR_DIR;
-            break;
-        }
-    }
-
-    romlist_free(&rl);
-    return result;
 }
 
 int main(int argc, char **argv)
@@ -812,7 +454,7 @@ int main(int argc, char **argv)
     g_pf = pf;
 
     /* Installed here, not beside the emulator loop: the calibration wait below
-       tests g_stop, and a handler installed after it would leave that test dead
+       tests koboy_stop, and a handler installed after it would leave that test dead
        and let a signal during a first-run calibration terminate outright. This
        is also after platform init on purpose, so it overrides any handler the
        backend's own library installed. */
@@ -863,7 +505,7 @@ int main(int argc, char **argv)
            silently pass a test that exercised nothing". An empty or
            comment-only script is not a read error -- uiscript_load returns 0,
            not -1 -- but treating it as "no script" here would fall back to
-           run_list's live-polling branch, and a --ui-script was explicitly
+           screen_list's live-polling branch, and a --ui-script was explicitly
            requested precisely because nobody is at the panel to poll. That
            run then blocks forever instead of failing, which is a worse
            silence than a bad read: this is exactly the unattended-run blind
@@ -962,7 +604,7 @@ int main(int argc, char **argv)
             calib_begin(&k, &cfg);
             bool done = false, escaped = false;
             int last_stage = -1;
-            while (!done && !escaped && !g_stop && !pf->should_quit(pf->ctx)) {
+            while (!done && !escaped && !koboy_stop && !pf->should_quit(pf->ctx)) {
                 if (k.stage != last_stage) {
                     last_stage = k.stage;
                     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
@@ -1022,9 +664,9 @@ int main(int argc, char **argv)
     snprintf(recents_file, sizeof recents_file, "%s/recent.dat", cfg.save_dir);
 
     /* Shared across every list screen one --ui-script run drives (MAIN MENU,
-       then either RECENT or ALL GAMES) -- see run_list's script_i comment for
+       then either RECENT or ALL GAMES) -- see screen_list's script_i comment for
        why a single flat script can walk through more than one screen. NULL
-       when there is no script, same as every other script-less run_list
+       when there is no script, same as every other script-less screen_list
        call in this file. */
     int script_i = 0;
     const koboy_input_state *ui_scr = ui_script_n > 0 ? ui_script : NULL;
@@ -1152,14 +794,14 @@ int main(int argc, char **argv)
 #else
         input_set_touch_transform(ui_in, pw, ph, false, false, false);
 #endif
-        int choice = run_main_menu(pf, ui_in, panel, panel_stride, pw, ph,
+        int choice = screen_main_menu(pf, ui_in, panel, panel_stride, pw, ph,
                                    ui_scr, ui_scr_i, ui_script_n);
 
         if (choice == MAIN_RECENT) {
             koboy_recent rc;
             recent_load(&rc, recents_file);      /* corrupt/missing -> empty, never fatal */
             recent_prune_missing(&rc);
-            int ri = run_recent_picker(pf, ui_in, panel, panel_stride, pw, ph, &rc,
+            int ri = screen_recent_picker(pf, ui_in, panel, panel_stride, pw, ph, &rc,
                                        ui_scr, ui_scr_i, ui_script_n);
             input_destroy(ui_in);
             if (ri >= 0) {
@@ -1175,11 +817,11 @@ int main(int argc, char **argv)
             /* else: BACK was tapped, or the run was stopped/exhausted while
                ON the recent screen -- loop back to MAIN MENU either way. A
                stopped or script-exhausted run converges on the SAME terminal
-               exit one iteration later, when run_main_menu itself reports
+               exit one iteration later, when screen_main_menu itself reports
                it (the `else` branch below) -- this does not need its own
                copy of that handling. */
         } else if (choice == MAIN_ALL_GAMES) {
-            int br = run_browser(pf, ui_in, panel, panel_stride, pw, ph,
+            int br = screen_browser(pf, ui_in, panel, panel_stride, pw, ph,
                                  cfg.rom_dir, cfg.rom_path, sizeof cfg.rom_path,
                                  ui_scr, ui_scr_i, ui_script_n);
             input_destroy(ui_in);
@@ -1207,7 +849,7 @@ int main(int argc, char **argv)
             }
             if (br != BROWSE_PICKED) {
                 /* A SCRIPTED run that ends without a rom chosen is a
-                   failure, not a clean exit -- see run_list's own comment on
+                   failure, not a clean exit -- see screen_list's own comment on
                    why this needs its own exit code. Backing out of ALL GAMES
                    interactively (only reachable via a signal/should_quit;
                    the ".." row goes UP a level, it does not leave the
@@ -1223,8 +865,8 @@ int main(int argc, char **argv)
             say("koboy: chose %s\n", cfg.rom_path);
             mode = MODE_PLAY;
         } else {
-            /* MAIN_QUIT, or run_main_menu itself was stopped/exhausted
-               (choice == -1: g_stop, should_quit, or -- for a script -- the
+            /* MAIN_QUIT, or screen_main_menu itself was stopped/exhausted
+               (choice == -1: koboy_stop, should_quit, or -- for a script -- the
                verbs ran out before landing on anything). Every one of these
                is a deliberate or forced end with nothing to resume to. */
             input_destroy(ui_in);
@@ -1245,7 +887,7 @@ int main(int argc, char **argv)
 
     /* mode is MODE_PLAY from here on, until the emulator loop below reads and
        writes it: MODE_QUIT ends the loop from inside the menu (a chosen QUIT,
-       or CHOOSE ROM leaving nothing loaded), kept distinct from g_stop so the
+       or CHOOSE ROM leaving nothing loaded), kept distinct from koboy_stop so the
        final status line does not call a menu-driven quit "stopped by
        signal". */
 
@@ -1612,14 +1254,14 @@ int main(int argc, char **argv)
     last_sram_us = pf->now_us(pf->ctx);
     last_cleanup_us = last_sram_us;
 
-    /* mode != MODE_QUIT joins g_stop and should_quit() as a third way out: the
+    /* mode != MODE_QUIT joins koboy_stop and should_quit() as a third way out: the
        in-game menu sets it (QUIT, or CHOOSE ROM leaving nothing loaded) from
-       inside the loop body below. Kept separate from g_stop on purpose -- that
+       inside the loop body below. Kept separate from koboy_stop on purpose -- that
        flag is the signal handler's, set from outside any call frame, and
        reusing it for a menu-driven exit would make the final status line call
        a chosen QUIT "stopped by signal". */
     while (mode != MODE_QUIT && mode != MODE_MAIN &&
-           !g_stop && !pf->should_quit(pf->ctx)) {
+           !koboy_stop && !pf->should_quit(pf->ctx)) {
         /* frames_done + pace.frames, not pace.frames: --frames N is a budget
            for the RUN, and each session gets a fresh pacer (see frames_done's
            declaration). */
@@ -1633,7 +1275,7 @@ int main(int argc, char **argv)
         /* The in-game MENU is the one screen no tap on a previous screen leads
            to: it is entered by ASKING, and the ask is a touch zone this loop
            polls. So --ui-script gets a verb of its own for it, and this is
-           where that verb is consumed -- the emulator loop, not run_list.
+           where that verb is consumed -- the emulator loop, not screen_list.
 
            This closes docs/FOLLOWUPS.md #47, which was filed against
            MENU_GRAY's handler and applies word for word to every other branch
@@ -1676,14 +1318,14 @@ int main(int argc, char **argv)
             shot_stem_for_rom(shot_stem, sizeof shot_stem, cfg.rom_path);
             int shot_next = shot_last_seq(cfg.shot_dir, shot_stem) + 1;
 
-            int act = run_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
+            int act = screen_menu(pf, in, panel, panel_stride, pw, ph, ssz > 0,
                                (koboy_gray_map)cfg.gray_map, cfg.present_divisor,
                                cfg.force_dither,
                                (koboy_wfm_policy)cfg.wfm_fast_policy, shot_next,
                                ui_scr, ui_scr_i, ui_script_n);
 
             if (act == MENU_SAVE || act == MENU_LOAD) {
-                int slot = run_slot_picker(pf, in, panel, panel_stride, pw, ph,
+                int slot = screen_slot_picker(pf, in, panel, panel_stride, pw, ph,
                                            act == MENU_SAVE ? "SAVE TO" : "LOAD FROM",
                                            cfg.save_dir, cfg.rom_path,
                                            ui_scr, ui_scr_i, ui_script_n);
@@ -1848,7 +1490,7 @@ int main(int argc, char **argv)
                 }
             } else if (act == MENU_SHOT) {
                 /* ARMS a capture; it does not take one. THE MENU IS DRAWN
-                   OVER THE GAME -- run_list paints the whole panel white and
+                   OVER THE GAME -- screen_list paints the whole panel white and
                    renders the list into it -- so a screenshot taken from
                    here would be a photograph of this menu, which is not what
                    anybody opening it wants.
@@ -1911,7 +1553,7 @@ int main(int argc, char **argv)
                shot_compose reads it. Two shots of a static screen are
                therefore byte-identical, which tests/smoke_host.sh asserts. */
             shot_note_until_us = 0;
-            /* Drain, don't just ignore: every run_list/run_menu call above
+            /* Drain, don't just ignore: every screen_list/screen_menu call above
                polled input while a menu screen -- not the faceplate -- was on
                the panel, and recompute() latches a MENU-zone tap regardless
                of what is drawn there. At the default layout the zone
@@ -2444,7 +2086,7 @@ session_end:
        running total across every session in the process, like `presented`. */
     say("koboy: %s, %lu presented frames, %lu settle-held, %lu game-rect cleanups, "
         "%lu large-area full refreshes, %lu rects emitted\n",
-        g_stop ? "stopped by signal" : "stopped", presented,
+        koboy_stop ? "stopped by signal" : "stopped", presented,
         settle_held, cleanups, big_refreshes, rects_emitted);
     /* Always printed, even under --quiet, for the same reason presented= is:
        this is the run's evidence, and a run whose numbers were suppressed is a
