@@ -78,10 +78,10 @@ Three things that bite:
 ## Running it — launch from the device's own menu, never over ssh
 
 `scripts/koboy.sh` refuses to run unless `PLATFORM`, `PRODUCT` and
-`NICKEL_HOME` are all set, and exits 3 with a message drawn on the panel. This
-is not defensive boilerplate. Nickel must be stopped for koboy to read a single
-input event — it holds `EVIOCGRAB` on every node — and **restarting Nickel from
-a process that did not inherit its environment rewrites
+`NICKEL_HOME` are all set, and exits 3 with a message on the panel. NOT
+defensive boilerplate: Nickel must be stopped for koboy to read a single input
+event (it holds `EVIOCGRAB` on every node), and **restarting Nickel from a
+process that did not inherit its environment rewrites
 `/mnt/onboard/.kobo/version`**, replacing the real serial with a placeholder:
 
 ```
@@ -89,15 +89,15 @@ before  <real-serial>,4.1.15,4.38.23684,...,00000000-...-000000000388
 after   11:22:33:44:55:66,4.1.15,4.38.23684,...,
 ```
 
-That file is how FBInk identifies the device, so afterwards every FBInk-based
-tool on the device — KOReader included — silently loses its per-device quirks
+That file is how FBInk identifies the device, so every FBInk-based tool —
+KOReader included — silently loses its per-device quirks
 (`deviceName='Unknown!'`, `Mark ?`, `hasEclipseWfm=0`). Only a reboot repairs
-it. This happened once, by hand, and the gate exists so it cannot happen twice.
+it. This happened once, by hand; the gate exists so it cannot happen twice.
 
-The gate is trivially spoofable by exporting the three names, and the comment in
-the script says so. Spoofing it gets a *partial* environment and can do exactly
-the damage above. Launch from **NickelMenu** (`/mnt/onboard/.adds/nm/koboy`) or
-KFMon, which spawn from inside Nickel and inherit the real environment.
+The gate is trivially spoofable by exporting the three names, and the script
+says so — but spoofing it gets a *partial* environment and can do exactly that
+damage. Launch from **NickelMenu** (`/mnt/onboard/.adds/nm/koboy`) or KFMon,
+which spawn from inside Nickel and inherit the real environment.
 
 A correct run ends like this, and needs no reboot:
 
@@ -109,19 +109,16 @@ restore: done
 
 ### A narrower, safe exception: `--frames` over ssh, without the takeover
 
-The rule above is about the full launcher (`scripts/koboy.sh`, the input
-grab, the Nickel stop/restart) and it stands. But `koboy --frames N` run
-directly over ssh, bypassing `koboy.sh` entirely, is a genuinely safe way to
-exercise the core, the SRAM path, and the video/panel pipeline **without**
-stopping Nickel or touching the input grab — used in the 2026-08-26 session
-to verify the save path and get real per-stage timing. Because Nickel is
-never stopped, this does **not** exercise the takeover, the touch d-pad, the
-in-game MENU, or the ROM browser's real touch input (`--ui-script` stands in
-for touch there). It is a way to get partial device truth cheaply, not a
-substitute for the NickelMenu playtest that exercises the rest. Confirm
-device integrity afterwards the same way as any other session (compare
-`/mnt/onboard/.kobo/version`, check `fbink -e` still reports the real device
-identity).
+The rule above is about the full launcher and it stands. But `koboy --frames
+N` run directly over ssh, bypassing `koboy.sh` entirely, safely exercises the
+core, the SRAM path and the video/panel pipeline **without** stopping Nickel or
+touching the input grab — used on 2026-08-26 to verify the save path and get
+real per-stage timing. Because Nickel is never stopped it does **not** exercise
+the takeover, the touch d-pad, the in-game MENU or the browser's real touch
+input (`--ui-script` stands in). Partial device truth cheaply, not a substitute
+for the NickelMenu playtest. Confirm device integrity afterwards as for any
+session (compare `/mnt/onboard/.kobo/version`, check `fbink -e` still reports
+the real identity).
 
 ## Diagnosing a run
 
@@ -149,10 +146,10 @@ just the probe with `make probe-dist`. `docs/probe-readme.md` has the detail.
 
 ## Measurement caveat
 
-Treat every absolute refresh timing as order-of-magnitude. The same region and
-waveform on this device has measured 31.2, 46.7 and 67.5 ms across three
-sessions — a factor of 2.2. And the device reports `unreliable_wait_for=1`,
-which applies to the very ioctl a *blocking* measurement waits on, so blocking
-figures are suspect by construction. The main loop never waits for completion;
-the non-blocking path is what it actually depends on. Ratios reproduced across
-sessions where absolutes did not, which is why the design rests on ratios.
+Treat every absolute refresh timing as order-of-magnitude: the same region and
+waveform has measured 31.2, 46.7 and 67.5 ms across three sessions, a factor of
+2.2. And the device reports `unreliable_wait_for=1`, which applies to the very
+ioctl a *blocking* measurement waits on, so blocking figures are suspect by
+construction. The main loop never waits for completion. RATIOS reproduced
+across sessions where absolutes did not, which is why the design rests on
+them.

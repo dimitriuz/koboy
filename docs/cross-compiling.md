@@ -58,34 +58,25 @@ or `-mfpu`.
 
 ## What we tried for the toolchain, and what actually worked
 
-**koxtoolchain** (`https://github.com/koreader/koxtoolchain`, used by
-KOReader for the same devices) is designed to solve exactly this: it builds
-a crosstool-ng toolchain against Kobo's own glibc/kernel headers rather than
-whatever a distro ships. In practice, on this host, its `kobo` target's
-`glibc-2.15` build hung indefinitely inside glibc's own `./configure` --
-specifically right after `running configure fragment for
-ports/sysdeps/arm/elf`, printing one repeated progress-spinner line for
-hours (confirmed: `tail -4000 build.log | sort -u | wc -l` returned close to
-1, i.e. one distinct line repeated thousands of times -- a real hang, not
-slow progress). A 2012-era libc's autoconf idioms do not get on with a
-2026 host's autoconf/shell. Two build attempts confirmed this
-independently; we did not find a workaround and moved on rather than
-force it. (Two operational mistakes made the first two attempts worse than
-the underlying hang -- an interactive `ct-ng oldconfig` blocking forever on
-a closed stdin, and logging to a tmpfs `/tmp` that filled with a 4+ GB log
--- but neither of those caused the actual `./configure` hang; they only
-made it harder to see.)
+**koxtoolchain** (KOReader's, for these same devices) builds a crosstool-ng
+toolchain against Kobo's own glibc/kernel headers. On this host its `kobo`
+target's `glibc-2.15` build **hung indefinitely** inside glibc's own
+`./configure`, right after `running configure fragment for
+ports/sysdeps/arm/elf`, printing one repeated progress-spinner line for hours
+-- confirmed a real hang, not slow progress: `tail -4000 build.log | sort -u |
+wc -l` returned close to 1. A 2012-era libc's autoconf idioms do not get on
+with a 2026 host's. Two attempts confirmed it independently. (Two operational
+mistakes made those attempts worse -- an interactive `ct-ng oldconfig` blocking
+on a closed stdin, and logging to a tmpfs `/tmp` that filled with a 4+ GB log
+-- but neither caused the `./configure` hang.)
 
-Since koxtoolchain's own build target (`glibc 2.15`) was in any case *older*
-than the device's actual floor of `2.19`, we looked for a **prebuilt**
-toolchain targeting `armv7-a` hardfloat with a glibc at or below `2.19`
-instead of bootstrapping one. Ubuntu/Debian cross-compiler packages of that
-era don't fit cleanly (no distinct "cross to an old release" packages), and
-Bootlin's toolchain archive's oldest `armv7-eabihf` glibc build is `2.24`
-(from 2017) -- already too new. **Linaro's own archived toolchain
-releases** turned out to be exactly what's needed: their `4.9-2014.09`
-`arm-linux-gnueabihf` release bundles `libc-2.19-2014.08.so` -- glibc 2.19,
-precisely at the device's ceiling, with `armv7-a`/NEON/hardfloat support.
+koxtoolchain's target (`glibc 2.15`) was in any case *older* than the device's
+floor of `2.19`, so we looked for a **prebuilt** toolchain targeting `armv7-a`
+hardfloat at or below 2.19. Ubuntu/Debian packages of that era do not fit (no
+distinct "cross to an old release" packages), and Bootlin's oldest
+`armv7-eabihf` glibc build is `2.24` (2017), already too new. **Linaro's
+archived `4.9-2014.09` `arm-linux-gnueabihf`** bundles `libc-2.19-2014.08.so`
+-- glibc 2.19 exactly, with `armv7-a`/NEON/hardfloat.
 
 Linaro decommissioned `releases.linaro.org` (it now redirects to a contact
 page), but the actual tarball is still recoverable from the Wayback Machine,
@@ -117,25 +108,21 @@ arm-linux-gnueabihf-gcc -O2 -march=armv7-a -mfpu=neon -mfloat-abi=hard -o hello.
 readelf --dyn-syms hello.arm | grep -o 'GLIBC_[0-9.]*' | sort -Vu
 ```
 
-We measured `GLIBC_2.4` as the highest version referenced -- comfortably
-under the device's `2.19` ceiling. `readelf -A hello.arm` also confirmed
-`Tag_Advanced_SIMD_arch: NEONv1`, matching the device's own attribute
-exactly.
+Measured `GLIBC_2.4` as the highest version referenced, comfortably under the
+device's 2.19 ceiling, with `readelf -A` confirming
+`Tag_Advanced_SIMD_arch: NEONv1` -- the device's own attribute exactly.
 
-That alone is a strong signal but not proof; the device itself is the
-final judge. With the Kobo reachable over SSH:
+A strong signal but not proof; the device is the final judge:
 
 ```sh
 scp hello.arm root@<device>:/tmp/ && ssh root@<device> /tmp/hello.arm
 ```
 
-We ran exactly this and it printed the test string with exit code 0 on the
-real device -- definitive confirmation the toolchain's output actually
-runs there, not just that it looks plausible on paper.
+Run exactly that: it printed the test string with exit code 0 on the real
+device.
 
-The same check against the actual shipped `dist/gambatte_libretro.so`
-(rather than the trivial `hello.c`) shows a slightly larger, still
-comfortably-safe set:
+The same check against the shipped `dist/gambatte_libretro.so` shows a
+slightly larger, still safe set:
 
 ```sh
 $ readelf --dyn-syms dist/gambatte_libretro.so | grep -o 'GLIBC_[0-9.]*' | sort -Vu
@@ -216,29 +203,22 @@ via `READELF="${CROSS}readelf"`) as its last step, so `make core` either
 finishes with `PASS core dependency closure is device-safe` or fails loudly
 before anything is copied where a later task could pick it up.
 
-**Why `ld-linux-armhf.so.3` is on the allowlist.** The core built with the
-Linaro 4.9-2014.09 toolchain carries a `NEEDED` entry for
-`ld-linux-armhf.so.3` -- the dynamic loader/interpreter itself, not a
-library the way `libc`/`libm` are. This traces to `libstdc++.a(eh_globals.o)`
-being pulled in by `-static-libstdc++` (C++'s per-thread exception-handling
-globals, `__cxa_eh_globals`, implemented via a `__tls_get_addr`-based TLS
-variable on targets with native TLS, which ARM has) -- confirmed by
-generating a link map (`-Wl,-Map=...`) and by testing that a trivial empty
-`.cpp` `.so` built with identical flags does *not* pick up this NEEDED
-entry, so it is specific to gambatte's/libretro-common's C++ code pulling
-in exception-support object modules, not an artifact of the flags
-themselves.
+**Why `ld-linux-armhf.so.3` is on the allowlist.** The core carries a `NEEDED`
+entry for it -- the dynamic LOADER, not a library the way `libc`/`libm` are.
+It traces to `libstdc++.a(eh_globals.o)`, pulled in by `-static-libstdc++`
+(C++'s per-thread exception globals, `__cxa_eh_globals`, implemented via a
+`__tls_get_addr`-based TLS variable on targets with native TLS, which ARM has).
+Confirmed by a link map (`-Wl,-Map=...`) and by an empty `.cpp` `.so` built
+with identical flags NOT picking up the entry -- so it is specific to the C++
+code pulling in exception-support modules, not the flags.
 
-It is permitted rather than treated as a hazard because it is categorically
-different from what the allowlist exists to catch (a glibc version mismatch,
-or a dynamic `libstdc++`): every dynamically-linked armhf binary needs the
-loader, including the device's own working `/usr/bin/fbink` -- a device
-that couldn't provide it couldn't run anything dynamically linked at all.
-And this was not taken on faith: an actual `dlopen(RTLD_NOW)` of the real
-built core **on the physical Kobo** succeeded completely --
-`RTLD_NOW` forces immediate resolution of every dynamic symbol including
-`__tls_get_addr`, so a genuinely unresolvable dependency would have failed
-loudly right there, not silently deferred:
+Permitted rather than treated as a hazard because it is categorically different
+from what the allowlist catches (a glibc mismatch, or a dynamic `libstdc++`):
+every dynamically-linked armhf binary needs the loader, including the device's
+own working `/usr/bin/fbink`. Not taken on faith either -- an actual
+`dlopen(RTLD_NOW)` of the real core **on the physical Kobo** succeeded, and
+RTLD_NOW forces immediate resolution of every dynamic symbol including
+`__tls_get_addr`:
 
 ```
 $ ssh root@<device> './load_core.arm ./gambatte_libretro.so'
@@ -294,23 +274,20 @@ KOBO=true MINIMAL=true DRAW=true BITMAP=true INPUT=true
 CFLAGS=-O2 -fomit-frame-pointer -pipe -march=armv7-a -mfpu=neon -mfloat-abi=hard
 ```
 
-**Why static.** The device does carry working FBInk binaries, but not
-necessarily a `libfbink.so` whose ABI matches the header we compiled
-against, and a missing or older shared library is a startup failure on a
-device with no terminal to report it on. Static costs ~190 KB of archive,
-paid once.
+**Why static.** The device carries working FBInk binaries but not necessarily
+a `libfbink.so` whose ABI matches the header we compiled against, and a missing
+or older shared library is a startup failure on a device with no terminal.
+Static costs ~190 KB, paid once.
 
-**Why `MINIMAL` plus three toggles.** `DRAW` gives `fbink_cls`, `BITMAP`
-gives `fbink_print` -- between them, the on-panel fatal-error screen, which
-is the only text koboy ever asks FBInk to draw. `INPUT` gives
-`fbink_input_scan`. Everything else FBInk can do (OpenType, image decoding,
-QImageScale, Unifont) is dead weight here, because koboy blits its own
-gray8 straight into the mmap'ed framebuffer.
+**Why `MINIMAL` plus three toggles.** `DRAW` gives `fbink_cls`, `BITMAP` gives
+`fbink_print` -- between them the on-panel fatal-error screen, the only text
+koboy asks FBInk to draw -- and `INPUT` gives `fbink_input_scan`. Everything
+else (OpenType, image decoding, QImageScale, Unifont) is dead weight, because
+koboy blits its own gray8 straight into the mmap'ed framebuffer.
 
-Note that a `MINIMAL` build still *defines* every public symbol when a
-feature is off -- the bodies just become `return -ENOSYS`. So an `nm` check
-cannot catch a dropped feature toggle, and `build-fbink.sh` asserts on the
-actual `-DFBINK_WITH_*` defines in the recorded compiler invocation instead
+A `MINIMAL` build still *defines* every public symbol with a `return -ENOSYS`
+body, so an `nm` check cannot catch a dropped toggle: `build-fbink.sh` asserts
+on the actual `-DFBINK_WITH_*` defines in the recorded compiler invocation
 (`build/fbink-build.log`).
 
 ### The one patch the old toolchain needs
@@ -327,11 +304,10 @@ arm-linux-gnueabihf-gcc: error: unrecognized command line option
 make[1]: *** [lib/Module.mk:75: lib/smbus.ao] Error 1
 ```
 
-`scripts/build-fbink.sh` gates that one line on the compiler actually
-accepting the option, then re-greps to confirm the edit landed. It is applied
-by the script rather than committed as a patch file because
-`third_party/fbink/` is a gitignored clone, so there is nothing to carry a
-patch against. The edit is idempotent.
+`scripts/build-fbink.sh` gates that line on the compiler accepting the option,
+then re-greps to confirm the edit landed. Applied by the script rather than
+committed as a patch file because `third_party/fbink/` is a gitignored clone.
+Idempotent.
 
 ### Result
 

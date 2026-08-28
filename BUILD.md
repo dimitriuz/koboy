@@ -31,11 +31,11 @@ bash tests/test_dist.sh      # packaging contract + launcher safety
 bash scripts/verify-core.sh dist/<core>.so    # a built core's dependency closure
 ```
 
-**`tests/test_dist.sh` splits in two and says so loudly.** Its packaging half
-needs the cross toolchain and is skipped without it; its launcher half needs
-only a shell and always runs. That split exists because the two used to be one
-`set -e` block, so on a machine without the toolchain the script died silently
-having checked nothing.
+**`tests/test_dist.sh` splits in two and says so loudly.** The packaging half
+needs the cross toolchain and is skipped without it; the launcher half needs
+only a shell and always runs. The two used to be one `set -e` block, so on a
+machine without the toolchain the script died silently having checked
+nothing.
 
 A host build can `dlopen` a host-built core, so you can exercise the real
 pipeline on real content without a device. Every core script takes a `host`
@@ -69,10 +69,9 @@ established on the device rather than inferred:
 | Build attribute | `Tag_Advanced_SIMD_arch: NEONv1` |
 
 The 2021-23 Kobos are single-core Cortex-A9 with NEON; the 2024 MediaTek ones
-are Cortex-A53 running a 32-bit userland. **`armv7-a` + NEON is the floor both
-understand**, and it is a floor rather than a compromise to revisit: a core
-built for A53 alone can emit instructions an A9 does not implement, and it
-SIGILLs there.
+are Cortex-A53 on a 32-bit userland. **`armv7-a` + NEON is the floor both
+understand**, a floor and not a compromise to revisit: a core built for A53
+alone can emit instructions an A9 does not implement, and SIGILLs there.
 
 ### The one toolchain that fits, and where it comes from now
 
@@ -90,9 +89,8 @@ tar xf gcc-linaro-4.9-2014.09.tar.xz -C ~/.cache/koboy-toolchain/
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
 ```
 
-**Say plainly what this is: the project's build depends on a third-party
-archive of a decommissioned server.** That is a real single point of failure
-and nobody should discover it the hard way.
+**The project's build depends on a third-party archive of a decommissioned
+server** — a real single point of failure nobody should discover the hard way.
 
 **If that URL dies**, in rough order of effort:
 
@@ -107,11 +105,11 @@ and nobody should discover it the hard way.
    embedded-Linux distributions and by Android build environments of that era.
    Verify any candidate against the test below before trusting it — the point
    is the glibc version, not the filename.
-3. **Use a different prebuilt toolchain that targets glibc ≤ 2.19.** This was
-   searched once and came up nearly empty: Debian and Ubuntu of that era have
-   no clean "cross to an old release" packages, and Bootlin's archive's oldest
-   `armv7-eabihf` glibc build is **2.24** (2017), already too new. If you find
-   one, the symbol test below is the acceptance criterion.
+3. **Use a different prebuilt toolchain targeting glibc ≤ 2.19.** Searched
+   once and nearly empty: Debian and Ubuntu of that era have no clean "cross
+   to an old release" packages, and Bootlin's archive's oldest `armv7-eabihf`
+   glibc build is **2.24** (2017), already too new. The symbol test below is
+   the acceptance criterion.
 4. **Build one with crosstool-NG.** See the koxtoolchain note below for what
    went wrong the first time; a fresh crosstool-NG configuration targeting
    glibc 2.19 (not 2.15) may well work where that did not.
@@ -119,15 +117,15 @@ and nobody should discover it the hard way.
 ### Why koxtoolchain was abandoned — read this before trying it
 
 [koxtoolchain](https://github.com/koreader/koxtoolchain) is the obvious
-answer: KOReader uses it for these exact devices, and it builds a crosstool-NG
-toolchain against Kobo's own glibc and kernel headers.
+answer: KOReader uses it for these devices, building a crosstool-NG toolchain
+against Kobo's own glibc and kernel headers.
 
 It did not work here. Its `kobo` target's **glibc-2.15 build hung
 indefinitely** inside glibc's own `./configure`, right after `running
 configure fragment for ports/sysdeps/arm/elf`, printing one repeated
-progress-spinner line for hours. Confirmed a real hang rather than slow
-progress — `tail -4000 build.log | sort -u | wc -l` returned close to 1, one
-distinct line repeated thousands of times. A 2012-era libc's autoconf idioms
+progress-spinner line for hours. Confirmed a real hang, not slow progress —
+`tail -4000 build.log | sort -u | wc -l` returned close to 1. A 2012-era
+libc's autoconf idioms
 do not get on with a modern host's autoconf and shell. Two independent
 attempts, no workaround found.
 
@@ -196,16 +194,16 @@ without building the emulator at all. See `docs/probe-readme.md`.
 ### Upstream revisions are pinned
 
 `scripts/pins.txt` is the only place an upstream commit is written down: one
-row per project, `name url commit`. Every `scripts/build-*-core.sh` and
-`scripts/build-fbink.sh` fetches through `koboy_fetch_pinned` in
-`scripts/pins.sh`, which does `git fetch --depth 1 origin <sha>` into an empty
-repository — one commit, no history, and pinned, which a `git clone --depth 1`
-cannot be because clone takes a branch or a tag and not a commit id.
+row per project, `name url commit`. Every build script fetches through
+`koboy_fetch_pinned` (`scripts/pins.sh`), which does
+`git fetch --depth 1 origin <sha>` into an empty repository — one commit, no
+history, and PINNED, which `git clone --depth 1` cannot be because clone takes
+a branch or tag, not a commit id.
 
-**It fails loudly.** A pin that cannot be fetched stops the build with the pin
-named and an explicit instruction not to work around it by cloning `master`.
-That matters because the failure it replaces was invisible: a floating clone
-always succeeds and nothing tells you a different core got built.
+**It fails loudly.** A pin that cannot be fetched stops the build, names the
+pin, and says not to work around it by cloning `master` — because the failure
+it replaces was invisible: a floating clone always succeeds and nothing tells
+you a different core got built.
 
 **These pins are the builds `TESTED.md` measured.** Moving one invalidates
 that file's numbers for that system, and the pin table's header says so.
@@ -252,18 +250,17 @@ them are load-bearing. A sample of what is in there:
 
 ### `make dist` cannot ship content, and this is enforced
 
-`tests/test_dist.sh` asserts on the **archive's own file listing** that
-nothing with a ROM or BIOS extension is in it. This stopped being hypothetical
-when ColecoVision and Intellivision were added: those two BIOS files sit on
-the author's disk while the build scripts run, and a packaging step that
-picked one up would look exactly like a working build.
+`tests/test_dist.sh` asserts on the **archive's own file listing** that nothing
+with a ROM or BIOS extension is in it. Not hypothetical since ColecoVision and
+Intellivision arrived: those BIOS files sit on the author's disk while the
+build scripts run, and a packaging step that picked one up would look exactly
+like a working build.
 
-The same test asserts every core is present *by name*. That list is not
-decoration — it was added after it had already drifted twice, including once
-where gpSP was a prerequisite of the `dist` rule but had no `cp`, producing a
-package that built, zipped and passed everything while missing a whole
-system's core. **When you add a core to the Makefile, add it there in the same
-commit.**
+The same test asserts every core is present *by name*, added after that list
+had already drifted twice — once with gpSP a prerequisite of the `dist` rule
+but with no `cp`, producing a package that built, zipped and passed everything
+while missing a whole system's core. **When you add a core to the Makefile, add
+it there in the same commit.**
 
 ### C++ in the cores, and none in koboy
 
@@ -279,13 +276,12 @@ every build script runs it as its last step:
   libgcc_s, ld-linux-armhf}`, matched by anchored whole-name comparison.
 
 **`ld-linux-armhf.so.3` is on that allowlist deliberately.** It is the dynamic
-loader, not a library — every dynamically linked armhf binary needs it,
+LOADER, not a library — every dynamically linked armhf binary needs it,
 including the device's own working `fbink`. It appears because
-`-static-libstdc++` pulls in libstdc++'s exception-handling globals, which use
-TLS. Traced with a link map, and confirmed by `dlopen(RTLD_NOW)` of the real
-core **on the physical device**: `RTLD_NOW` resolves every dynamic symbol
-immediately, so a genuinely unresolvable dependency would have failed there
-and loudly.
+`-static-libstdc++` pulls in libstdc++'s TLS-based exception-handling globals.
+Traced with a link map and confirmed by `dlopen(RTLD_NOW)` of the real core
+**on the physical device**: RTLD_NOW resolves every dynamic symbol
+immediately, so an unresolvable dependency would have failed loudly there.
 
 Nine of the fourteen cores are pure C and need `libm` + `libc` or less. The
 WonderSwan and Neo Geo Pocket cores need `libc` **alone**. FBNeo is the only
@@ -294,32 +290,29 @@ one that pulls in `libpthread`.
 ### Two build gotchas worth knowing before you hit them
 
 **Never pass `CFLAGS` to a core's `make` on the command line.** GNU Make
-command-line variables cannot be appended to by the makefile's own `+=`, even
-with no `override` involved — verified with a three-line test makefile before
-the diagnosis was trusted. libretro makefiles all do
-`CXXFLAGS += $(INCFLAGS)`, so a command-line `CXXFLAGS` silently makes that a
-no-op and the build fails with `gambatte.h: No such file or directory`, which
-looks like a missing submodule and is not. Every script here **exports** them
-as environment variables instead, which have lower precedence than a
-makefile's own assignments.
+command-line variables cannot be appended to by the makefile's own `+=`, with
+no `override` involved — verified with a three-line test makefile. libretro
+makefiles all do `CXXFLAGS += $(INCFLAGS)`, so a command-line `CXXFLAGS`
+silently makes that a no-op and the build fails with `gambatte.h: No such file
+or directory`, which looks like a missing submodule and is not. Every script
+here **exports** them as environment variables, which have lower precedence
+than a makefile's own assignments.
 
 **FBInk needs one patch under this toolchain.** Its `Makefile` adds
-`-fno-semantic-interposition` unconditionally for non-Clang compilers. That is
+`-fno-semantic-interposition` unconditionally for non-Clang compilers; that is
 GCC ≥ 5 only, and GCC treats an unknown `-f` option as an **error**.
-`scripts/build-fbink.sh` gates that line on the compiler actually accepting
-the option, then re-greps to confirm the edit landed. It is applied by the
-script rather than committed as a patch file because `third_party/fbink/` is a
-gitignored clone with nothing to carry a patch against. The edit is
-idempotent.
+`scripts/build-fbink.sh` gates the line on the compiler accepting the option,
+then re-greps to confirm the edit landed. Applied by the script rather than
+committed as a patch file because `third_party/fbink/` is a gitignored clone.
+Idempotent.
 
 FBInk is built `MINIMAL` plus exactly three toggles — `DRAW` and `BITMAP` for
 the on-panel fatal-error screen, `INPUT` for `fbink_input_scan`. Everything
-else (OpenType, image decoding, Unifont) is dead weight, because koboy blits
-its own gray8 straight into the mapped framebuffer. Note that a `MINIMAL`
-build still *defines* every public symbol with a `return -ENOSYS` body, so an
-`nm` check cannot catch a dropped toggle; the script asserts on the actual
-`-DFBINK_WITH_*` defines in the recorded compiler invocation instead
-(`build/fbink-build.log`).
+else is dead weight, because koboy blits its own gray8 straight into the mapped
+framebuffer. A `MINIMAL` build still *defines* every public symbol with a
+`return -ENOSYS` body, so an `nm` check cannot catch a dropped toggle: the
+script asserts on the actual `-DFBINK_WITH_*` defines in the recorded compiler
+invocation (`build/fbink-build.log`).
 
 ---
 
@@ -337,16 +330,14 @@ accidents:
 
 - **A test that can only fail via undefined behaviour is not a test.** A
   sentinel guard band cannot detect an unclamped `memset` whose length
-  underflows to near `SIZE_MAX`, because where glibc actually writes for such a
-  length is an implementation detail that on x86-64 lands *inside* the buffer,
-  not in the guard. The fix was to stop observing UB and assert the clamped
-  values directly.
+  underflows to near `SIZE_MAX`: where glibc writes for such a length is an
+  implementation detail that on x86-64 lands *inside* the buffer, not in the
+  guard. The fix was to stop observing UB and assert the clamped values.
 - **A grep for a word matches the comment explaining the word.** Two
-  assertions in `tests/test_dist.sh` were satisfied by a 60-line comment that
-  named all three variables the gate was supposed to test, and by an unrelated
-  line elsewhere in the file. Every grep there now runs over a
-  comment-stripped *slice* of the script and matches the shell construct
-  rather than a word in it.
+  assertions in `tests/test_dist.sh` were satisfied by a 60-line comment naming
+  all three variables the gate was supposed to test, and by an unrelated line
+  elsewhere. Every grep there now runs over a comment-stripped *slice* and
+  matches the shell construct rather than a word in it.
 
 And the corollary from the v1 endgame: a first-run deadlock survived twenty
 per-task reviews because the scripted-run branch skips calibration —
@@ -369,16 +360,15 @@ the gate exists because this happened once, by hand.
 
 There is a narrower, genuinely safe way to exercise a build over SSH:
 `./koboy --frames N` run directly, bypassing `koboy.sh`. It never stops the
-reader software and never touches the input grab, so it exercises the core,
-the save path and the whole video pipeline — and exercises none of the
-takeover, the touch d-pad or the in-game menu. Most of `TESTED.md`'s device
-measurements were taken that way.
+reader software and never touches the input grab, so it exercises the core, the
+save path and the whole video pipeline — and none of the takeover, the touch
+d-pad or the in-game menu. Most of `TESTED.md`'s device measurements were taken
+that way.
 
-And a measurement caveat that is not a formality: **benchmarking this device
-back to back gives numbers that climb.** A first pass with no gaps read up to
-2.4× high and kept rising through the batch; an isolated re-run of the same
-binary on the same ROM came back at the first row's figure. Ten seconds of
-idle between runs, every time.
+A measurement caveat that is not a formality: **benchmarking this device back
+to back gives numbers that climb.** A first pass with no gaps read up to 2.4×
+high and kept rising; an isolated re-run of the same binary on the same ROM
+came back at the first row's figure. Ten seconds of idle between runs.
 
 ---
 
