@@ -1,48 +1,34 @@
 /* koboy-probe: a two-mode device profiler.
  *
- * koboy has only ever run on one physical device -- a Kobo Libra 2, see
- * TESTED.md -- because that is the only one anyone building it owns. Every
- * other Kobo family FBInk supports (Clara, Sage, Elipsa, Libra Colour) is a
- * hardware unknown: right panel size on paper, but an unmeasured stride, an
- * unmeasured waveform table, unmeasured touch geometry. This is how someone
- * who *does* own one of those turns "unmeasured" into a pasteable TESTED.md
- * row without reading a line of the rest of this project's C.
+ * koboy has only ever run on one physical device (a Kobo Libra 2, TESTED.md).
+ * Every other Kobo family FBInk supports is a hardware unknown: right panel
+ * size on paper, unmeasured stride, waveform table and touch geometry. This is
+ * how an owner of one turns "unmeasured" into a pasteable TESTED.md row
+ * without reading the rest of this project's C.
  *
- * Two modes exist because Nickel's input grab (see platform_kobo.c) splits
- * the job in half:
+ * TWO MODES, because Nickel's input grab splits the job in half:
  *
- *  --coexist (default). Everything that does NOT require reading an actual
- *  input event: device identity, panel geometry, input node *capabilities*
- *  (names, advertised keys, axis ranges -- all queryable without taking a
- *  single event Nickel is entitled to), and a refresh-timing sweep across
- *  waveform modes and region sizes. It never calls EVIOCGRAB, never changes
- *  framebuffer depth, and has no restore path to get wrong, so it is safe to
- *  run with the reader UI on screen. This is the mode that produced the
- *  design spec's Appendix A.
+ *  --coexist (default): everything that does NOT require reading an input
+ *  event -- device identity, panel geometry, input node CAPABILITIES (names,
+ *  advertised keys, axis ranges, all queryable without taking an event Nickel
+ *  is entitled to), and a refresh-timing sweep across waveforms and region
+ *  sizes. Never calls EVIOCGRAB, never changes framebuffer depth, has no
+ *  restore path to get wrong, so it is safe with the reader UI on screen. This
+ *  produced the design spec's Appendix A.
  *
- *  --takeover. For the one thing coexisting mode structurally cannot do:
- *  read real button presses and touch points, which needs a readable input
- *  node, and Nickel's EVIOCGRAB means no other process gets a single event
- *  while it holds one. An earlier version of this design had takeover mode
- *  stop Nickel itself and restore it afterwards -- but that duplicates the
- *  launcher's entire restore path (scripts/koboy.sh: hindenburg, the Wi-Fi
- *  teardown, the device-identity hazard documented in README.md) inside a
- *  tool whose only job is to write a text file, for no measurement this
- *  mode actually needs. So instead it REFUSES to run while Nickel is up --
- *  checked by looking for the process -- and says so, rather than silently
- *  reading nothing and leaving whoever ran it to wonder why every field came
- *  back empty. That silent-empty-result outcome is the trap the original
- *  design fell into. Stopping Nickel first is the caller's job; koboy.sh's
- *  own stop sequence is the reference for how.
+ *  --takeover: the one thing coexisting cannot do -- read real button presses
+ *  and touch points, which needs a readable node while Nickel's EVIOCGRAB
+ *  gives nothing. It REFUSES to run while Nickel is up and says so, rather
+ *  than silently reading nothing and leaving whoever ran it wondering why
+ *  every field came back empty -- the trap the original design fell into.
+ *  Stopping Nickel first is the caller's job; koboy.sh is the reference. An
+ *  earlier design stopped Nickel here, which duplicates the launcher's entire
+ *  restore path inside a tool whose job is to write a text file.
  *
- * Either mode writes /mnt/onboard/koboy-probe-<device>.txt as key=value
- * lines, one fact per line, so a TESTED.md row can be assembled by eye.
- * --coexist opens it fresh (a re-run should not accumulate stale sweep
- * data); --takeover opens it in APPEND mode and adds a dated block, so the
- * documented workflow of running --coexist and then --takeover on the same
- * device leaves one file carrying both -- panel/stride/touch/sweep facts
- * plus captured key codes and touch samples -- rather than the takeover run
- * quietly truncating away everything --coexist had just written.
+ * Either mode writes /mnt/onboard/koboy-probe-<device>.txt as key=value lines.
+ * --coexist opens it FRESH (a re-run must not accumulate stale sweep data);
+ * --takeover APPENDS a dated block, so running both on one device leaves one
+ * file carrying everything rather than the second truncating the first.
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -167,13 +153,10 @@ static uint64_t median_u64(uint64_t *v, int n)
     return v[n / 2];
 }
 
-/* =========================================================================
- * Waveform gating -- mirrors platform_kobo.c's map_waveforms(), on purpose:
- * that logic is already validated on the reference device (Appendix B), and
- * this probe's DU4-capability finding must agree with what the emulator
- * itself would decide on the same hardware, or a contributor's TESTED.md row
- * would describe a different device than the one koboy actually runs on.
- * ========================================================================= */
+/* Waveform gating -- MIRRORS platform_kobo.c's map_waveforms() on purpose:
+ * this probe's DU4-capability finding must agree with what the emulator would
+ * decide on the same hardware, or a contributor's TESTED.md row describes a
+ * different device than the one koboy runs on. */
 
 static int platform_mark(const char *plat)
 {
@@ -188,25 +171,18 @@ static bool has_du4_capability(const FBInkState *st)
     return !st->is_sunxi && st->has_eclipse_wfm && platform_mark(st->device_platform) >= 9;
 }
 
-/* =========================================================================
- * Input capabilities, parsed from /proc/bus/input/devices.
+/* Input capabilities, parsed from /proc/bus/input/devices.
  *
- * Deliberately NOT fbink_input_scan(): that call is exactly what
- * platform_kobo.c uses at runtime, and reusing it here would make this
- * report only as trustworthy as fbink_input_scan's own classification. A
- * probe's job is to describe the hardware in a way a human can cross-check,
- * so it reads the same kernel-exposed bitmasks a person could read by hand
- * over `cat /proc/bus/input/devices`, and says exactly which bit test led to
- * each classification (see the comments below).
+ * Deliberately NOT fbink_input_scan(): that is what platform_kobo.c uses at
+ * runtime, so reusing it would make this report only as trustworthy as its
+ * classification. A probe describes hardware in a way a human can cross-check,
+ * so it reads the same kernel bitmasks a person could `cat` by hand and says
+ * which bit test led to each classification.
  *
- * The one thing that file does NOT carry is axis range (min/max) -- only
- * "this axis exists", not "and its maximum is". For that this still opens
- * the node, read-only and non-blocking, and calls EVIOCGABS. That ioctl (and
- * EVIOCGBIT, not used here because /proc's KEY= line already gives us the
- * same bitmask) queries the device's own capability tables, not the event
- * queue delivery a grab controls -- so doing this never takes anything away
- * from Nickel, which is why it is safe in --coexist mode at all.
- * ========================================================================= */
+ * That file does NOT carry axis RANGE -- only "this axis exists". For that
+ * this opens the node read-only and non-blocking and calls EVIOCGABS, which
+ * queries the device's CAPABILITY TABLES, not the event queue a grab controls
+ * -- which is why it is safe in --coexist at all. */
 
 #define MAX_NODES     16
 #define MAX_KEY_NODES 4
@@ -223,12 +199,11 @@ typedef struct {
     unsigned long prop[BITLINE_WORDS]; int n_prop;
 } raw_node;
 
-/* Parses "e630000 0 3" (the part of a "B: ABS=..." line after the '=') into
-   an array of words IN THE ORDER PRINTED, i.e. most-significant word first.
-   The kernel's own bitmap printer (bitmap_print_to_pagebuf) walks from the
+/* Parses the part of a "B: ABS=..." line after the '=' into words IN THE ORDER
+   PRINTED, most-significant first: the kernel's bitmap printer walks from the
    highest populated word down to word 0, so bit N lives in
-   words[count - 1 - N/BITS_PER_LONG], not words[N/BITS_PER_LONG] -- callers
-   must go through bit_test()/bit_list() below, never index `words` raw. */
+   words[count - 1 - N/BITS_PER_LONG]. CALLERS MUST GO THROUGH
+   bit_test()/bit_list(), never index `words` raw. */
 static int parse_bitline(const char *s, unsigned long *words, int cap)
 {
     int n = 0;
@@ -337,11 +312,8 @@ typedef struct { const char *name; uint8_t wfm; bool flash; } wfm_case;
 typedef struct { int w, h; } region_size;
 
 /* Trimmed from Appendix A's full table (which also carried DU and GL16) to
-   keep a probe run under about a minute: DU4-vs-A2 is the gate that matters
-   per device, GC16 is what the periodic full-flash pays, and AUTO is what
-   koboy actually ships. Appendix A already established DU/GL16's place in
-   the hierarchy on the one device anyone has measured; re-deriving that
-   ranking is not this tool's job. */
+   keep a run under a minute: DU4-vs-A2 is the per-device gate, GC16 is what
+   the periodic full-flash pays, AUTO is what ships. */
 static const region_size REGIONS[] = {
     { 1120, 1008 },  /* Appendix A's own region -- the direct cross-check */
     { 800, 720 },    /* koboy's shipped default game rect (5x) */
@@ -352,12 +324,10 @@ static const region_size REGIONS[] = {
 #define N_REGIONS (int)(sizeof(REGIONS) / sizeof(REGIONS[0]))
 #define SWEEP_PASSES 3
 
-/* Solid fill, honouring stride/bpp/inversion exactly like
-   platform_kobo.c's kobo_blit_gray8 -- duplicated rather than shared because
-   that function blits a caller-owned buffer and this only ever needs one
-   flat value, and pulling platform_kobo.c's vtable machinery into a
-   standalone profiler for one memset would be the wrong direction of
-   dependency. */
+/* Solid fill, honouring stride/bpp/inversion like kobo_blit_gray8 --
+   DUPLICATED rather than shared, because that blits a caller-owned buffer and
+   this needs one flat value, and pulling the vtable machinery into a
+   standalone profiler for one memset is the wrong dependency direction. */
 static void fb_fill(unsigned char *fbmem, uint32_t stride, uint32_t bpp, bool inv,
                     int origin_x, int origin_y, int x, int y, int w, int h, uint8_t val)
 {
@@ -385,13 +355,11 @@ static void fb_fill(unsigned char *fbmem, uint32_t stride, uint32_t bpp, bool in
     }
 }
 
-/* One (mode, region) cell of the sweep: SWEEP_PASSES refreshes, each timed
-   twice -- once for bare submission, once including
-   fbink_wait_for_complete(). The fill value alternates white/black across
-   every single call in the whole sweep (via *toggle), never just within one
-   cell, so every measured refresh is a genuine erase-or-set transition and
-   not a no-op the EPDC (especially under AUTO, which inspects the actual
-   pixel histogram) could shortcut. */
+/* One (mode, region) cell: SWEEP_PASSES refreshes, each timed twice -- bare
+   submission, then including fbink_wait_for_complete(). The fill ALTERNATES
+   white/black across every call in the whole sweep (via *toggle), not just
+   within a cell, so every measured refresh is a genuine transition and not a
+   no-op the EPDC could shortcut. */
 static void sweep_cell(int fbfd, unsigned char *fbmem, uint32_t stride, uint32_t bpp,
                        bool inv, int origin_x, int origin_y, int w, int h,
                        const wfm_case *wc, FBInkConfig base_cfg, uint8_t *toggle,
@@ -426,24 +394,21 @@ static void sweep_cell(int fbfd, unsigned char *fbmem, uint32_t stride, uint32_t
 
 /* ------------------------------------------------ sustained update period */
 
-/* How many back-to-back updates one sustain cell issues, and how many of them
-   are discarded before the median is taken. The EPDC hands out a small pool of
-   update descriptors, so the first submissions return immediately regardless
-   of how long the panel needs; only once the pool is exhausted does
-   MXCFB_SEND_UPDATE start blocking on a slot, and only from then on does the
-   loop run at the panel's rate. Two warmups empty the pool on every driver
-   depth this code has seen; ten timed iterations then keep a cell under three
-   seconds even at GC16 speeds. */
+/* Back-to-back updates per sustain cell, and how many are discarded before the
+   median. The EPDC hands out a small pool of update descriptors, so the first
+   submissions return immediately whatever the panel needs; only once the pool
+   is exhausted does MXCFB_SEND_UPDATE block on a slot and the loop run at the
+   panel's rate. Two warmups empty the pool on every driver depth seen; ten
+   timed iterations keep a cell under three seconds even at GC16. */
 #define SUSTAIN_PASSES 12
 #define SUSTAIN_WARMUP 2
 
 /* A checkerboard of `cell`-sized squares, phase-shifted by `phase`. Two
-   consecutive phases differ on about half the pixels, which is what a
-   DITHERED scene scrolling under koboy actually asks the panel for; a solid
-   black/white flip (fb_fill, above) is the 100%-transition worst case and
-   nothing on screen ever looks like it. Both are measured because the gap
-   between them is the difference between a pacing constant that is merely
-   safe and one that is honest. */
+   consecutive phases differ on about half the pixels, which is what a DITHERED
+   scene scrolling under koboy asks for; a solid flip (fb_fill) is the
+   100%-transition worst case that nothing on screen looks like. Both are
+   measured because the gap between them is the difference between a pacing
+   constant that is merely safe and one that is honest. */
 static void fb_checker(unsigned char *fbmem, uint32_t stride, uint32_t bpp, bool inv,
                        int origin_x, int origin_y, int w, int h, int cell, int phase)
 {
@@ -467,26 +432,23 @@ static void fb_checker(unsigned char *fbmem, uint32_t stride, uint32_t bpp, bool
     }
 }
 
-/* THE MEASUREMENT THIS FILE GAINED FOR AREA-AWARE PACING, and it deliberately
-   does NOT use fbink_wait_for_complete().
+/* THE MEASUREMENT AREA-AWARE PACING IS BUILT ON, and it deliberately does NOT
+   use fbink_wait_for_complete(): this device reports
+   `unreliable_wait_for=1`, which applies to exactly the
+   MXCFB_WAIT_FOR_UPDATE_COMPLETE ioctl every blocking figure in the sweep
+   above depends on (Appendix B). A pacing constant from a suspect ioctl is a
+   guess wearing a measurement's clothes.
 
-   Appendix B records why: this device reports `unreliable_wait_for=1`, and
-   that flag applies to exactly the MXCFB_WAIT_FOR_UPDATE_COMPLETE ioctl every
-   blocking figure in the sweep above depends on. A pacing constant derived
-   from a suspect ioctl would be a guess wearing a measurement's clothes.
+   What this measures is the rate at which the panel will ACCEPT work: submit
+   back to back with no wait, and once the descriptor pool is full each further
+   submission blocks until an earlier update retires, so the loop settles at
+   one iteration per completed update. The steady-state interval between
+   iteration starts IS the panel's period for that (waveform, area), through
+   the same non-blocking path koboy's main loop uses.
 
-   What this measures instead is the rate at which the panel will ACCEPT work.
-   Submit updates to one region back to back with no wait at all; once the
-   driver's descriptor pool is full, each further submission blocks until an
-   earlier update retires, so the loop settles at one iteration per completed
-   update. The interval between iteration starts, in that steady state, IS the
-   panel's period for that (waveform, area) -- measured through the same
-   non-blocking path koboy's main loop uses, with no privileged ioctl in it.
-
-   `fill_us` is reported alongside and is not noise: the loop period is
+   `fill_us` is reported alongside and is NOT noise: the loop period is
    max(panel period, fill + submit), so a cell whose fill cost approaches its
-   period is measuring this process, not the panel. Read the two together or
-   do not read either. */
+   period is measuring this process, not the panel. */
 static void sustain_cell(int fbfd, unsigned char *fbmem, uint32_t stride, uint32_t bpp,
                          bool inv, int origin_x, int origin_y, int w, int h,
                          const wfm_case *wc, FBInkConfig base_cfg, uint8_t *toggle,
@@ -560,12 +522,10 @@ static int run_coexist(void)
     memset(&st, 0, sizeof st);
     fbink_get_state(&fb_cfg, &st);
 
-    /* Same ORIGIN derivation as platform_kobo.c's kobo_init(), and for the
-       same reason: FBInkState.view_vert_origin already has FBInk's own
-       text-row-balancing offset folded in (view_vert_origin =
-       viewport-origin + view_vert_offset), so subtracting view_vert_offset
-       back out is what recovers the real framebuffer viewport origin. On
-       the reference device this is 0, not the raw field's 8. */
+    /* Same ORIGIN derivation as kobo_init(): view_vert_origin already has
+       FBInk's text-row-balancing offset folded in, so subtracting
+       view_vert_offset recovers the real viewport origin -- 0 on the reference
+       device, not the raw field's 8. */
     int origin_x = (int)st.view_hori_origin;
     int origin_y = (int)st.view_vert_origin - (int)st.view_vert_offset;
     if (origin_x < 0) origin_x = 0;
@@ -738,13 +698,11 @@ static int run_coexist(void)
     int      n_cases = 0;
     cases[n_cases++] = (wfm_case){ "AUTO", WFM_AUTO, false };
     if (du4_capable) cases[n_cases++] = (wfm_case){ "DU4", WFM_DU4, false };
-    /* DU, the TWO-level fast waveform, ungated: it is in FBInk's "Common"
-       block, so unlike DU4 there is no quirk to check. It is here because
-       `waveform_fast = du` is now a shipped option and nobody has a number
-       for what it costs on ANY panel -- the reference device's Appendix A
-       sweep predates it. A probe of an unknown device that reported AUTO,
-       DU4, A2 and GC16 but not the one waveform koboy might newly be told to
-       use would leave exactly the gap this file exists to close. */
+    /* DU, the TWO-level fast waveform, UNGATED: in FBInk's "Common" block, so
+       unlike DU4 there is no quirk to check. Here because `waveform_fast = du`
+       is a shipped option that the reference device's Appendix A sweep
+       predates, so a probe reporting AUTO/DU4/A2/GC16 but not it would leave
+       exactly the gap this file exists to close. */
     cases[n_cases++] = (wfm_case){ "DU",   WFM_DU,   false };
     cases[n_cases++] = (wfm_case){ "A2",   WFM_A2,   false };
     cases[n_cases++] = (wfm_case){ "GC16", WFM_GC16, true  };

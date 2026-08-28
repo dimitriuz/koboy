@@ -1,13 +1,12 @@
 /* Kobo backend for the platform seam: FBInk for the panel, raw evdev for input.
  *
- * This is the counterpart of platform_sdl.c and drives exactly the same vtable,
- * so everything above the seam -- chrome, video pipeline, thumb-pad hit-testing,
- * pacing -- is code already debugged on the desktop. What is genuinely new here
- * is only what a monitor cannot model: e-ink waveform modes, a framebuffer whose
- * scanline is wider than the visible panel, and an input layer that another
- * process may be holding exclusively.
+ * The counterpart of platform_sdl.c, driving the same vtable, so everything
+ * above the seam is code already debugged on the desktop. What is new here is
+ * only what a monitor cannot model: e-ink waveform modes, a framebuffer whose
+ * scanline is wider than the visible panel, and an input layer another process
+ * may hold exclusively.
  *
- * Three things about this file are load-bearing and easy to get wrong:
+ * Three things here are load-bearing and easy to get wrong:
  *
  *  1. Refreshes never wait for completion. fbink_wait_for_complete() is
  *     deliberately never called; the emulator must not stall for the panel.
@@ -142,15 +141,14 @@ static int platform_mark(const char *plat)
    Both are 4-level-capable, and src/video.c already quantises to
    KOBOY_DU4_LEVELS, so DU4 costs nothing in fidelity either.
 
-   The gate is not the Mark number alone. On Kobo's mxcfb path FBInk maps
+   THE GATE IS NOT THE MARK NUMBER ALONE. On Kobo's mxcfb path FBInk maps
    WFM_DU4 to the real WAVEFORM_MODE_DU4 only when deviceQuirks.hasEclipseWfm
-   is set, and *silently downgrades it to GC4 otherwise* -- so asking for DU4
-   on a device without it would leave us reporting DU4 while the panel ran
-   something else. We therefore require the quirk as well, and exclude sunxi,
-   whose waveform table is a different enum entirely. Platforms that fail the
-   gate fall back to A2 for FAST and GL16 for GRAY, which is the classic
-   pre-Mk.9 pairing. FULL is GC16, flashing, everywhere: it is the
-   ghost-clearing refresh, and a non-flashing GC16 does not clear ghosting. */
+   is set, and SILENTLY DOWNGRADES IT TO GC4 otherwise -- so asking for DU4
+   without the quirk leaves us reporting DU4 while the panel runs something
+   else. So the quirk is required too, and sunxi (a different waveform enum) is
+   excluded. Failing the gate falls back to A2 for FAST and GL16 for GRAY, the
+   classic pre-Mk.9 pairing. FULL is GC16 everywhere: it is the ghost-clearing
+   refresh, and a non-flashing one does not clear ghosting. */
 /* Split from map_waveforms so the mapping can be REDONE on a running session
    -- the in-game MOTION entry changes wfm_fast_policy mid-game -- without
    needing an FBInkState the backend no longer has. The capability question is
@@ -172,24 +170,20 @@ static void map_waveforms(kobo_ctx *k)
        is exactly what a non-flashing waveform cannot do. Forcing a waveform
        means overriding that judgement on every single refresh. */
     if (k->cfg.wfm_fast_policy == KOBOY_WFM_DU) {
-        /* TWO-LEVEL, and no capability gate: WFM_DU is in FBInk's "Common"
-           block, so every mxcfb-era Kobo has it and there is no quirk to
-           check and no silent downgrade to report -- unlike DU4 below.
+        /* TWO-LEVEL, and NO capability gate: WFM_DU is in FBInk's "Common"
+           block, so every mxcfb-era Kobo has it -- no quirk, no silent
+           downgrade, unlike DU4 below.
 
-           It is here for `force_dither`, not on its own. FBInk's header:
+           Here for `force_dither`, not on its own. FBInk's header:
            "on-screen pixels will be left as-is for new content that is *not*
-           B&W". Against koboy's four-level output that clause means the two
-           MIDDLE levels are pixels the panel declines to touch, which is the
-           failed forced-DU4 experiment wearing a different number. Against
-           genuinely 1-bit output every pixel's new value is black or white,
-           so there is no transition DU is being asked to leave half-done.
-           See koboy_wfm_policy and docs/FOLLOWUPS.md #25.
+           B&W". Against four-level output that means the two MIDDLE levels are
+           pixels the panel declines to touch -- the failed forced-DU4
+           experiment under a different number. Against genuinely 1-bit output
+           every new value is black or white. docs/FOLLOWUPS.md #25.
 
-           GRAY stays AUTO rather than following FAST, and that is deliberate
-           rather than an omission: KOBOY_REFRESH_GRAY means "this update has
-           intermediate levels in it", and DU is by definition the waveform
-           that cannot render them. Naming DU there would be a lie the log
-           would then repeat. */
+           GRAY stays AUTO rather than following FAST, deliberately:
+           KOBOY_REFRESH_GRAY means "this update has intermediate levels", and
+           DU is by definition the waveform that cannot render them. */
         k->wfm[KOBOY_REFRESH_FAST] = WFM_DU;   k->wfm_name[KOBOY_REFRESH_FAST] = "DU";
         k->wfm[KOBOY_REFRESH_GRAY] = WFM_AUTO; k->wfm_name[KOBOY_REFRESH_GRAY] = "AUTO";
     } else if (k->cfg.wfm_fast_policy == KOBOY_WFM_AUTO) {
@@ -239,13 +233,11 @@ static void release_input(kobo_ctx *k)
 
 static kobo_ctx *g_emergency;
 
-/* Only for the signals that mean "this process is about to die without running
-   any cleanup". SIGTERM/SIGINT are deliberately NOT handled here: main.c
-   installs its own handlers for those (after platform init, on purpose), turns
-   them into a clean loop exit, and reaches shutdown() normally.
-
-   ioctl() and close() are both async-signal-safe, so this is legal in a
-   handler; nothing else is attempted. */
+/* Only for signals meaning "this process is about to die without cleanup".
+   SIGTERM/SIGINT are deliberately NOT handled here -- main.c installs its own
+   after platform init and reaches shutdown() normally. ioctl() and close() are
+   async-signal-safe, so this is legal in a handler; nothing else is
+   attempted. */
 static void emergency(int sig)
 {
     if (g_emergency) release_input(g_emergency);
@@ -287,12 +279,11 @@ static bool node_has_key(int fd, unsigned int code)
     return (bits[code / 8] & (1u << (code % 8))) != 0;
 }
 
-/* Classification comes from fbink_input_scan rather than from hardcoded
-   event<N> numbers: the numbering is not stable across firmwares, and on the
-   reference device the touchscreen happens to be event1 while the keys are
-   event0 and the accelerometer -- which we want nothing to do with -- is
-   event2. SCAN_ONLY means FBInk closes every fd it opened; we reopen the two
-   we care about ourselves, so the open flags and the grabs are ours. */
+/* Classification from fbink_input_scan, NOT hardcoded event<N> numbers: the
+   numbering is not stable across firmwares (on the reference device touch is
+   event1, keys event0, the accelerometer event2). SCAN_ONLY makes FBInk close
+   every fd it opened; we reopen the two we want, so the open flags and grabs
+   are ours. */
 /* Reads the axis maxima and derives the transposition for an already-open
    touchscreen fd. Shared by the scan path and the override path below. */
 static void touch_axes(kobo_ctx *k, int fd, const char *path, const char *name)
@@ -382,13 +373,11 @@ static void open_input(kobo_ctx *k)
     }
     free(dev);
 
-    /* Grabbing keeps a stray Nickel restart, or anything else that wakes up
-       mid-game, from stealing or double-handling our input. But never grab a
-       node that carries KEY_POWER: on this hardware the page-turn buttons and
-       the power button are the same gpio-keys node, and swallowing power
-       presses on a device whose only other way out is a paperclip reset is not
-       a trade worth making. We still *read* that node, so KEY_POWER quitting
-       and the page-turn buttons both work; we just do not take it exclusively. */
+    /* Grabbing keeps a stray Nickel restart from stealing or double-handling
+       input. But NEVER grab a node carrying KEY_POWER: the page-turn buttons
+       and the power button are the same gpio-keys node here, and swallowing
+       power presses on a device whose only other way out is a paperclip reset
+       is not a trade worth making. The node is still READ, so both work. */
     if (k->cfg.grab_input) {
         if (k->touch_fd >= 0 && ioctl(k->touch_fd, EVIOCGRAB, 1) == 0)
             k->touch_grabbed = true;
@@ -404,19 +393,15 @@ static void open_input(kobo_ctx *k)
 }
 
 /* A gamepad is found through btinput_scan (/proc/bus/input/devices), not
-   fbink_input_scan above: FBInk's scan only classifies touchscreen/key/power/
-   accelerometer nodes, and a Bluetooth HID gamepad is none of those to it.
-   Kept out of open_input() and called on its own schedule instead of once at
-   start-up, because MEASURED on the reference device: BlueZ's ReconnectUUIDs
-   policy reconnects a paired gamepad on its own timetable, which frequently
-   lands after koboy has already started -- a start-up-only scan would often
-   find nothing and never look again for the rest of the session.
+   fbink_input_scan: FBInk's scan classifies only touchscreen/key/power/
+   accelerometer nodes. Called on its own schedule rather than once at start-up
+   because MEASURED: BlueZ reconnects a paired gamepad on its own timetable,
+   frequently AFTER koboy has started, so a start-up-only scan would find
+   nothing and never look again.
 
-   Rate-limited to once a second via now_us(), the same clock the rest of the
-   backend already uses: this reads /proc, and calling it once per frame from
-   the 60Hz poll loop would turn a hot-plug convenience into a syscall storm.
-   No-ops immediately whenever a pad is already open -- there is one slot, and
-   a live fd needs no rescanning. */
+   Rate-limited to once a second via now_us(): this reads /proc, and calling it
+   from the 60 Hz poll loop would turn a hot-plug convenience into a syscall
+   storm. No-ops when a pad is already open. */
 static void gamepad_rescan(kobo_ctx *k)
 {
     if (k->pad_fd >= 0) return;
@@ -434,14 +419,11 @@ static void gamepad_rescan(kobo_ctx *k)
         return;
     }
 
-    /* Deliberately NOT EVIOCGRAB'd. MEASURED on the reference device,
-       2026-08-26: Nickel holds EVIOCGRAB on the touchscreen and the key
-       nodes but reads the gamepad node WITHOUT grabbing it, so there is
-       nothing here to compete with or protect against. And an fd this
-       project does grab has to be tracked and released correctly on every
-       exit path (see release_input/emergency above) -- a hazard this file's
-       own header comment calls out. Skipping the grab avoids that class of
-       bug entirely for a device where grabbing buys nothing. */
+    /* Deliberately NOT EVIOCGRAB'd. MEASURED 2026-08-26: Nickel grabs the
+       touchscreen and key nodes but reads the gamepad node WITHOUT grabbing
+       it, so there is nothing to compete with. A grabbed fd must also be
+       tracked and released on every exit path -- skipping the grab avoids that
+       class of bug for a device where grabbing buys nothing. */
     k->pad_fd = fd;
     snprintf(k->pad_node, sizeof k->pad_node, "%s", node);
     kobo_say(k, "koboy: gamepad %s\n", k->pad_node);
@@ -492,19 +474,15 @@ static bool kobo_init(void *ctx, const koboy_config *c)
     k->bpp    = st.bpp;
     k->inverted_gray = st.inverted_grayscale;
 
-    /* ORIGIN. FBInkState.view_vert_origin is *not* the framebuffer viewport
-       origin: FBInk documents it as "viewport + viewVertOffset", and
-       viewVertOffset is a text-layout shift used to vertically balance whole
-       character rows inside the viewport (fbink.c: `viewVertOrigin =
-       viewVertOrigin + viewVertOffset`, after the viewport block).
-       The reference device's own quirk table sets no koboVertOffset at all
-       (fbink_device_id.c, DEVICE_KOBO_LIBRA_2), so its real framebuffer
-       viewport origin is 0 and the reported viewVertOrigin of 8 is purely
-       FBInk's font-row centring. Adding it to a pixel blit would push the
-       whole image down by 8px and clip the bottom 8 rows.
-       The framebuffer viewport is therefore origin = origin - offset, which is
-       0 here and non-zero only on the handful of Kobos that really do hide
-       rows behind the bezel (koboVertOffset != 0). */
+    /* ORIGIN. FBInkState.view_vert_origin is NOT the framebuffer viewport
+       origin: FBInk documents it as "viewport + viewVertOffset", where
+       viewVertOffset is a TEXT-LAYOUT shift that vertically balances whole
+       character rows. The reference device sets no koboVertOffset
+       (fbink_device_id.c), so its real viewport origin is 0 and the reported
+       viewVertOrigin of 8 is purely font-row centring -- adding it to a pixel
+       blit pushes the image down 8 px and clips the bottom 8 rows.
+       So origin = origin - offset: 0 here, non-zero only on the few Kobos that
+       really do hide rows behind the bezel. */
     k->origin_x = (int)st.view_hori_origin;
     k->origin_y = (int)st.view_vert_origin - (int)st.view_vert_offset;
     if (k->origin_x < 0) k->origin_x = 0;
@@ -551,19 +529,16 @@ static bool kobo_init(void *ctx, const koboy_config *c)
 
     open_input(k);
 
-    /* One attempt right away, so a gamepad already paired and connected before
-       launch shows up in --selftest output and the log's usual place, next to
-       the touch/keys lines above, instead of only after the first poll_input
-       call from inside the frame loop. kobo_poll_input's own call covers the
-       far more common case (plan/progress.md, 2026-08-26 measurement): the
-       pad reconnecting on BlueZ's own schedule, after koboy has started. */
+    /* One attempt right away, so a pad already connected before launch shows
+       up in --selftest beside the touch/keys lines rather than only after the
+       first poll_input. kobo_poll_input's own call covers the commoner case:
+       the pad reconnecting on BlueZ's schedule, after koboy started. */
     gamepad_rescan(k);
 
-    /* input.c applies transpose first and the mirrors afterwards, which is the
-       same order FBInk defines its quirks in, so the mirror flags carry over
-       directly -- but only if the two agree about the swap. If they disagree,
-       the mirrors were derived under a different convention and applying them
-       would be worse than not: trust the measured maxima for the swap and drop
+    /* input.c applies transpose first, then the mirrors -- the same order
+       FBInk defines its quirks in, so the flags carry over directly, BUT ONLY
+       IF the two agree about the swap. If they disagree the mirrors came from
+       a different convention: trust the measured maxima for the swap and drop
        the mirrors. */
     if (k->touch_fd >= 0 && st.touch_swap_axes != k->transpose) {
         kobo_say(k, "koboy: FBInk reports touchSwapAxes=%d but the axis maxima "
@@ -596,17 +571,15 @@ static void kobo_screen_info(void *ctx, int *w, int *h)
 
 /* Writes gray8 rows straight into the mmap'ed framebuffer.
  *
- * Deliberately not fbink_print_raw_data: that call would have to be told the
- * offsets anyway, and it copies the whole input buffer once to normalise the
- * pixel format. Here the destination pixel format is known from
- * fbink_get_state, the source is already the exact gray8 the panel wants, and
- * the only thing that must not be got wrong is the stride -- which is why it
- * is spelled out on every row rather than folded into a library call.
+ * NOT fbink_print_raw_data: that would have to be told the offsets anyway and
+ * copies the whole input buffer once to normalise the pixel format. Here the
+ * destination format is known from fbink_get_state and the source is already
+ * the exact gray8 the panel wants, so the one thing that must not be wrong is
+ * the STRIDE -- spelled out per row rather than folded into a library call.
  *
- * All three plausible depths are handled, so the launch script's `fbdepth -d 8`
- * is an optimisation (a straight memcpy per row, and a quarter of the memory
- * bandwidth) rather than a precondition. Running at the native 32bpp works;
- * it just copies four bytes per pixel instead of one. */
+ * All three plausible depths are handled, so `fbdepth -d 8` in the launcher is
+ * an OPTIMISATION (a memcpy per row, a quarter of the bandwidth), not a
+ * precondition. */
 static bool kobo_blit_gray8(void *ctx, const uint8_t *px, int w, int h,
                             int stride, int x, int y)
 {
@@ -650,12 +623,11 @@ static bool kobo_blit_gray8(void *ctx, const uint8_t *px, int w, int h,
     return true;
 }
 
-/* Submit and return. fbink_wait_for_complete() is NOT called, here or anywhere:
-   at the shipped 5x game rect the same refresh measured 15.0 ms submitted
-   versus 39.2 ms waited, and the emulator has 16.7 ms of wall clock per core
-   frame to spend. The EPDC queues and merges updates on its own; blocking would
-   buy nothing but a stall. (The reference device is also flagged
-   unreliableWaitFor by FBInk, so the wait can outright time out.) */
+/* Submit and return. fbink_wait_for_complete() is NOT called, here or
+   anywhere: at the shipped 5x rect the same refresh measured 15.0 ms submitted
+   against 39.2 ms waited, and the emulator has 16.7 ms per core frame. The
+   EPDC queues and merges on its own. (The reference device is also flagged
+   unreliableWaitFor, so the wait can time out outright.) */
 static bool kobo_refresh(void *ctx, int x, int y, int w, int h,
                          koboy_refresh_mode mode)
 {
@@ -693,19 +665,15 @@ static bool kobo_refresh(void *ctx, int x, int y, int w, int h,
     return ok;
 }
 
-/* Drains one node. Every event is handed to input.c as a koboy_ev, including
-   EV_KEY and the SYN boundaries, so the protocol-B slot tracking and the
-   packet-coherency rule live in the one tested place rather than being
-   half-reimplemented here.
+/* Drains one node. EVERY event goes to input.c as a koboy_ev, including EV_KEY
+   and the SYN boundaries, so protocol-B slot tracking and packet coherency
+   live in one tested place rather than half here.
 
-   Returns false only when the node is gone for good: read(2) on an fd whose
-   backing device node was removed returns -1/ENODEV, which is how a
-   hot-plugged gamepad announces a disconnect (an EAGAIN from an empty queue,
-   the ordinary case for every node here, is NOT that). The built-in touch and
-   key nodes are wired to the board and never take this path in practice, but
-   checking it unconditionally means gamepad_rescan's caller does not need a
-   second, parallel drain function just to notice the one node that can
-   actually vanish. */
+   Returns false ONLY when the node is gone for good: read(2) on an fd whose
+   device node was removed returns -1/ENODEV, which is how a hot-plugged
+   gamepad announces a disconnect (an EAGAIN from an empty queue, the ordinary
+   case, is NOT that). The built-in nodes never take this path, but checking
+   unconditionally saves a second parallel drain function. */
 static bool drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
 {
     struct input_event ev[EV_BATCH];
@@ -753,12 +721,10 @@ static bool kobo_poll_input(void *ctx, struct koboy_input *in)
     if (k->touch_fd >= 0) drain(k, k->touch_fd, false, in);
     for (int i = 0; i < k->n_key; i++) drain(k, k->key_fd[i], true, in);
 
-    /* is_key=true: the pad's buttons are meant to feed raw_push() the same
-       way the page-turn keys do, so a future calibration stage (plan Task 3)
-       can capture them the same way. The hat's ABS_HAT0X/Y events go through
-       regardless of is_key -- drain() forwards every event type to
-       input_feed(), and input.c's hat decode (see input.h) is what turns
-       those into d-pad bits. */
+    /* is_key=true: the pad's buttons feed raw_push() the way the page-turn
+       keys do, so calibration can capture them the same way. The hat's
+       ABS_HAT0X/Y events go through regardless -- drain() forwards every event
+       type, and input.c's hat decode makes d-pad bits of them. */
     if (k->pad_fd >= 0 && !drain(k, k->pad_fd, true, in)) {
         kobo_say(k, "koboy: gamepad %s lost\n", k->pad_node);
         close(k->pad_fd);
@@ -786,14 +752,11 @@ static bool kobo_should_quit(void *ctx) { return ((kobo_ctx *)ctx)->quit; }
    node name differs by model, so the directory is scanned rather than
    hardcoded -- the same capability-detection rule the rest of the backend
    follows. A missing or unreadable node is -1, not an error. */
-/* Contract in platform_if.h. Re-runs the mapping rather than poking one slot,
-   so FAST and GRAY cannot drift out of step with each other -- there is one
-   piece of code that decides what a policy means, and it is map_waveforms.
-
-   Nothing is refreshed here on purpose. A waveform selects how the NEXT update
-   is drawn; it says nothing about what the panel is currently holding, and the
-   caller (main.c's return-from-menu path) is already repainting the whole
-   panel with GC16 immediately afterwards. */
+/* Contract in platform_if.h. Re-runs the whole mapping rather than poking one
+   slot, so FAST and GRAY cannot drift apart: map_waveforms is the one place
+   that decides what a policy means.
+   NOTHING IS REFRESHED here on purpose -- a waveform selects how the NEXT
+   update is drawn, and the caller is already repainting with GC16. */
 static void kobo_set_wfm_policy(void *ctx, koboy_wfm_policy policy)
 {
     kobo_ctx *k = ctx;
