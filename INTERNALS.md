@@ -7,9 +7,10 @@ and every one below has a number behind it.
 
 Everything measured was measured on a Kobo Libra 2 — Mark 9, single-core
 Cortex-A9 with NEON, 1264×1680 panel at 300 dpi, glibc 2.19 — unless the text
-says otherwise. `TESTED.md` has the raw sessions; `docs/FOLLOWUPS.md` has
-roughly a hundred numbered findings, and the `#N` references below point into
-it.
+says otherwise. `TESTED.md` has the raw sessions; `docs/FOLLOWUPS.md` has what
+is still open, and the `#N` references below point into it. Its numbers are
+never reused, so a `#N` that is not in the body is in the retired table at the
+bottom of that file with a note saying what happened to it.
 
 ---
 
@@ -169,7 +170,8 @@ byte-identical under all five maps, so **no per-system exemption exists and
 none is needed**. And do not add one keyed on 160×144: **a Game Gear is also
 160×144 and is a colour system.** `tests/test_video_gray.c` pins that, and the
 mutant that would have been the bug (a `gray_map` exemption for 160×144 in
-`video_create`) makes it fail on Sonic's measured sky. (`#43`, `#46`)
+`video_create`) makes it fail on Sonic's measured sky. (`#46`, and
+`src/video.c`'s `GRAY_MAPS` comment for why the default is not equal weights)
 
 ---
 
@@ -261,7 +263,7 @@ assumed.
 **2. On 1-bit content, AUTO *is* DU** — identical to within 0.5 ms at three
 region sizes. So the `MOTION` ladder's `1-BIT / DU` rung selects the waveform
 `1-BIT / AUTO` was already getting, which is exactly why the owner found them
-indistinguishable. (`#97`, `#98`)
+indistinguishable. (`#98`)
 
 **3. It prices the 1-bit fix.** Four-level content could use DU4 at 24.1 ms.
 Two-level content gets clean transitions and pays 153.5 ms — a factor of
@@ -560,15 +562,18 @@ picture is the same size in the same place and only its detail changes. With
 `pixel_aspect = false` it jumps between 512×486 and 704×486 at every scene
 change. Verified by rendering both sides and looking at them.
 
-**The one system the correction does not save is the Atari 2600, and this is a
-real defect.** The 2600's pixels are ~1.6:1, and stella2014 says so the only
+**The Atari 2600 is the system that forced this work, and the way it was found
+is the point.** The 2600's pixels are ~1.6:1, and stella2014 says so the only
 way libretro lets it — by declaring `base_width = 160 × 2` while delivering a
-160-wide frame. koboy scales squarely, so **every 2600 title renders about
-1.75× too tall**: Ms. Pac-Man's maze comes out 480×630 where the correct shape
-is about 840×630. Playable, legible, plainly wrong. Found by rendering frames
-and looking at them *after every numeric check passed*. Not fixed because the
-fix is anisotropic fitting in `video.c`'s hot path — the one presentation
-verified on hardware. (`#51`)
+160-wide frame. koboy used to scale squarely, so **every 2600 title rendered
+about 1.75× too tall**: Ms. Pac-Man's maze came out 480×630 where the correct
+shape is about 840×630. Playable, legible, plainly wrong, and found by
+rendering frames and looking at them *after every numeric check passed*. It is
+fixed — BurgerTime is 840×630 and PAL Breakout 1000×750, 4:3 to the pixel, and
+`tests/test_video_aspect.c` pins them. Two things the diagnosis got wrong are
+worth knowing: the 2600 was **not** the only affected system (eight are), and
+`base_width / delivered width` is the WRONG signal — it gives 2.0 where the
+truth is 1.75. `aspect_ratio` is the right one. (`#65`)
 
 ---
 
@@ -663,6 +668,9 @@ the time of writing:
 - **`video_submit`** is the bottleneck on every system and nothing has
   optimised it. (`#23`)
 - **Nine systems auto-fit with no measured scale ceiling.** (`#73`, `#78`)
-- **Every Atari 2600 title is 1.75× too tall.** (`#51`)
-- **Save states have never been written and re-read on a device.** (`#76`)
-- **Twelve of fifteen systems have never been played by a person.**
+- **One file in a 1693-file collection segfaults the process**, and twelve
+  cores have never been swept for the same thing. (`#84`, `#72`)
+- **Two SIGSEGVs in the owner's own log** that nobody has explained, on a code
+  path a remote session cannot exercise. (`#92`, `#95`)
+- **`MENU -> CHOOSE ROM` and `MENU -> QUIT` are driven by no test**, and the
+  first is the path a mid-session core switch takes. (`#18`, `#93`)
