@@ -9,19 +9,18 @@ snes9x2005 (.sfc/.smc), beetle-pce-fast (.pce), gpSP (.gba),
 FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
 panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
-**ONE ARCHIVE, and this reversed.** Arcade used to ship separately behind
-`make fbneo-dist`, on the grounds that 41 MB against the other cores' 18 was a
-tenfold blowup. Measured compressed, the core deflates 67% to 13.6 MB and the
+**ONE ARCHIVE, and this reversed.** Arcade shipped separately behind `make
+fbneo-dist` on the grounds that 41 MB against the other cores' 18 was a
+tenfold blowup. MEASURED COMPRESSED, the core deflates 67% to 13.6 MB and the
 whole package is 18.6 MB, so the split cost more than it saved and the target
 is GONE (`core-fbneo` still rebuilds just that core). `tests/test_dist.sh`
 asserts the core IS in the package, with real bytes, under a 32 MB cap.
 Deleting `.adds/koboy/fbneo_libretro.so` is how an owner without a romset
-reclaims the space, and both packaged READMEs (`packaging/roms-README.txt`
-and `packaging/README-fbneo.txt`, real files that `make dist` COPIES rather
-than generates) say so by filename. Arcade is
-still the ONLY system whose core and content are version-locked: the romset
-must match FBNeo v1.0.0.03 (revision ae41c16e, 2025-07-24), pinned by SHA in
-`scripts/pins.txt` and explained at length in `scripts/build-fbneo-core.sh`.
+reclaims the space, and both packaged READMEs (`packaging/roms-README.txt`,
+`packaging/README-fbneo.txt` -- real files `make dist` COPIES) say so by
+filename. Arcade is still the ONLY system whose core and content are
+version-locked: the romset must match FBNeo v1.0.0.03 (ae41c16e, 2025-07-24),
+pinned in `scripts/pins.txt` and explained in `scripts/build-fbneo-core.sh`.
 
 **Two of the fifteen systems need a BIOS, and it is the owner's to supply.**
 ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
@@ -35,13 +34,12 @@ reboot; v2-core's takeover, touch d-pad, ROM browser and in-game MENU were
 driven by hand from NickelMenu on 2026-08-26, and cartridge SRAM and save
 states have both been round-tripped there. Every one of the fifteen systems
 has since `dlopen`ed, resolved geometry, paced itself and rendered on that
-panel (`TESTED.md`, "All fourteen systems run on the device, 2026-08-27",
-plus the Game Boy Advance section).
+panel (`TESTED.md`).
 
-**What that is NOT is a regression test.** A thing verified once by a hand on
-a panel is driven by nothing in `make test`. And the fifteen-system sweep is
-`--frames` over ssh with Nickel up, which covers loading, geometry, pacing and
-speed and nothing a finger does. See "Known unfinished".
+**That is NOT a regression test.** Nothing in `make test` drives what a hand
+verified once, and the fifteen-system sweep is `--frames` over ssh with Nickel
+up -- loading, geometry, pacing and speed, and nothing a finger does. See
+"Known unfinished".
 
 ## Build and test
 
@@ -72,28 +70,25 @@ default. See `docs/cross-compiling.md`.
 
 ## Hard constraints — check these before proposing anything
 
-- **No C++. No dependency beyond libc, libm, libdl.** (Not "C99 only": the
-  Makefile has built with `-std=c11` since before v2, and nothing enforces a
-  narrower standard. The constraint that actually matters — and the one
-  `scripts/verify-core.sh` enforces — is the dependency ceiling, not a
-  specific C revision, so that is what this says now.) Two ARM binaries ship,
-  with two different closures: the gambatte core
-  (`dist/gambatte_libretro.so`) links only `libm.so.6` + `libc.so.6` (+
-  `ld-linux-armhf.so.3`, pulled in by `-static-libstdc++`'s TLS-based
-  exception globals — see `docs/cross-compiling.md`); `koboy-arm` itself
-  additionally needs `libdl.so.2`, because it `dlopen`s that core.
-  `scripts/verify-core.sh` checks both against the same allowlist
-  (`libc`/`libm`/`libdl`/`libpthread`/`libgcc_s`/`ld-linux-armhf`, matched by
-  anchored whole-name comparison since Task 14 closed follow-up #10).
+- **No C++. No dependency beyond libc, libm, libdl.** Not "C99 only" — the
+  Makefile has built with `-std=c11` since before v2 and nothing enforces a
+  narrower standard; the constraint `scripts/verify-core.sh` enforces is the
+  DEPENDENCY CEILING, not a C revision. Two closures ship: the gambatte core
+  links only `libm.so.6` + `libc.so.6` (+ `ld-linux-armhf.so.3`, pulled in by
+  `-static-libstdc++`'s TLS-based exception globals — see
+  `docs/cross-compiling.md`), while `koboy-arm` also needs `libdl.so.2`
+  because it `dlopen`s that core. Both are checked against one allowlist
+  (`libc`/`libm`/`libdl`/`libpthread`/`libgcc_s`/`ld-linux-armhf`), matched by
+  anchored whole-name comparison.
 - **glibc 2.19.** The device has no newer symbol. This is why the toolchain is
   pinned to Linaro 4.9-2014.09.
-- **Every upstream is PINNED to a commit in `scripts/pins.txt`**, and that is
-  the only place a revision is written down. The build scripts fetch through
-  `koboy_fetch_pinned` (`scripts/pins.sh`); none of them may `git clone`, and
-  CI asserts both halves of that. The pins are the builds TESTED.md's numbers
-  were measured against, so **moving one invalidates that file's rows for that
-  system** -- say so in TESTED.md when you do it. A pin that cannot be fetched
-  stops the build; do NOT "fix" that by cloning master.
+- **Every upstream is PINNED to a commit in `scripts/pins.txt`**, the only
+  place a revision is written down. Build scripts fetch through
+  `koboy_fetch_pinned` (`scripts/pins.sh`); none may `git clone`, and CI
+  asserts both halves. The pins are what TESTED.md's numbers were measured
+  against, so **moving one invalidates that file's rows for that system** --
+  say so there. A pin that cannot be fetched stops the build; do NOT "fix"
+  that by cloning master.
 - **Never `#include <linux/input.h>` in portable code.** The project carries its
   own `koboy_ev {type,code,value}` mirror and its own keycode constants so the
   host build compiles anywhere.
@@ -131,34 +126,29 @@ software the moment you do.
 -- v2 additions: the ROM browser, in-game MENU and save states -----------
 src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
                       browser and the in-game MENU (MODE_BROWSE / MODE_MENU)
-src/screens.c         the six full-panel screens that DRIVE that widget --
-                      screen_list plus the MENU, slot picker, MAIN MENU,
-                      RECENT picker and ROM browser -- and the MENU_* /
-                      MAIN_* / BROWSE_* enums main() switches on. Split out
-                      of main.c on 2026-08-28 for ONE reason: main.c is
-                      filtered out of $(SRC), so nothing linked it and its
-                      714 executable lines were the whole of the suite's
-                      coverage deficit. Nothing here may name platform_kobo_*
-                      or platform_sdl_* -- everything goes through the
-                      koboy_platform vtable, which is what lets this file
-                      link into all 29 test binaries. koboy_stop, the signal
-                      flag, is DEFINED here rather than in main.c for exactly
-                      that reason. tests/test_screens.c + tests/fakeplat.h
+src/screens.c         the six full-panel screens that DRIVE that widget, plus
+                      the MENU_* / MAIN_* / BROWSE_* enums main() switches on.
+                      Split out of main.c for ONE reason: main.c is filtered
+                      out of $(SRC), so nothing linked it and its 714
+                      executable lines were the whole coverage deficit.
+                      Nothing here may name platform_kobo_* or platform_sdl_*
+                      -- everything goes through the koboy_platform vtable,
+                      which is what lets it link into every test binary.
+                      koboy_stop is DEFINED here for the same reason.
+                      tests/test_screens.c + tests/fakeplat.h
 src/romlist.c         lists ONE directory of rom_dir at a time -- folders
-                      sort first, then files, with a ".." row below the root;
-                      feeds ui.c's list widget. It does NOT recurse: the
-                      flatten it replaced put the same "Game and Watch/"
-                      prefix on 59 rows. romlist_is_rom is an ALLOWLIST of
-                      extensions (.gb/.gbc/.mgw/.nes/.min/.ws/.wsc/.ngp/
-                      .ngc/.a26/.col/.int/.sms/.gg/.md/.sfc/.smc/.pce/
-                      .gba/.zip) and must stay in step
-                      with config_core_for_rom's table -- a real NES
-                      collection ships .pal files beside the ROMs,
-                      WonderSwan and Neo Geo Pocket ones ship boot.rom /
-                      boot1.rom, and an Intellivision one ships boot0-boot3,
-                      two of which ARE the BIOS. `.bin` is deliberately not
-                      claimed even though three cores accept it: exec.bin
-                      and grom.bin are .bin
+                      first, then files, ".." below the root; feeds ui.c's
+                      widget. It does NOT recurse: the flatten it replaced put
+                      the same "Game and Watch/" prefix on 59 rows.
+                      romlist_is_rom is an ALLOWLIST (.gb/.gbc/.mgw/.nes/.min/
+                      .ws/.wsc/.ngp/.ngc/.a26/.col/.int/.sms/.gg/.md/.sfc/
+                      .smc/.pce/.gba/.zip) that must stay in step with
+                      config_core_for_rom's table -- a real NES collection
+                      ships .pal files beside the ROMs, WonderSwan and Neo Geo
+                      Pocket ones ship boot.rom/boot1.rom, an Intellivision one
+                      ships boot0-boot3 of which two ARE the BIOS. `.bin` is
+                      deliberately unclaimed though three cores accept it:
+                      exec.bin and grom.bin are .bin
 src/uiscript.c        replays a synthetic input script (tap/key/idle/menu)
                       into the ROM BROWSER and, via the `menu` verb, the
                       in-game MENU -- --ui-script, for bounded unattended
@@ -175,11 +165,9 @@ src/png.c             an 8-bit greyscale PNG writer using STORED deflate
                       into a Huffman coder
 src/shot.c            MENU -> SCREENSHOT: the filename stem, the counter
                       (SCANNED off shot_dir, never held in memory), and the
-                      composite. THE COMPOSITE IS THE POINT: `panel` holds
-                      the faceplate and video.c's buffer holds the game, and
-                      nothing in koboy ever holds both -- they are blitted
-                      separately -- so a capture has to build the whole
-                      picture itself
+                      composite. THE COMPOSITE IS THE POINT: `panel` holds the
+                      faceplate, video.c's buffer holds the game, and nothing
+                      holds both -- so a capture builds the whole picture
 src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
 src/recent.c          the most-recently-played list. recent_touch is PURE (no
@@ -189,28 +177,25 @@ src/calib.c           first-run page-turn key calibration. It MUST be
                       escapable by a touch: the loop advances only on a raw
                       key press, and a touch-only Kobo has no key to press
 src/btinput.c         finds a Bluetooth gamepad by PARSING
-                      /proc/bus/input/devices -- no libbluetooth, no D-Bus,
-                      no new dependency. bluetoothd's `input` plugin has
-                      already turned the pad into an ordinary /dev/input/
-                      eventN that input.c can decode, so "controller support"
-                      is entirely a matter of finding the right node. The
-                      parse is split out and pure so it is tested against
-                      real recorded /proc text rather than against a device
-                      that must be physically present. platform_kobo.c
-                      rescans once a second (BlueZ reconnects on its own
-                      schedule, usually AFTER koboy starts) and deliberately
-                      does not EVIOCGRAB the node
+                      /proc/bus/input/devices -- no libbluetooth, no D-Bus, no
+                      new dependency. bluetoothd's `input` plugin has already
+                      turned the pad into an ordinary /dev/input/eventN, so
+                      "controller support" is finding the right node. The parse
+                      is pure, so it tests against recorded /proc text rather
+                      than a physically present device. platform_kobo.c rescans
+                      once a second (BlueZ reconnects on its own schedule,
+                      usually AFTER koboy starts) and deliberately does not
+                      EVIOCGRAB the node
 src/pacing.c          when the next frame reaches the panel. TWO gates, ANDed:
-                      present_divisor as a minimum GAP between presents (a
-                      gap and not `frames % divisor`, so a settle hold that
-                      expires off-lattice does not forfeit the rest of the
-                      stride), and an area-scaled settle HOLD that stops koboy
-                      starting a full-area update the panel has not finished.
-                      The gate advances in pacer_tick, NOT in pacer_presented:
-                      main.c takes an early exit on an unchanged frame, and a
-                      gate waiting on the presentation would run video_submit
-                      -- the 17 ms bottleneck -- every core frame on a static
-                      screen
+                      present_divisor as a minimum GAP between presents (a gap,
+                      not `frames % divisor`, so a hold expiring off-lattice
+                      does not forfeit the stride), and an area-scaled settle
+                      HOLD that stops koboy starting a full-area update the
+                      panel has not finished. The gate advances in pacer_tick,
+                      NOT pacer_presented: main.c exits early on an unchanged
+                      frame, and a gate waiting on presentation would run
+                      video_submit -- the 17 ms bottleneck -- every core frame
+                      on a static screen
 
 -- multi-system: koboy is no longer Game-Boy-only ------------------------
 Fourteen cores ship for FIFTEEN systems -- Genesis Plus GX answers for two
@@ -242,26 +227,25 @@ it. Extension -> core -> layout, all decided in config.c:
                                          (arcade -- .zip is a CONTAINER, not
                                          a system, and nothing else koboy
                                          ships can open one)
-FOUR SYSTEMS ARE ON THE LCD STRIP and the rest are on the DMG faceplate.
-.mgw is there because the unit draws its own buttons; .md and .sfc/.smc are
-there because their pads do NOT FIT the faceplate's five controls plus two
-spare discs; .gba is there for a different reason again -- it fits, but the
-two spare pockets are FACE pockets and a GBA's L and R are a left one and a
-right one. config_layout_for_rom argues all four at length.
-Adding a system is a build script plus four wiring points: the table in
-config_core_for_rom, romlist_is_rom, a non-phony $(CORE_*_SO) rule in the
-Makefile, and packaging/roms-README.txt (a real file that is COPIED, not
-generated). A system whose pad does not fit the DMG faceplate needs
-config_layout_for_rom and config_lcd_pad_for_rom too; one that fits with an
-extra disc or two needs config_extra_buttons_for_rom. Mega Drive needed only
-wiring points and no build at all -- check whether a core you already ship
-covers the system before writing another build script.
+FOUR SYSTEMS ARE ON THE LCD STRIP, the rest on the DMG faceplate. .mgw
+because the unit draws its own buttons; .md and .sfc/.smc because their pads
+do NOT FIT the faceplate's five controls plus two spare discs; .gba for a
+different reason -- it fits, but the two spare pockets are FACE pockets and a
+GBA's L and R are a left one and a right one. config_layout_for_rom argues all
+four.
+ADDING A SYSTEM is a build script plus four wiring points:
+config_core_for_rom's table, romlist_is_rom, a non-phony $(CORE_*_SO) rule,
+and packaging/roms-README.txt (a real file that is COPIED). A pad that does not
+fit the DMG faceplate also needs config_layout_for_rom and
+config_lcd_pad_for_rom; one that fits with an extra disc or two needs
+config_extra_buttons_for_rom. Mega Drive needed wiring points and NO BUILD --
+check whether a shipped core already covers the system first.
 
 scripts/build-gw-core.sh      gw-libretro (Game & Watch)
 scripts/build-fceumm-core.sh  libretro-fceumm (NES). Three non-default make
-                      switches, each justified in the script's header; the
-                      headline is WANT_32BPP=0, which gets RGB565 instead of
-                      XRGB8888 and halves what video_submit reads per frame.
+                      switches, justified in the script's header; the headline
+                      is WANT_32BPP=0, which gets RGB565 instead of XRGB8888
+                      and halves what video_submit reads per frame.
 scripts/build-pokemini-core.sh  libretro/PokeMini (Pokemon Mini). NO BIOS
                       SHIPS AND NONE IS NEEDED -- the core links its own free
                       one, verified against an EMPTY system directory.
@@ -269,19 +253,18 @@ scripts/build-wswan-core.sh   beetle-wswan (WonderSwan + Color). One core,
                       two extensions. No non-default switch: its unix block
                       already picks RGB565.
 scripts/build-race-core.sh    RACE (Neo Geo Pocket + Color). Chosen over
-                      beetle-ngp by MEASUREMENT, both cross-built: RACE is
-                      pure C and ~3x faster; beetle-ngp needs
-                      -static-libstdc++ and then libm + ld-linux-armhf too.
-                      The script's header carries the numbers.
+                      beetle-ngp by MEASUREMENT, both cross-built: RACE is pure
+                      C and ~3x faster; beetle-ngp needs -static-libstdc++ and
+                      then libm + ld-linux-armhf. Numbers in the script.
 scripts/build-stella-core.sh  libretro/stella2014-libretro (Atari 2600).
                       NOT libretro/stella2014 (404s) and NOT libretro/stella,
                       which forces -std=c++17 -- a flag Linaro 4.9.2 rejects
                       outright. That is the whole choice.
 scripts/build-gearcoleco-core.sh  drhelius/Gearcoleco (ColecoVision;
                       libretro/gearcoleco 404s too). The libretro port is a
-                      SUBDIRECTORY of the emulator repo. NEEDS A BIOS: with
-                      none it draws a static NO BIOS bitmap forever, which
-                      only a rendered frame reveals.
+                      SUBDIRECTORY of the emulator repo. NEEDS A BIOS: without
+                      one it draws a static NO BIOS bitmap forever, which only
+                      a rendered frame reveals.
 scripts/build-freeintv-core.sh  libretro/FreeIntv (Intellivision). The only
                       core for the system, and the only one koboy ships that
                       asks for XRGB8888. NEEDS exec.bin + grom.bin.
@@ -292,12 +275,11 @@ scripts/build-gpgx-core.sh    libretro/Genesis-Plus-GX (Master System AND
                       a null log pointer kept from a refused
                       GET_LOG_INTERFACE, which koboy also refuses.
 scripts/build-snes-core.sh    libretro/snes9x2005 (SNES). Chosen over
-                      snes9x2010 and snes9x by MEASUREMENT, all three
-                      cross-built: fastest by 1.36x/1.58x and pure C. AND THE
-                      COMPATIBILITY FOLKLORE IS FALSE -- this revision HAS
-                      SuperFX and SA-1; Star Fox, Yoshi's Island and Kirby
-                      Super Star all run, RENDERED and looked at rather than
-                      inferred from a successful load.
+                      snes9x2010 and snes9x by MEASUREMENT, all cross-built:
+                      fastest by 1.36x/1.58x and pure C. THE COMPATIBILITY
+                      FOLKLORE IS FALSE -- this revision HAS SuperFX and SA-1;
+                      Star Fox, Yoshi's Island and Kirby Super Star all run,
+                      RENDERED and looked at rather than inferred from a load.
 scripts/build-pce-core.sh     libretro/beetle-pce-fast-LIBRETRO (PC Engine).
                       The bare name 404s -- fourth variant of that trap. Its
                       Makefile links with $(CXX) and -lrt whatever it
@@ -305,24 +287,21 @@ scripts/build-pce-core.sh     libretro/beetle-pce-fast-LIBRETRO (PC Engine).
                       flags; -Wl,--as-needed is what actually gives the
                       libm+libc closure. Cartridge .pce ONLY.
 scripts/build-gba-core.sh     libretro/gpsp (Game Boy Advance). Chosen over
-                      mGBA and vba-next by MEASUREMENT, all three cross-built
-                      -- and the host column UNDERSTATES it, because gpSP's
-                      dynarec targets ARM and was off on x86_64 while neither
-                      rival has one at all. The received wisdom that vba-next
-                      is the fast one is FALSE at these revisions: it is the
-                      slowest of the three on all eight titles. The script's
-                      header carries the numbers and the dynarec check.
+                      mGBA and vba-next by MEASUREMENT, all cross-built -- and
+                      the host column UNDERSTATES it, because gpSP's dynarec
+                      targets ARM and was off on x86_64 while neither rival has
+                      one. The received wisdom that vba-next is the fast one is
+                      FALSE at these revisions: it is the slowest on all eight
+                      titles. Numbers and the dynarec check in the script.
 scripts/build-fbneo-core.sh   libretro/FBNeo (arcade). NOT
-                      finalburnneo/FBNeo -- a NEW variant of the 404 trap,
-                      because BOTH names exist and both are real FBNeo
-                      repositories; only the libretro fork has
-                      src/burner/libretro at all. THE REVISION IS PINNED BY
-                      SHA to the day the owner's dat was published, because
-                      the version number 1.0.0.03 has covered five years of
-                      master and a romset that does not match the build fails
-                      exactly like a broken core. 7-Zip support is compiled
-                      OUT for the device: lib7z does not build against glibc
-                      2.19's headers.
+                      finalburnneo/FBNeo -- a NEW variant of the 404 trap:
+                      BOTH names exist and are real FBNeo repositories, and
+                      only the libretro fork has src/burner/libretro. THE
+                      REVISION IS PINNED BY SHA to the day the owner's dat was
+                      published, because the version number 1.0.0.03 has
+                      covered five years of master and a mismatched romset
+                      fails exactly like a broken core. 7-Zip is compiled OUT:
+                      lib7z does not build against glibc 2.19's headers.
 Nine of the fourteen CORES are pure C: closure is libm+libc or less. The two
 WonderSwan/Neo Geo cores need libc ALONE. FBNeo is the only one that pulls in
 libpthread.
@@ -340,32 +319,27 @@ src/text.c            the 5x7 bitmap font, lifted out of main.c because v2
                       has three screens that render arbitrary strings
 
 koboy_layout's extra[] holds the DMG faceplate's OPTIONAL discs -- position,
-KOBOY_BTN_* bit and label per slot, r == 0 meaning "empty". A Pokemon Mini
-fills one ("C"); a WonderSwan fills two ("L1", "R1"); a ColecoVision fills
-two ("K1", "K2" -- keypad 1 and 2, without which no cartridge can be
-started); an Intellivision fills two ("KEY", "TOP"), where KEY is not a
-button at all but FreeIntv's hold-to-show-the-mini-keypad modifier, and is
-what makes all twelve of that console's keypad keys reachable; an arcade
-board fills two ("3", "4" -- buttons 3 and 4, because on this system the
-faceplate's own B and A really ARE buttons 1 and 2). Three
-consumers guard on r (chrome_controls_top, the DMG renderer, input.c's hit
-test) and each has a distinct failure if the guard goes -- see the commit and
-test_chrome.c. The bit is always the CORE's choice, read off its input
-descriptors, never picked here.
+KOBOY_BTN_* bit and label per slot, r == 0 meaning "empty". Pokemon Mini fills
+one ("C"); WonderSwan two ("L1", "R1"); ColecoVision two ("K1", "K2" -- keypad
+1 and 2, without which no cartridge starts); Intellivision two ("KEY", "TOP"),
+where KEY is not a button but FreeIntv's hold-to-show-the-mini-keypad
+modifier, which is what makes all twelve keypad keys reachable; an arcade
+board two ("3", "4", because there the faceplate's own B and A really ARE
+buttons 1 and 2). THREE consumers guard on r (chrome_controls_top, the DMG
+renderer, input.c's hit test), each with a distinct failure if the guard goes.
+The bit is always the CORE's choice, read off its input descriptors.
 
 TWO of the fifteen systems have a 12-KEY KEYPAD the faceplate cannot draw, and
-on both of them titles refuse to start without it. Check any new system's real
-control set against what the faceplate offers BEFORE assuming DMG is enough;
-this has now cost a round on Game & Watch, Pokemon Mini, WonderSwan, and both
-of these.
+titles on both refuse to start without it. Check any new system's real control
+set against what the faceplate offers BEFORE assuming DMG is enough; this has
+cost a round on Game & Watch, Pokemon Mini, WonderSwan and both of these.
 
 ARCADE is the first system where "what does the hardware have" has no single
-answer -- it is 227 different boards -- so the two discs were chosen by
-COUNTING every romset's input descriptors rather than by reading a control
-panel. FBNeo's map is flat (B=Button 1, A=Button 2, Y=Button 3, X=Button 4,
-SELECT=Coin, START=Start) and the counts decided it: Y 134 boards, X 71,
-against 45-48 for each shoulder button there is no room for. Do the same for
-the next multi-board system.
+answer -- 227 different boards -- so the two discs were chosen by COUNTING
+every romset's input descriptors. FBNeo's map is flat (B=Button 1, A=2, Y=3,
+X=4, SELECT=Coin, START=Start) and the counts decided it: Y 134 boards, X 71,
+against 45-48 for each shoulder there is no room for. Do the same for the next
+multi-board system.
 ```
 
 Path resolution is against `/proc/self/exe`'s directory — **`dlopen` never
@@ -414,32 +388,32 @@ spec's appendices are the record; the short version:
   weights are not the fix either.** Luma weights blue 29/256, so a bright blue
   sky quantises to the *darkest* level (Sonic Pocket Adventure rgb(0,154,255)
   → 119 → level 1; Castlevania rgb(0,36,140) → 36 → level 0). But `(R+G+B)/3`
-  crushes *more* pixels to black than luma does — 8.9% vs 6.7% over 38
-  gameplay frames from 19 titles — because what it returns to blue it takes
-  from green. What removes the crushing is a **shadow lift**, equivalent to
-  lowering `video_quantise4`'s first threshold: 6.7% → 2.5%. The shipped
-  default (`gray_map = balanced`) needs both — weights (81,118,57) *and* the
-  lift. Selectable, because this is a judgement about a reflective panel and
-  cannot honestly be made from a host render: `MENU → GREYSCALE` cycles it
-  in-game and writes the ini key back.
+  crushes *more* pixels to black — 8.9% vs 6.7% over 38 gameplay frames from
+  19 titles — because what it returns to blue it takes from green. What
+  removes the crushing is a **shadow lift**, equivalent to lowering
+  `video_quantise4`'s first threshold: 6.7% → 2.5%. The shipped default
+  (`gray_map = balanced`) needs BOTH — weights (81,118,57) *and* the lift.
+  Selectable, because this is a judgement about a reflective panel that cannot
+  honestly be made from a host render: `MENU → GREYSCALE` cycles it in-game
+  and writes the ini key back.
 - **The Game Boy's palette is neutral, so none of that touches it.** gambatte
   emits exactly rgb(0,0,0)/(82,85,82)/(173,170,173)/(255,255,255); every
   mapping is the identity on neutral grey and the lift keeps both mid greys
-  inside their existing levels, so the DMG golden is byte-identical and **no
-  per-system exemption exists**. Do not add one keyed on 160x144 — Game Gear
-  is also 160x144 and is a colour system.
-- **DU4's failure is NOT evidence against DU, and the two are not the same
-  waveform.** DU4 is the FOUR-level variant; DU is two-level. FBInk's header
-  says a DU-class waveform "will leave on-screen pixels as-is for new content
-  that is *not* B&W" — so against koboy's four-level output, every pixel whose
-  new value is one of the two MIDDLE levels is a pixel the panel declines to
-  touch, which is exactly what "DU4 cannot erase" looked like from the inside.
-  `waveform_fast = du` plus `force_dither` (the in-game **MENU → MOTION** row,
-  which cycles the PAIR) was the untried combination, and it is the one that
-  worked: 1-bit output ships as the default and the owner confirms it fixes
-  the smearing. It is not free — clean two-level transitions cost 153.5 ms a
-  full-rect refresh where four-level DU4 cost 24.1 ms, which is what
-  area-aware pacing now paces to. `docs/FOLLOWUPS.md` #25 and #96.
+  inside their levels, so the DMG golden is byte-identical and **no per-system
+  exemption exists**. Do not add one keyed on 160x144 — Game Gear is also
+  160x144 and is a colour system.
+- **DU4's failure is NOT evidence against DU; they are not the same
+  waveform.** DU4 is FOUR-level, DU is two-level. FBInk's header says a
+  DU-class waveform "will leave on-screen pixels as-is for new content that is
+  *not* B&W", so against four-level output every pixel landing on one of the
+  two MIDDLE levels is one the panel declines to touch — exactly what "DU4
+  cannot erase" looked like from the inside. `waveform_fast = du` plus
+  `force_dither` (the **MENU → MOTION** row cycles the PAIR) was the untried
+  combination and the one that worked: 1-bit output ships as the default and
+  the owner confirms it fixes the smearing. Not free — clean two-level
+  transitions cost 153.5 ms a full-rect refresh where four-level DU4 cost
+  24.1 ms, which is what area-aware pacing paces to. `docs/FOLLOWUPS.md` #25,
+  #96.
 - **Refresh cost scales with area**, so dirty rectangles pay for themselves, and
   non-blocking submission beats blocking by ~2.6x. The main loop never waits for
   completion.
@@ -455,111 +429,100 @@ spec's appendices are the record; the short version:
   `refresh`, already the cheapest stage; `video_submit` is where the next
   optimisation belongs. See `docs/FOLLOWUPS.md` #23.
 - **The reserved rect comes from the core's BASE geometry, not its max** (DMG
-  layout only; LCD still uses max). Max made "any frame in [1, max] fits"
-  true by construction, and it cost a SNES 54% of its picture area against a
-  512x512 mode snes9x2005 never enters. `video_fit_rect` now shrinks a frame
-  the rect cannot hold, which is what replaces that guarantee — do not delete
-  that branch. Measured on the device: free for PC Engine and for SNES titles
-  with headroom, and 96%→78% for Kirby Super Star. `docs/FOLLOWUPS.md` #73.
+  layout only; LCD still uses max). Max made "any frame in [1, max] fits" true
+  by construction and cost a SNES 54% of its picture area against a 512x512
+  mode snes9x2005 never enters. Under max-sizing, measured on the verified
+  panel: SNES presented at 597x448 and PC Engine at 583x486 against the Game
+  Boy's 800x720 — less than half the area, on higher-resolution systems.
+  `video_fit_rect` now shrinks a frame the rect cannot hold, which replaces
+  the fits-by-construction guarantee — DO NOT DELETE THAT BRANCH. The speed
+  cost, measured: free for PC Engine and for SNES titles with headroom,
+  96%→78% for Kirby Super Star, which is what the per-system scale ceiling
+  exists to hold. Note the perverse coupling before changing any of this: a
+  smaller rect costs less `video_submit`, so a system's CPU budget SHRINKS
+  when its picture grows. `docs/FOLLOWUPS.md` #73.
 - **Benchmarking this device back to back gives numbers that climb.** A first
-  pass with no gaps read up to 2.4x high and kept rising through the batch;
-  an isolated re-run of the same binary on the same ROM came back at the
-  first row's figure. Ten seconds of idle between runs, every time.
+  pass with no gaps read up to 2.4x high and kept rising; an isolated re-run of
+  the same binary on the same ROM came back at the first row's figure. Ten
+  seconds of idle between runs, every time.
 - **A libretro core's geometry is discovered, not queried.** `gw-libretro`
-  answers `retro_get_system_av_info` with a 128x128 placeholder on every one
-  of 59 titles until its first `retro_run()`, then announces the real canvas
-  via `SET_GEOMETRY`/`SET_SYSTEM_AV_INFO`. Sizing buffers from the post-load
-  query -- what the libretro docs imply -- renders a 973x532 game into a
-  128x128 box. `main.c` polls `core_geometry_changed()` every frame, which
-  also covers a mid-session ROM switch: measured, three titles loaded
-  back-to-back into one core instance each re-announced.
+  answers `retro_get_system_av_info` with a 128x128 placeholder on all 59
+  titles until its first `retro_run()`, then announces the real canvas via
+  `SET_GEOMETRY`/`SET_SYSTEM_AV_INFO`. Sizing buffers from the post-load query
+  — what the libretro docs imply — renders a 973x532 game into a 128x128 box.
+  `main.c` polls `core_geometry_changed()` every frame, which also covers a
+  mid-session ROM switch: measured, three titles loaded back to back into one
+  core instance each re-announced.
 - **G&W is CHEAPER than the Game Boy, not more expensive.** `video_submit`
   scales with DESTINATION pixels (~4.7 ms + 20.7 ns/px), and the Game Boy is
   upscaled 160x144 -> 800x720 = 576k px = 16.6 ms. G&W runs at 1x: Parachute
   260k px (10.1 ms), Mario Bros. 518k px (15.4 ms). Comparing G&W's canvas to
-  the Game Boy's 160x144 *source* suggests a 20x cost blowup and is wrong.
+  the Game Boy's 160x144 *source* suggests a 20x blowup and is wrong.
 - **The arcade "portrait panel, portrait game" win is real but smaller than it
-  sounds, and two of its headline titles smear anyway.** A vertical board
-  presents at 672x864 inside a square 864x864 reserved rect — 580,608 pixels
-  against the Game Boy's 576,000, in the panel's own aspect. It is NOT the
-  1264x1626 a fractional 5.6x fit would give, because the DMG faceplate
-  reserves everything below `chrome_controls_top` for the touch controls and
-  the scale search is integer. And the "single-screen boards cannot smear"
-  premise is wrong for the two most famous ones: measured with koboy's own
-  dirty diff, Galaga changes 67% of the game rect per frame and Galaxian 86%,
-  because the STARFIELD scrolls. Dig Dug, Donkey Kong and Ms. Pac-Man are 1.5
-  to 2.6%.
-- **A core's MAX geometry, not its real frame, sizes the reserved rect -- and
-  two of the fifteen systems report a max nothing like what they draw.**
-  snes9x2005 says 512x512 against a 256x224 frame and beetle-pce-fast says
-  512x243 against 352x243, so a 512-tall reservation cannot exceed scale 1
-  under chrome_controls_top. Measured on the verified panel: SNES presents at
-  597x448 and PC Engine at 583x486, against the Game Boy's 800x720 -- **less
-  than half its area, on higher-resolution systems**. Sizing from the real
-  frame would give SNES roughly 896x672, about 2.2x. Not fixed (it is the
-  fitting path in video.c, the one presentation verified on hardware) and it
-  is the largest presentation win available. Note the perverse coupling
-  before "fixing" it: a smaller rect costs less video_submit, so these two
-  systems' CPU budgets SHRINK when their pictures grow.
+  sounds, and two headline titles smear anyway.** A vertical board presents at
+  672x864 inside a square 864x864 rect — 580,608 pixels against the Game Boy's
+  576,000, in the panel's own aspect. NOT the 1264x1626 a fractional 5.6x fit
+  would give, because the DMG faceplate reserves everything below
+  `chrome_controls_top` and the scale search is integer. And "single-screen
+  boards cannot smear" is wrong for the two most famous: measured with koboy's
+  own dirty diff, Galaga changes 67% of the game rect per frame and Galaxian
+  86%, because the STARFIELD scrolls. Dig Dug, Donkey Kong and Ms. Pac-Man are
+  1.5 to 2.6%.
 - **The pixel-aspect correction earns itself on PC Engine, which changes
   horizontal resolution mid-game.** Titles alternate 256 and 352 wide (not
   336); Military Madness does it five times in 2500 frames. Both modes have
-  the same DISPLAY width, so with the correction on, the picture is 583x486
-  and centred at x=632 in BOTH -- same size, same place, only the detail
-  changes. With `pixel_aspect = false` it jumps between 512x486 and 704x486
-  every scene change. Verified by rendering both sides and looking.
-- **The panel's refresh duration is ~94% FIXED, not area-scaled, and the
-  fixed term belongs to the WAVEFORM.** Measured 2026-08-27 with
-  `koboy-probe --coexist` across five region sizes spanning 49x in area:
-  DU4 15.1 ms + 15.0 ns/px, A2 96.4 ms + 17.2, DU 144.4 ms + 15.8, GC16
-  357.7 ms + 22.5 -- so at the shipped 800x720 rect, 24.1 / 106.3 / 153.5 /
-  370.6 ms. The per-pixel term is the same for every waveform (it is the
-  controller's pixel processing) and it is small. This does NOT contradict
-  "refresh cost scales with area" below: dirty rects still pay, because the
-  area term is real and because a smaller rect leaves less of the picture in
-  flight. It does mean a small update is not a *fast* update. Reproduced to
-  0.1% on a second run; Appendix E has the method and why the wait ioctl had
-  to be avoided (`unreliable_wait_for=1` returned literal 5-second timeouts in
-  six of fifty cells).
+  the same DISPLAY width, so with the correction on the picture is 583x486
+  centred at x=632 in BOTH -- same size, same place, only the detail changes.
+  With `pixel_aspect = false` it jumps between 512x486 and 704x486 every scene
+  change. Verified by rendering both sides and looking.
+- **The panel's refresh duration is ~94% FIXED, not area-scaled, and the fixed
+  term belongs to the WAVEFORM.** Measured 2026-08-27 with `koboy-probe
+  --coexist` across five region sizes spanning 49x in area: DU4 15.1 ms +
+  15.0 ns/px, A2 96.4 + 17.2, DU 144.4 + 15.8, GC16 357.7 + 22.5 -- so at the
+  shipped 800x720 rect, 24.1 / 106.3 / 153.5 / 370.6 ms. The per-pixel term is
+  the same for every waveform (the controller's pixel processing) and small.
+  This does NOT contradict "refresh cost scales with area": dirty rects still
+  pay, because the area term is real and a smaller rect leaves less of the
+  picture in flight. It does mean a small update is not a *fast* update.
+  Reproduced to 0.1%; Appendix E has the method and why the wait ioctl had to
+  be avoided (`unreliable_wait_for=1` returned literal 5-second timeouts in six
+  of fifty cells).
 - **On 1-bit content, AUTO *is* DU** -- measured identical to within 0.5 ms at
-  three region sizes. So the MOTION ladder's `1-BIT / DU` rung selects the
-  waveform `1-BIT / AUTO` was already getting, which is why the owner found
-  them indistinguishable on the panel. It also prices the 1-bit fix: clean
-  two-level transitions cost 153.5 ms where four-level DU4 cost 24.1 ms, a
-  factor of 6.4. `docs/FOLLOWUPS.md` #98.
+  three region sizes. So the MOTION ladder's `1-BIT / DU` rung selects what
+  `1-BIT / AUTO` was already getting, which is why the owner found them
+  indistinguishable. It also prices the 1-bit fix: clean two-level transitions
+  cost 153.5 ms where four-level DU4 cost 24.1 ms, a factor of 6.4.
+  `docs/FOLLOWUPS.md` #98.
 - **Nothing below koboy applies back-pressure.** The probe submitted a new
-  full-rect update every 6-13 ms, without ever blocking, against a 153 ms
-  completion. The EPDC driver accepts work it cannot do and says nothing, so
+  full-rect update every 6-13 ms without ever blocking, against a 153 ms
+  completion. The EPDC accepts work it cannot do and says nothing, so
   over-driving the panel is invisible from inside the process -- which is why
-  `present_divisor` alone could ask for fifteen full-area updates a second and
-  nothing anywhere complained. Pacing has to be koboy's job.
+  `present_divisor` alone could ask for fifteen full-area updates a second with
+  nothing complaining. Pacing has to be koboy's job.
 - **Presentation is paced by AREA, not by frame count.** `present_divisor`
   alone paced a two-tile sprite move and a whole-screen scroll identically.
   `settle_base_ms` / `settle_full_ms` charge each presented frame
-  `base + full * dirty/whole` and hold the next present until it elapses;
-  the divisor remains a ceiling. Measured on the device (Sonic Chaos, 900
-  core frames, 879x576 rect): at divisor 3 the throttle cuts 235 presents to
-  112 -- the panel was being asked for more than twice what it can finish --
-  and at divisor 8 it is nearly inert, 90 -> 89. That second row is the
-  evidence, and nobody arranged it: **divisor 8 is what the owner reached by
-  eye, and the model independently agrees there is nothing left to take away
-  there.** Divisor 3 with the throttle beats their manual divisor 8 outright,
-  112 presented frames against 90, because it gives back the small-area
-  frames a flat divisor throws away. Note `settle_base_ms` ships at **0** although
-  the measured fixed term is 144 ms, and that is deliberate: the model decides
-  when the next update does VISIBLE harm, not how long the last one takes, and
-  charging 144 ms to everything pins the device to 6.5 fps on static screens
-  for no benefit anyone has reported seeing. See `src/koboy.h` and
-  `docs/FOLLOWUPS.md` #100.
-- **Four-level content is what smears; 1-bit content does not.** The panel's
-  fast waveforms are TWO-LEVEL --- DU drives a changed pixel to black or
-  white. Asking one for an intermediate grey at partial-refresh speed lands
-  between, leaving a stale ghost AND overshoot brighter than the background.
-  Rendering the game as genuinely two-valued (`force_dither`, `MENU ->
-  MOTION`) fixes the motion smearing that stood open from v1 --- confirmed on
-  the panel by the owner, 2026-08-27. The old "forced DU4 cannot erase"
-  finding is the same mechanism seen from the other side: DU4 is the
-  four-level variant.
+  `base + full * dirty/whole` and hold the next present until it elapses; the
+  divisor remains a ceiling. Measured (Sonic Chaos, 900 core frames, 879x576
+  rect): at divisor 3 the throttle cuts 235 presents to 112 -- the panel was
+  being asked for more than twice what it can finish -- and at divisor 8 it is
+  nearly inert, 90 -> 89. That second row is the evidence, and nobody arranged
+  it: **divisor 8 is what the owner reached by eye, and the model independently
+  agrees there is nothing left to take away there.** Divisor 3 with the
+  throttle beats their manual 8 outright, 112 presented frames against 90,
+  because it gives back the small-area frames a flat divisor throws away.
+  `settle_base_ms` ships at **0** although the measured fixed term is 144 ms,
+  deliberately: the model decides when the next update does VISIBLE harm, not
+  how long the last one takes, and charging 144 ms to everything pins the
+  device to 6.5 fps on static screens. `src/koboy.h`, `docs/FOLLOWUPS.md` #100.
+- **Four-level content is what smears; 1-bit content does not.** The fast
+  waveforms are TWO-LEVEL -- DU drives a changed pixel to black or white, so
+  asking for an intermediate grey at partial-refresh speed lands between,
+  leaving a stale ghost AND overshoot brighter than the background. Rendering
+  genuinely two-valued (`force_dither`, `MENU -> MOTION`) fixes the motion
+  smearing open since v1 -- confirmed on the panel by the owner, 2026-08-27.
+  The old "forced DU4 cannot erase" finding is the same mechanism from the
+  other side.
 - Scale 5 with a procedural faceplate, not full-width 7x.
 - `viewVertOrigin` is **not** a blit offset.
 - "Grab the buttons but not power" is impossible: they share `gpio-keys`.
@@ -571,88 +534,79 @@ One took four review rounds to fix. So: after writing any safety or regression
 test, *break the thing it guards and confirm the test fails.* Record the mutant
 and its output.
 
-The subtlest instance is worth knowing, because it is a class and not an
-accident: a sentinel guard band cannot detect an unclamped `memset` whose length
-underflows to near `SIZE_MAX`, because where glibc actually writes for such a
-length is an implementation detail that on x86-64 lands *inside* the buffer, not
-in the guard. The fix was to stop observing undefined behaviour and assert the
-clamped values directly (`chrome_bands`, `src/chrome.c`). If a test can only
-fail via UB, it is not a test.
+The subtlest instance is a CLASS, not an accident: a sentinel guard band
+cannot detect an unclamped `memset` whose length underflows to near
+`SIZE_MAX`, because where glibc writes for such a length is an implementation
+detail that on x86-64 lands *inside* the buffer, not in the guard. The fix was
+to stop observing UB and assert the clamped values directly (`chrome_bands`).
+If a test can only fail via UB, it is not a test.
 
-Corollary from the v1 endgame: the first-run deadlock that the final review
-caught was invisible to twenty per-task reviews because the scripted-run branch
-skips calibration — **every automated test took the one path that could not
-reach the bug.** When a code path exists only for scripted runs, ask what it is
-hiding.
+Corollary from the v1 endgame: the first-run deadlock the final review caught
+was invisible to twenty per-task reviews because the scripted-run branch skips
+calibration — **every automated test took the one path that could not reach the
+bug.** When a code path exists only for scripted runs, ask what it is hiding.
 
-**The instrument needs a mutant too, and both of ours did.** `make lint` was
-written, ran clean, and was WRONG: clang reported an injected shadowed local
-and `make` still exited 0, because a warning is not an error — `-Werror` is
-what makes that target a gate rather than a printer. Two of its four
-diagnostic flags are also not the ones the names suggest, and only a mutant
-says so: `-Wtautological-compare` does not catch `unsigned x >= 0` and
-`-Wunreachable-code` does not catch a statement after `return`. `make
-coverage` was checked the same way — neutering every `pacer_settle_us` call in
+**The instrument needs a mutant too, and both of ours did.** `make lint` ran
+clean and was WRONG: clang reported an injected shadowed local and `make` still
+exited 0, because a warning is not an error — `-Werror` is what makes that
+target a gate rather than a printer. Two of its four diagnostic flags are also
+not what their names suggest, and only a mutant says so:
+`-Wtautological-compare` does not catch `unsigned x >= 0` and
+`-Wunreachable-code` does not catch a statement after `return`. `make coverage`
+was checked the same way — neutering every `pacer_settle_us` call in
 `tests/test_pacing.c` dropped `src/pacing.c` from 48/48 to 40/48, exactly the
-eight lines of that function and nothing else.
+eight lines of that function.
 
-**And `gcov` cannot see inside a test in this project.** `tests/test.h`'s
-`TEST_MAIN(...)` takes the entire test body as one macro argument, so gcc
-attributes all of it to the expansion point: ten instrumented lines for a
-663-line file. So the mechanical hunt for a check that cannot fail does NOT
-exist here yet — `make coverage` measures `src/` honestly and says nothing
-about `tests/`. Finding a vacuous assertion is still a human reading code, and
-the shapes to read for are: **an assertion gated on the behaviour under test**
-(`if (a2 == UI_SELECT) CHECK(...)`), **a counter asserted against its own
-initialiser** with a `continue` above it, and **a comparison of two things the
-test itself wrote down**. All three were live in this tree as of 2026-08-28.
-The fix for the tooling is `docs/FOLLOWUPS.md` #105.
+**`gcov` cannot see inside a test here.** `tests/test.h`'s `TEST_MAIN(...)`
+takes the whole test body as one macro argument, so gcc attributes all of it to
+the expansion point: ten instrumented lines for a 663-line file. So the
+mechanical hunt for a check that cannot fail does NOT exist yet — `make
+coverage` measures `src/` honestly and says nothing about `tests/`. Finding a
+vacuous assertion is a human reading code, and the shapes to read for are: **an
+assertion gated on the behaviour under test** (`if (a2 == UI_SELECT)
+CHECK(...)`), **a counter asserted against its own initialiser** with a
+`continue` above it, and **a comparison of two things the test itself wrote
+down**. All three were live as of 2026-08-28; the tooling fix is
+`docs/FOLLOWUPS.md` #105.
 
-**A fourth shape, and it is the one that got past this section's author on
-2026-08-28: a check whose FIXTURE does not put the code in the state the check
-is named for.** `tests/test_screens.c` has a case for "a tap on the faceplate's
-A disc, under a full-panel list, selects the row and does not page" — the whole
-reason `screen_list` calls `input_ui_state` instead of `input_state`. It tapped
-the A disc's ROW at the panel's horizontal centre, which is nowhere near the
-disc, so no A bit was ever synthesised and swapping the two functions changed
-nothing. The check passed, read correctly, and tested the wrong thing. It was
-caught by the mutant and by nothing else, and the fix was to tap the disc's own
-centre computed from `koboy_layout`. **Ask of every new test not only "can this
-fail" but "does the fixture actually reach the state the name claims" — and the
-mutant is what answers the second question, the same as the first.**
+**A fourth shape, which got past this section's author: a check whose FIXTURE
+does not put the code in the state the check is named for.**
+`tests/test_screens.c` had a case for "a tap on the faceplate's A disc, under a
+full-panel list, selects the row and does not page" — the whole reason
+`screen_list` calls `input_ui_state` instead of `input_state`. It tapped the A
+disc's ROW at the panel's horizontal CENTRE, nowhere near the disc, so no A bit
+was ever synthesised and swapping the two functions changed nothing. The check
+passed, read correctly, and tested the wrong thing; the fix was to tap the
+disc's own centre computed from `koboy_layout`. **Ask of every new test not
+only "can this fail" but "does the fixture actually reach the state the name
+claims" — and the mutant answers the second question too.**
 
 ## Known unfinished
 
-- **ALL FIFTEEN SYSTEMS HAVE NOW RUN ON A KOBO.** This entry used to read
-  "TEN OF THE FOURTEEN SYSTEMS HAVE NEVER RUN ON A KOBO", in exactly that
-  typography, and it was true when it was written; `TESTED.md`'s "All fourteen
-  systems run on the device, 2026-08-27" and its Game Boy Advance section
-  overturned it and this file did not follow. Established: every shipped core
-  `dlopen`s, resolves geometry, paces itself and renders on the Libra 2; both
-  BIOS files have been read off the device's own card (ColecoVision's boot
+- **ALL FIFTEEN SYSTEMS HAVE NOW RUN ON A KOBO.** Established: every shipped
+  core `dlopen`s, resolves geometry, paces itself and renders on the Libra 2;
+  both BIOS files have been read off the device's own card (ColecoVision's boot
   screen was RENDERED and looked at, because a log cannot tell a working BIOS
   from a missing one); and the picture HAS been rotated on the panel — Galaga
   presents at 648x864 portrait.
   **What those runs are not is a playtest.** They are `--frames` over ssh with
-  Nickel up, which covers loading, geometry, pacing and speed and nothing a
-  finger does. The owner has separately played by hand (next-to-last bullet),
-  but no PER-SYSTEM playtest is written down anywhere, so the K1/K2 and
-  KEY/TOP discs, the LCD strip's six-button Mega Drive face and the GBA's
-  shoulder pills have no record of a finger on them, and the pixel-aspect
-  correction that changed eight systems' presentation has never been judged
-  by a person on the panel. Do not read this bullet as narrower than it is,
-  and do not read it as wider: "has run" is answered, "has been played" is
-  answered only in aggregate.
+  Nickel up: loading, geometry, pacing and speed, and nothing a finger does.
+  The owner has separately played by hand (next-to-last bullet), but no
+  PER-SYSTEM playtest is written down, so the K1/K2 and KEY/TOP discs, the LCD
+  strip's six-button Mega Drive face and the GBA's shoulder pills have no
+  record of a finger on them, and the pixel-aspect correction that changed
+  eight systems' presentation has never been judged by a person on the panel.
+  "Has run" is answered; "has been played" only in aggregate.
 - **The two-point host-to-device fit is retired for the systems it was built
   for, and still live for the arcade table.** Mega Drive, SNES and PC Engine
   were extrapolated (`device ~= 13.45 * host + 979 us`, reconciling gambatte's
   23.4x against fceumm's 17.2x) and have since been measured directly, so read
-  their rows and not the fit. The arcade table's separate flat 7x — a
-  different instrument, do not compare the two — still carries 226 of 227
-  boards. One board has since been measured and the model held to within 7%
-  (Galaga, 4.4 ms against ~4.7 predicted), which is a data point at the CHEAP
-  end; the boards near a 16.7 ms frame are where the sign of the error decides
-  playability. `docs/FOLLOWUPS.md` #56.
+  their rows and not the fit. The arcade table's separate flat 7x — a different
+  instrument, do not compare them — still carries 226 of 227 boards. One board
+  has been measured and the model held to within 7% (Galaga, 4.4 ms against
+  ~4.7 predicted), a data point at the CHEAP end; the boards near a 16.7 ms
+  frame are where the error's sign decides playability. `docs/FOLLOWUPS.md`
+  #56.
 - **Mega Drive and SNES are the first systems koboy has added where a battery
   save is the NORM rather than the exception, and no `.srm` from either has
   survived a real session.** GPGX's shrinking save length is already handled
@@ -675,46 +629,40 @@ mutant is what answers the second question, the same as the first.**
   the WRONG signal — it gives 2.0 where the truth is 1.75.
   `docs/FOLLOWUPS.md` #65 has the two structural choices the fix made and
   nobody has re-examined.
-- **The save path (cartridge SRAM) has now run on hardware, and the
-  destructive-truncation bug it was carried to test has been proven fixed.**
-  2026-08-26 device session: Zelda (cart type `0x03`, `rambanks: 1`, the
-  first battery-backed title this project has run — both prior titles were
-  `rambanks: 0`) verified write, read round-trip (md5-identical), and the
-  truncated-`.srm` destructive path, which left the file at its truncated
-  size instead of destroying it further. `TESTED.md` has the numbers.
-  **Save *states*** (`state.c`, `safefile.c` — a different mechanism from
-  cartridge SRAM, reached through `MODE_MENU`) are driven end to end on the
-  host by `tests/smoke_host.sh` (write to slot 1, read back in a second run)
-  and have since been exercised by hand on the device by the owner.
-- **A screenshot costs one frame about 6 ms, measured on the device, so it
-  stays on the main loop.** `MENU -> SCREENSHOT` arms a capture that the next
-  presented frame writes as a PNG into `shot_dir` (`src/shot.c`, `src/png.c`,
-  and the arming branch and capture site in `main.c`); the PNG decodes at
-  1264x1680 after transfer, so the hand-rolled stored-DEFLATE writer works
-  there too. What is still unknown is the confirmation plaque: whether its
-  FULL-refresh erase leaves residue where the text was is a judgement no
-  instrument in this project can make. `docs/FOLLOWUPS.md` #101-#104.
+- **The save path (cartridge SRAM) has run on hardware, and the
+  destructive-truncation bug it was carried to test is proven fixed.**
+  2026-08-26: Zelda (cart type `0x03`, `rambanks: 1`, the first battery-backed
+  title this project has run) verified write, read round-trip (md5-identical),
+  and the truncated-`.srm` path, which left the file at its truncated size
+  rather than destroying it further. `TESTED.md` has the numbers.
+  **Save *states*** (`state.c`, `safefile.c` — a different mechanism, reached
+  through `MODE_MENU`) are driven end to end on the host by
+  `tests/smoke_host.sh` and have been exercised by hand on the device.
+- **A screenshot costs one frame about 6 ms, measured, so it stays on the main
+  loop.** `MENU -> SCREENSHOT` arms a capture the next presented frame writes
+  as a PNG into `shot_dir` (`src/shot.c`, `src/png.c`, plus main.c's arming
+  branch and capture site); the PNG decodes at 1264x1680 after transfer, so the
+  hand-rolled stored-DEFLATE writer works there too. Still unknown: whether the
+  confirmation plaque's FULL-refresh erase leaves residue where the text was --
+  a judgement no instrument here can make. `docs/FOLLOWUPS.md` #101-#104.
 - **The 1-bit motion pair has been seen on a panel and shipped.**
   `force_dither` is the default, **MENU → MOTION** cycles `4 GREYS / AUTO` →
   `1-BIT / AUTO` → `1-BIT / DU`, and the owner confirms it fixes the smearing.
-  Two things that stayed open: the third rung selects nothing the second did
-  not already get (AUTO measures identical to DU on 1-bit content —
-  `docs/FOLLOWUPS.md` #98), and the other lever the investigation identified
-  — putting a flat background on an extreme level — has no shipped greyscale
-  mapping that does it without taking the foreground with it (#96). **No
-  measurement koboy can take can see ghosting**: residue is panel-side and the
-  dirty diff only compares koboy's own buffers, which is why this defect
+  Two things stayed open: the third rung selects nothing the second did not
+  already get (AUTO measures identical to DU on 1-bit content, #98), and the
+  other lever identified — putting a flat background on an extreme level — has
+  no shipped mapping that does it without taking the foreground too (#96).
+  **No measurement koboy can take can see ghosting**: residue is panel-side and
+  the dirty diff only compares koboy's own buffers, which is why this defect
   outlived two attempts and why the verdict had to be the owner's.
-- **One verified device, and everything measured on it is measured on that
-  one.** The owner has since played on it by hand — the cores, the controls,
-  the in-game MENU, cartridge saves and save states — so the long-running
-  "nobody has run this on hardware" gap is closed. What that does NOT create
-  is a regression test: a thing verified once by a hand on a panel is still
-  driven by nothing in `make test`, and `docs/FOLLOWUPS.md`'s "Coverage gaps"
-  section is where those live. Nearly every automated device run in `TESTED.md`
-  is still `--frames` over ssh with Nickel up, which is why #95 matters: the
-  takeover and input path is a surface a remote session cannot exercise at
-  all.
+- **One verified device, and everything measured is measured on that one.** The
+  owner has played on it by hand — cores, controls, the in-game MENU, cartridge
+  saves and save states — so the "nobody has run this on hardware" gap is
+  closed. That is NOT a regression test: nothing in `make test` drives it, and
+  `docs/FOLLOWUPS.md`'s "Coverage gaps" is where those live. Nearly every
+  automated device run in `TESTED.md` is `--frames` over ssh with Nickel up,
+  which is why #95 matters: the takeover and input path is a surface a remote
+  session cannot exercise at all.
 - `refresh_fixed_tiles` ships at a starting guess (40), still not a validated
   value: an on-device sweep (20/40/80/split-off) found 20/40/80
   behaviourally identical on real content, which the measurement method
@@ -737,13 +685,11 @@ is not an oversight ("DISABLED BY DEFAULT, and the history matters because 'off'
 looks like an oversight otherwise"). Clamps and guards carry a note saying they
 are live so nobody deletes them as dead code. Match that voice.
 
-ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`, and the extensions the other
-fourteen systems use) and must never be committed. `.md` is the ONE entry in
-that list that is also an everyday non-ROM extension, so it is anchored to
-the roms directories rather than global — an unqualified `*.md` would
-silently stop this file, README.md and all of docs/ from ever being
-committed again. Neither may a BIOS: two
-systems need one now, and `tests/test_dist.sh` asserts no `.rom` or `.bin`
-reaches the package.
-`*.pgm` is marked binary in `.gitattributes` — without it git diffs a golden
-image as text and a review package balloons to megabytes.
+ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`, and every other system's
+extensions) and must never be committed. `.md` is the ONE entry that is also an
+everyday non-ROM extension, so it is anchored to the roms directories rather
+than global — an unqualified `*.md` would silently stop this file, README.md
+and all of docs/ from ever being committed again. Neither may a BIOS: two
+systems need one, and `tests/test_dist.sh` asserts no `.rom` or `.bin` reaches
+the package. `*.pgm` is marked binary in `.gitattributes` — without it git
+diffs a golden image as text and a review package balloons to megabytes.
