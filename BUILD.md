@@ -19,7 +19,7 @@ built and tested on every run.
 
 ```sh
 make host        # -> build/koboy (SDL) + build/stub_core.so
-make test        # 26 test binaries, 6010 checks
+make test        # 29 test binaries, 6244 checks
 ```
 
 You need a C compiler, GNU make and SDL2 (`pkg-config --cflags sdl2` must
@@ -198,8 +198,8 @@ For reference, the highest symbol versions in the real artefacts:
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
 
 make kobo        # build/koboy-arm + build/koboy-probe-arm (builds FBInk first)
-make dist        # -> dist/koboy-0.5.0.zip, everything under .adds/koboy/
-make probe-dist  # -> dist/koboy-probe-0.5.0.zip, the probe alone
+make dist        # -> dist/koboy-$(VERSION).zip, everything under .adds/koboy/
+make probe-dist  # -> dist/koboy-probe-$(VERSION).zip, the probe alone
 ```
 
 **`make kobo` needs that `PATH` and it is not there by default.** `CROSS`

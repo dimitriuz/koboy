@@ -58,7 +58,7 @@ you get `keyword stricthostkeychecking extra arguments at end of line`.
 
 ```sh
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
-make dist                       # -> dist/koboy-0.1.0.zip, contents under .adds/koboy/
+make dist                       # -> dist/koboy-$(VERSION).zip, contents under .adds/koboy/
 # scp the zip, then on the device:
 cd /mnt/onboard && unzip -o -q /tmp/koboy-*.zip && sync
 ```

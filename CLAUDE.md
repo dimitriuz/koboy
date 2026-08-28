@@ -60,7 +60,7 @@ bash scripts/verify-core.sh  # shipped dependency closure
 
 export PATH="$HOME/.cache/koboy-toolchain/arm-linaro-4.9-2014.09/bin:$PATH"
 make kobo        # cross-compile koboy-arm + koboy-probe-arm  (PATH needed!)
-make dist        # -> dist/koboy-0.1.0.zip, everything under .adds/koboy/
+make dist        # -> dist/koboy-$(VERSION).zip, everything under .adds/koboy/
 make probe-dist  # just the probe, without the emulator or the core
 core-fbneo       # rebuild the arcade core alone (it ships in `dist` now)
 ```
