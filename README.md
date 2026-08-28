@@ -87,9 +87,11 @@ folder takes up on the card, and 13.6 MB of the 18.6 MB you download.
 `.adds/koboy/fbneo_libretro.so`.** Nothing else depends on it, no other
 system changes, and `.zip` files simply stop appearing in the browser.
 
-If you do keep it, `.adds/koboy/README-fbneo.txt` has the arcade specifics —
-the romset version it has to match, why some zips in a complete set are not
-games, and where to put `hiscore.dat`.
+If you do keep it, [`packaging/README-fbneo.txt`](packaging/README-fbneo.txt)
+has the arcade specifics — the romset version it has to match, why some zips
+in a complete set are not games, why a board ignores your coin for its first
+ten seconds, and where to put `hiscore.dat`. The same file ships as
+`.adds/koboy/README-fbneo.txt`, so it is on the device too.
 
 ---
 
