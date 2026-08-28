@@ -5,7 +5,8 @@ No C++ of its own. It `dlopen`s a libretro core chosen from the ROM's
 extension — gambatte (.gb/.gbc), gw-libretro (.mgw), fceumm (.nes),
 PokeMini (.min), beetle-wswan (.ws/.wsc), RACE (.ngp/.ngc), stella2014
 (.a26), Gearcoleco (.col), FreeIntv (.int), Genesis Plus GX (.sms/.gg/.md),
-snes9x2005 (.sfc/.smc), beetle-pce-fast (.pce), FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
+snes9x2005 (.sfc/.smc), beetle-pce-fast (.pce), gpSP (.gba),
+FinalBurn Neo (.zip, arcade) — renders four greys through FBInk to the e-ink
 panel, and reads the page-turn buttons and touchscreen straight from evdev.
 
 **ONE ARCHIVE, and this reversed.** Arcade used to ship separately behind
@@ -15,32 +16,37 @@ whole package is 18.6 MB, so the split cost more than it saved and the target
 is GONE (`core-fbneo` still rebuilds just that core). `tests/test_dist.sh`
 asserts the core IS in the package, with real bytes, under a 32 MB cap.
 Deleting `.adds/koboy/fbneo_libretro.so` is how an owner without a romset
-reclaims the space, and both generated READMEs say so by filename. Arcade is
+reclaims the space, and both packaged READMEs (`packaging/roms-README.txt`
+and `packaging/README-fbneo.txt`, real files that `make dist` COPIES rather
+than generates) say so by filename. Arcade is
 still the ONLY system whose core and content are version-locked: the romset
 must match FBNeo v1.0.0.03 (revision ae41c16e, 2025-07-24), pinned by SHA in
 `scripts/pins.txt` and explained at length in `scripts/build-fbneo-core.sh`.
 
-**Two of the fourteen systems need a BIOS, and it is the owner's to supply.**
+**Two of the fifteen systems need a BIOS, and it is the owner's to supply.**
 ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
 `grom.bin`. Both go in `.adds/koboy/` (what koboy answers
 `GET_SYSTEM_DIRECTORY` with). Nothing ships them and `tests/test_dist.sh`
 asserts nothing ever will.
 
-**v1 is merged and verified on real hardware** (a Kobo Libra 2, playing Tetris
-and an action platformer, exiting to a working Nickel without a reboot).
-**v2-core has run on the same device, but only partially:** a 2026-08-26
-session ran `koboy` directly with `--frames` over ssh (never through
-`scripts/koboy.sh`, so Nickel stayed up), which verified the core, the
-cartridge-SRAM save path (including its destructive-truncation fix), and the
-ROM browser via `--ui-script`, plus real per-stage timing on a real panel.
-The takeover, touch d-pad and in-game MENU have since been verified by hand
-(2026-08-26). Save *states* writing and re-reading a file have still not run
-on hardware. See "Known unfinished".
+**Verified on real hardware, on exactly one device** (a Kobo Libra 2). v1
+plays Tetris and an action platformer and exits to a working Nickel without a
+reboot; v2-core's takeover, touch d-pad, ROM browser and in-game MENU were
+driven by hand from NickelMenu on 2026-08-26, and cartridge SRAM and save
+states have both been round-tripped there. Every one of the fifteen systems
+has since `dlopen`ed, resolved geometry, paced itself and rendered on that
+panel (`TESTED.md`, "All fourteen systems run on the device, 2026-08-27",
+plus the Game Boy Advance section).
+
+**What that is NOT is a regression test.** A thing verified once by a hand on
+a panel is driven by nothing in `make test`. And the fifteen-system sweep is
+`--frames` over ssh with Nickel up, which covers loading, geometry, pacing and
+speed and nothing a finger does. See "Known unfinished".
 
 ## Build and test
 
 ```sh
-make test        # host suite: 28 binaries, 6127 checks. Runs on x86_64.
+make test        # host suite: 28 binaries, 6129 checks. Runs on x86_64.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform
@@ -106,15 +112,13 @@ src/config.c          ini load/save, profile resolution, path resolution
 src/core.c            dlopen + retro_* symbol binding
 src/probe.c           koboy-probe: --coexist (safe, Nickel up) / --takeover
 scripts/koboy.sh      the launcher. Its environment gate is load-bearing.
-                      ROTATION lives in three places and nowhere else:
-                      core.c records SET_ROTATION and TRANSPOSES
-                      core_get_geometry's answer for an odd one (so every
-                      consumer sees the picture as PRESENTED); video.c turns
-                      the pixels inside the convert pass it was already
-                      making; main.c wires the two and re-syncs on every
-                      geometry change. Answering true is a PROMISE --
-                      beetle-wswan stops rotating in software the moment you
-                      do.
+
+ROTATION lives in three files and nowhere else: core.c records SET_ROTATION
+and TRANSPOSES core_get_geometry's answer for an odd quarter-turn (so every
+consumer sees the picture as PRESENTED); video.c turns the pixels inside the
+convert pass it was already making; main.c wires the two and re-syncs on every
+geometry change. Answering true is a PROMISE -- beetle-wswan stops rotating in
+software the moment you do.
 
 -- v2 additions: the ROM browser, in-game MENU and save states -----------
 src/ui.c              one list widget, edge-triggered, used for BOTH the ROM
@@ -125,7 +129,8 @@ src/romlist.c         lists ONE directory of rom_dir at a time -- folders
                       flatten it replaced put the same "Game and Watch/"
                       prefix on 59 rows. romlist_is_rom is an ALLOWLIST of
                       extensions (.gb/.gbc/.mgw/.nes/.min/.ws/.wsc/.ngp/
-                      .ngc/.a26/.col/.int/.sms/.gg) and must stay in step
+                      .ngc/.a26/.col/.int/.sms/.gg/.md/.sfc/.smc/.pce/
+                      .gba/.zip) and must stay in step
                       with config_core_for_rom's table -- a real NES
                       collection ships .pal files beside the ROMs,
                       WonderSwan and Neo Geo Pocket ones ship boot.rom /
@@ -156,6 +161,24 @@ src/shot.c            MENU -> SCREENSHOT: the filename stem, the counter
                       picture itself
 src/stats.c           per-stage (core/submit/blit/refresh) timing, the
                       koboy.log `stages` line
+src/recent.c          the most-recently-played list. recent_touch is PURE (no
+                      filesystem) so it tests like romlist_is_rom; load/save
+                      are thin wrappers over safefile.c
+src/calib.c           first-run page-turn key calibration. It MUST be
+                      escapable by a touch: the loop advances only on a raw
+                      key press, and a touch-only Kobo has no key to press
+src/btinput.c         finds a Bluetooth gamepad by PARSING
+                      /proc/bus/input/devices -- no libbluetooth, no D-Bus,
+                      no new dependency. bluetoothd's `input` plugin has
+                      already turned the pad into an ordinary /dev/input/
+                      eventN that input.c can decode, so "controller support"
+                      is entirely a matter of finding the right node. The
+                      parse is split out and pure so it is tested against
+                      real recorded /proc text rather than against a device
+                      that must be physically present. platform_kobo.c
+                      rescans once a second (BlueZ reconnects on its own
+                      schedule, usually AFTER koboy starts) and deliberately
+                      does not EVIOCGRAB the node
 src/pacing.c          when the next frame reaches the panel. TWO gates, ANDed:
                       present_divisor as a minimum GAP between presents (a
                       gap and not `frames % divisor`, so a settle hold that
@@ -169,8 +192,10 @@ src/pacing.c          when the next frame reaches the panel. TWO gates, ANDed:
                       screen
 
 -- multi-system: koboy is no longer Game-Boy-only ------------------------
-Thirteen cores ship for FOURTEEN systems -- Genesis Plus GX answers for three
-of them. Extension -> core -> layout, all decided in config.c:
+Fourteen cores ship for FIFTEEN systems -- Genesis Plus GX answers for two
+of them (.sms/.gg is one, .md the other). The counting that matters is
+README.md's table, which has fifteen rows; BUILD.md and this file agree with
+it. Extension -> core -> layout, all decided in config.c:
   .gb/.gbc  gambatte_libretro.so         DMG faceplate
   .mgw      gw_libretro.so               LCD strip (the unit draws its own buttons)
   .nes      fceumm_libretro.so           DMG faceplate
@@ -184,16 +209,32 @@ of them. Extension -> core -> layout, all decided in config.c:
   .int      freeintv_libretro.so         DMG faceplate + KEY and TOP discs,
                                          and NEEDS exec.bin + grom.bin
   .sms/.gg  genesis_plus_gx_libretro.so  DMG faceplate
-  .md       genesis_plus_gx_libretro.so  DMG faceplate + A and Y discs --
-                                         SAME .so as .sms/.gg. The Mega Drive
-                                         cost NO build at all.
-  .sfc/.smc snes9x2005_libretro.so       DMG faceplate + Y and X discs
+  .md       genesis_plus_gx_libretro.so  LCD strip, six-button ROWS6 face
+                                         (X Y Z over A B C), SELECT says MODE
+                                         -- SAME .so as .sms/.gg. The Mega
+                                         Drive cost NO build at all.
+  .sfc/.smc snes9x2005_libretro.so       LCD strip, diamond face + L and R
   .pce      mednafen_pce_fast_libretro.so DMG faceplate, NO extra discs
+  .gba      gpsp_libretro.so             LCD strip, PAIR2 face (A and B only)
+                                         + L and R shoulder pills
+  .zip      fbneo_libretro.so            DMG faceplate + 3 and 4 discs
+                                         (arcade -- .zip is a CONTAINER, not
+                                         a system, and nothing else koboy
+                                         ships can open one)
+FOUR SYSTEMS ARE ON THE LCD STRIP and the rest are on the DMG faceplate.
+.mgw is there because the unit draws its own buttons; .md and .sfc/.smc are
+there because their pads do NOT FIT the faceplate's five controls plus two
+spare discs; .gba is there for a different reason again -- it fits, but the
+two spare pockets are FACE pockets and a GBA's L and R are a left one and a
+right one. config_layout_for_rom argues all four at length.
 Adding a system is a build script plus four wiring points: the table in
 config_core_for_rom, romlist_is_rom, a non-phony $(CORE_*_SO) rule in the
-Makefile, and the generated roms/README.txt. Mega Drive needed only the
-wiring points -- check whether a core you already ship covers the system
-before writing a fifth build script.
+Makefile, and packaging/roms-README.txt (a real file that is COPIED, not
+generated). A system whose pad does not fit the DMG faceplate needs
+config_layout_for_rom and config_lcd_pad_for_rom too; one that fits with an
+extra disc or two needs config_extra_buttons_for_rom. Mega Drive needed only
+wiring points and no build at all -- check whether a core you already ship
+covers the system before writing another build script.
 
 scripts/build-gw-core.sh      gw-libretro (Game & Watch)
 scripts/build-fceumm-core.sh  libretro-fceumm (NES). Three non-default make
@@ -242,6 +283,14 @@ scripts/build-pce-core.sh     libretro/beetle-pce-fast-LIBRETRO (PC Engine).
                       compiled, so counting .cpp files predicts the wrong
                       flags; -Wl,--as-needed is what actually gives the
                       libm+libc closure. Cartridge .pce ONLY.
+scripts/build-gba-core.sh     libretro/gpsp (Game Boy Advance). Chosen over
+                      mGBA and vba-next by MEASUREMENT, all three cross-built
+                      -- and the host column UNDERSTATES it, because gpSP's
+                      dynarec targets ARM and was off on x86_64 while neither
+                      rival has one at all. The received wisdom that vba-next
+                      is the fast one is FALSE at these revisions: it is the
+                      slowest of the three on all eight titles. The script's
+                      header carries the numbers and the dynarec check.
 scripts/build-fbneo-core.sh   libretro/FBNeo (arcade). NOT
                       finalburnneo/FBNeo -- a NEW variant of the 404 trap,
                       because BOTH names exist and both are real FBNeo
@@ -253,7 +302,7 @@ scripts/build-fbneo-core.sh   libretro/FBNeo (arcade). NOT
                       exactly like a broken core. 7-Zip support is compiled
                       OUT for the device: lib7z does not build against glibc
                       2.19's headers.
-Nine of the fourteen are pure C: closure is libm+libc or less. The two
+Nine of the fourteen CORES are pure C: closure is libm+libc or less. The two
 WonderSwan/Neo Geo cores need libc ALONE. FBNeo is the only one that pulls in
 libpthread.
 scripts/probe_core.c  standalone: dlopens ANY core with no koboy code in the
@@ -283,7 +332,7 @@ test) and each has a distinct failure if the guard goes -- see the commit and
 test_chrome.c. The bit is always the CORE's choice, read off its input
 descriptors, never picked here.
 
-TWO of the fourteen systems have a 12-KEY KEYPAD the faceplate cannot draw, and
+TWO of the fifteen systems have a 12-KEY KEYPAD the faceplate cannot draw, and
 on both of them titles refuse to start without it. Check any new system's real
 control set against what the faceplate offers BEFORE assuming DMG is enough;
 this has now cost a round on Game & Watch, Pokemon Mini, WonderSwan, and both
@@ -305,8 +354,10 @@ the binary and still failed to load.
 ## Reference documents
 
 v2-core (the ROM browser, in-game MENU, save states, multi-rect dirty regions,
-the redrawn faceplate) is done as of this task; the Bluetooth companion plan
-(`docs/superpowers/plans/2026-08-25-koboy-v2-bluetooth.md`) is not started.
+the redrawn faceplate) is done. So is the Bluetooth half
+(`docs/superpowers/plans/2026-08-25-koboy-v2-bluetooth.md`): `src/btinput.c`
+ships and `platform_kobo.c` opens the pad it finds. That plan is the design
+record, not a to-do list.
 
 | Document | What it holds |
 |---|---|
@@ -314,7 +365,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
 | `docs/FOLLOWUPS.md` | 63 findings that are still open, grouped by subsystem, with a six-item "Start here" at the top. Everything CLOSED and everything whose only content was "not run on hardware" was cut (2026-08-28); the 41 retired numbers are indexed in a table at the bottom, so a `#N` in a source comment still resolves. Numbers are never reused. The live ones: **#23** (`video_submit` is the bottleneck on all fifteen systems and nothing has optimised it), **#84 / #72** (one file segfaults the process, and twelve cores have never been swept for the same), **#92 / #95** (two unexplained SIGSEGVs in the owner's log, on a path a remote session cannot exercise), **#78** (nine systems auto-fit with no measured scale ceiling), **#25** (scroller smearing, improved by 1-bit output and not solved). |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
-| `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
+| `TESTED.md` | The device matrix, and the record every "measured" claim in this file points at. Exactly ONE device is verified (a Kobo Libra 2). All fifteen systems have rendered on it; only the Game Boy has been played. Sections are dated and LATER ones supersede earlier ones — three "NOT RUN ON THE DEVICE" sections dated 2026-08-27 are overturned by "All fourteen systems run on the device" later the same day, so read the file forwards. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
 | `docs/probe-readme.md` | Profiling a device nobody has tried. |
 | `README.md` | The PUBLIC readme, for someone who owns a Kobo and has never built anything. Not reference material -- if you need the core/extension table, this file has it. |
@@ -418,7 +469,7 @@ spec's appendices are the record; the short version:
   because the STARFIELD scrolls. Dig Dug, Donkey Kong and Ms. Pac-Man are 1.5
   to 2.6%.
 - **A core's MAX geometry, not its real frame, sizes the reserved rect -- and
-  two of the fourteen systems report a max nothing like what they draw.**
+  two of the fifteen systems report a max nothing like what they draw.**
   snes9x2005 says 512x512 against a 256x224 frame and beetle-pce-fast says
   512x243 against 352x243, so a 512-tall reservation cannot exceed scale 1
   under chrome_controls_top. Measured on the verified panel: SNES presents at
@@ -515,27 +566,36 @@ hiding.
 
 ## Known unfinished
 
-- **TEN OF THE FOURTEEN SYSTEMS HAVE NEVER RUN ON A KOBO.** Game Boy and Game
-  & Watch are verified; NES and Pokemon Mini have run on the device. NOTHING
-  device-side exists for WonderSwan, Neo Geo Pocket, Atari 2600,
-  ColecoVision, Intellivision, Master System / Game Gear, ARCADE, MEGA DRIVE,
-  SNES or PC ENGINE — every figure in `TESTED.md` for those ten is a host
-  measurement through koboy's own `config.c`/`video.c`/`chrome.c` plus a
-  cross-build that passes `verify-core.sh`. In particular the two BIOS files
-  have never been read off a FAT32 partition, the K1/K2 and KEY/TOP discs
-  have never been touched by a real finger, and **the picture has never been
-  ROTATED on the panel** — which is the difference between Galaga and
-  Galaga sideways.
-- **Every device speed figure for the three newest systems is EXTRAPOLATED
-  from a TWO-POINT FIT, and the two points disagree under a simple ratio.**
-  Re-measured with `scripts/corebench.c`, gambatte implies 23.4x
-  host-to-device and fceumm implies 17.2x; a linear fit
-  (`device ~= 13.45 * host + 979 us`) reconciles them, and its additive ~1 ms
-  is plausibly koboy's own per-frame front-end work, which `corebench` does
-  not measure and `TESTED.md`'s `core` stage does. It is still a two-point
-  fit doing real work in every number. Do NOT compare those figures with the
-  arcade section's flat 7x: that one scaled koboy's own instrument, this one
-  scales a different one.
+- **ALL FIFTEEN SYSTEMS HAVE NOW RUN ON A KOBO.** This entry used to read
+  "TEN OF THE FOURTEEN SYSTEMS HAVE NEVER RUN ON A KOBO", in exactly that
+  typography, and it was true when it was written; `TESTED.md`'s "All fourteen
+  systems run on the device, 2026-08-27" and its Game Boy Advance section
+  overturned it and this file did not follow. Established: every shipped core
+  `dlopen`s, resolves geometry, paces itself and renders on the Libra 2; both
+  BIOS files have been read off the device's own card (ColecoVision's boot
+  screen was RENDERED and looked at, because a log cannot tell a working BIOS
+  from a missing one); and the picture HAS been rotated on the panel — Galaga
+  presents at 648x864 portrait.
+  **What those runs are not is a playtest.** They are `--frames` over ssh with
+  Nickel up, which covers loading, geometry, pacing and speed and nothing a
+  finger does. The owner has separately played by hand (next-to-last bullet),
+  but no PER-SYSTEM playtest is written down anywhere, so the K1/K2 and
+  KEY/TOP discs, the LCD strip's six-button Mega Drive face and the GBA's
+  shoulder pills have no record of a finger on them, and the pixel-aspect
+  correction that changed eight systems' presentation has never been judged
+  by a person on the panel. Do not read this bullet as narrower than it is,
+  and do not read it as wider: "has run" is answered, "has been played" is
+  answered only in aggregate.
+- **The two-point host-to-device fit is retired for the systems it was built
+  for, and still live for the arcade table.** Mega Drive, SNES and PC Engine
+  were extrapolated (`device ~= 13.45 * host + 979 us`, reconciling gambatte's
+  23.4x against fceumm's 17.2x) and have since been measured directly, so read
+  their rows and not the fit. The arcade table's separate flat 7x — a
+  different instrument, do not compare the two — still carries 226 of 227
+  boards. One board has since been measured and the model held to within 7%
+  (Galaga, 4.4 ms against ~4.7 predicted), which is a data point at the CHEAP
+  end; the boards near a 16.7 ms frame are where the sign of the error decides
+  playability. `docs/FOLLOWUPS.md` #56.
 - **Mega Drive and SNES are the first systems koboy has added where a battery
   save is the NORM rather than the exception, and no `.srm` from either has
   survived a real session.** GPGX's shrinking save length is already handled
@@ -621,7 +681,7 @@ looks like an oversight otherwise"). Clamps and guards carry a note saying they
 are live so nobody deletes them as dead code. Match that voice.
 
 ROMs are git-ignored (`*.gb`, `*.gbc`, `*.sav`, and the extensions the other
-thirteen systems use) and must never be committed. `.md` is the ONE entry in
+fourteen systems use) and must never be committed. `.md` is the ONE entry in
 that list that is also an everyday non-ROM extension, so it is anchored to
 the roms directories rather than global — an unqualified `*.md` would
 silently stop this file, README.md and all of docs/ from ever being
