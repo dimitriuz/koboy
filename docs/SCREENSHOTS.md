@@ -5,12 +5,12 @@ Every image here was taken **on the device**, by koboy itself: `MENU` ->
 exactly what the panel shows -- the four grey levels, the dither pattern where
 `MOTION` is on, and the control strip each system gets.
 
-They are photographs of a framebuffer, not of a screen. An e-ink panel in a
-room reflects light and has a texture; nothing here can show you that, and it
-looks better in the hand than it does here.
+They are captures of a framebuffer, not photographs of a screen. An e-ink panel
+reflects room light and has a paper texture; nothing here can show you that, and
+it looks better in the hand than it does on a monitor.
 
-Panel is a Kobo Libra 2, 1264x1680 at 300 dpi. See [TESTED.md](../TESTED.md)
-for what has and has not been verified on hardware.
+Panel is a Kobo Libra 2, 1264x1680 at 300 dpi. See [TESTED.md](../TESTED.md) for
+what has and has not been verified on hardware.
 
 [<- back to the README](../README.md)
 
@@ -61,10 +61,6 @@ for what has and has not been verified on hardware.
 
 <img src="screenshots/Super_Mario_Land_2_-_6_Golden_Coins_USA_Europe_Rev_2-002.png" width="420" alt="Super Mario Land 2 - 6 Golden Coins USA Europe Rev 2 on koboy">
 
-**Super Mario Land World Rev 1**
-
-<img src="screenshots/Super_Mario_Land_World_Rev_1-001.png" width="420" alt="Super Mario Land World Rev 1 on koboy">
-
 **Super R.C. Pro-Am USA Europe**
 
 <img src="screenshots/Super_R.C._Pro-Am_USA_Europe-001.png" width="420" alt="Super R.C. Pro-Am USA Europe on koboy">
@@ -113,10 +109,6 @@ for what has and has not been verified on hardware.
 
 **Pokemon - Emerald Version USA Europe**
 
-<img src="screenshots/Pokemon_-_Emerald_Version_USA_Europe-001.png" width="420" alt="Pokemon - Emerald Version USA Europe on koboy">
-
-**Pokemon - Emerald Version USA Europe**
-
 <img src="screenshots/Pokemon_-_Emerald_Version_USA_Europe-002.png" width="420" alt="Pokemon - Emerald Version USA Europe on koboy">
 
 **Pokemon - Emerald Version USA Europe**
@@ -134,10 +126,6 @@ for what has and has not been verified on hardware.
 
 <img src="screenshots/Egg_Nintendo_Wide_Screen-002.png" width="420" alt="Egg Nintendo Wide Screen on koboy">
 
-**gw a**
-
-<img src="screenshots/gw_a.png" width="420" alt="gw a on koboy">
-
 
 ## Pokemon Mini
 
@@ -151,10 +139,6 @@ for what has and has not been verified on hardware.
 
 
 ## NES
-
-**Bubble Bobble USA**
-
-<img src="screenshots/Bubble_Bobble_USA-001.png" width="420" alt="Bubble Bobble USA on koboy">
 
 **Dr. Mario Japan USA En Rev 1**
 
@@ -171,10 +155,6 @@ for what has and has not been verified on hardware.
 **Tetris USA**
 
 <img src="screenshots/Tetris_USA-002.png" width="420" alt="Tetris USA on koboy">
-
-**nes b**
-
-<img src="screenshots/nes_b.png" width="420" alt="nes b on koboy">
 
 
 ## SNES
@@ -195,20 +175,12 @@ for what has and has not been verified on hardware.
 
 <img src="screenshots/Star_Fox_USA_Rev_2-002.png" width="420" alt="Star Fox USA Rev 2 on koboy">
 
-**snes b**
-
-<img src="screenshots/snes_b.png" width="420" alt="snes b on koboy">
-
 
 ## Master System
 
 **Sonic Chaos Europe Brazil**
 
 <img src="screenshots/Sonic_Chaos_Europe_Brazil-001.png" width="420" alt="Sonic Chaos Europe Brazil on koboy">
-
-**Sonic Chaos Europe Brazil**
-
-<img src="screenshots/Sonic_Chaos_Europe_Brazil-002.png" width="420" alt="Sonic Chaos Europe Brazil on koboy">
 
 **Sonic Chaos Europe Brazil**
 
@@ -247,10 +219,6 @@ for what has and has not been verified on hardware.
 
 <img src="screenshots/R-Type_USA-002.png" width="420" alt="R-Type USA on koboy">
 
-**pcengine a**
-
-<img src="screenshots/pcengine_a.png" width="420" alt="pcengine a on koboy">
-
 
 ## Neo Geo Pocket
 
@@ -261,10 +229,6 @@ for what has and has not been verified on hardware.
 **Metal Slug - 1st Mission World En Ja**
 
 <img src="screenshots/Metal_Slug_-_1st_Mission_World_En_Ja-002.png" width="420" alt="Metal Slug - 1st Mission World En Ja on koboy">
-
-**ngpc a**
-
-<img src="screenshots/ngpc_a.png" width="420" alt="ngpc a on koboy">
 
 
 ## WonderSwan
@@ -283,10 +247,6 @@ for what has and has not been verified on hardware.
 **Pitfall II - Lost Caverns USA**
 
 <img src="screenshots/Pitfall_II_-_Lost_Caverns_USA-001.png" width="420" alt="Pitfall II - Lost Caverns USA on koboy">
-
-**atari2600 b**
-
-<img src="screenshots/atari2600_b.png" width="420" alt="atari2600 b on koboy">
 
 
 ## ColecoVision
@@ -310,16 +270,8 @@ for what has and has not been verified on hardware.
 
 <img src="screenshots/Astrosmash_USA_Europe-002.png" width="420" alt="Astrosmash USA Europe on koboy">
 
-**intellivision a**
-
-<img src="screenshots/intellivision_a.png" width="420" alt="intellivision a on koboy">
-
 
 ## Arcade
-
-**arcade b**
-
-<img src="screenshots/arcade_b.png" width="420" alt="arcade b on koboy">
 
 **dkong**
 
