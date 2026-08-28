@@ -292,10 +292,9 @@ pin it. If it stays, its ini comment should say that is what it is for.
 
 ### 24. `refresh_fixed_tiles` tuning (20 vs 40 vs 80 vs split-off) is inconclusive by construction, not just unmeasured
 
-2026-08-26 device
-session, same Zelda run, `--frames 900`: 20/40/80 all produced the same
-339 rects over 292 frames (604 / 750 / 488 µs mean `refresh`) --
-behaviourally identical on real content, exactly as a host reviewer
+2026-08-26 device session, same Zelda run as #23, `--frames 900`: 20/40/80
+all produced the same 339 rects over 292 frames (604 / 750 / 488 µs mean
+`refresh`) -- behaviourally identical on real content, exactly as a host reviewer
 predicted from the code before any device was available. Splitting off
 entirely (100000) dropped to 292 rects / 368 µs, which is the expected
 mechanical cost of one ioctl per extra rect, not evidence against
