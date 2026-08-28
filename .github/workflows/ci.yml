@@ -39,6 +39,20 @@ jobs:
       - name: Unit tests
         run: make test
 
+      # A SECOND FRONT END over the same tree, warnings only, nothing linked.
+      # `make test` above is gcc; this is clang with -Werror and four
+      # diagnostic flags gcc has no equivalent for -- two of which were named
+      # by mutant rather than from the manual, because the obvious spellings
+      # (-Wtautological-compare, -Wunreachable-code) catch neither shape the
+      # Makefile's comment describes. It is here rather than
+      # in a nightly because it costs seconds and because the thing it guards
+      # -- a test that cannot fail -- is invisible to a green test run by
+      # definition. The target SKIPS ITSELF cleanly if clang is missing, so
+      # this step cannot break a runner image change; it will just stop
+      # guarding, which is why the step name says what it needs.
+      - name: Lint (clang, second front end)
+        run: make lint
+
       # End to end against the stub core, headless via SDL's dummy driver:
       # ROM loading, the browser, the in-game menu, save states, SRAM, the
       # failed-load recovery paths and mid-session core switching.

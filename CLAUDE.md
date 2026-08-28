@@ -47,6 +47,14 @@ speed and nothing a finger does. See "Known unfinished".
 
 ```sh
 make test        # host suite: 28 binaries, 6129 checks. Runs on x86_64.
+make lint        # clang -Werror -fsyntax-only over src/ AND tests/. A SECOND
+                 # front end: `make test` is gcc, and clang carries classes
+                 # gcc has no equivalent for. Green on the tree; CI gates on
+                 # it. Skips itself if clang is absent.
+make coverage    # per-file line coverage of src/, from the whole suite
+                 # (scripts/coverage.sh). BUILD-TIME TOOLING ON THE HOST: it
+                 # links nothing into koboy-arm, so the dependency ceiling is
+                 # untouched -- gcov is a compiler feature, not a library.
 make host        # host build (SDL platform) + stub core
 bash tests/test_dist.sh      # packaging + launcher safety assertions
 bash tests/smoke_host.sh     # end-to-end on the host platform

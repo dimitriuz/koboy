@@ -42,7 +42,109 @@ test: build kobo-syntax $(TESTBIN)
 clean:
 	rm -rf build
 
-.PHONY: build test clean host kobo-syntax
+# ------------------------------------------------------------------- lint
+# NEITHER `lint` NOR `coverage` PUTS ANYTHING INTO A SHIPPED BINARY, and the
+# next reader will worry about exactly that, so it is said here rather than
+# left to be inferred. `clang -fsyntax-only` emits no object at all, and gcov
+# is a COMPILER FEATURE rather than a library -- `--coverage` instruments a
+# host-only build under build/cov/ that is thrown away. `make kobo`, `make
+# dist` and scripts/verify-core.sh never see either, so koboy-arm's
+# libc/libm/libdl closure -- the dependency ceiling CLAUDE.md calls
+# non-negotiable -- is untouched by both targets. No new dependency is added:
+# clang is optional (the target skips itself when it is absent) and gcov ships
+# with gcc.
+#
+# WHY A SECOND FRONT END. Every line of this project has only ever been
+# compiled by one compiler. clang carries diagnostic classes gcc does not, and
+# the one this project cares about most is a TEST THAT CANNOT FAIL: a
+# self-comparison of literals is a compile-time-visible shape, and the last
+# four of those were found by a human reading code.
+#
+# THREE GROUPS, because not every file compiles on every host:
+#   portable  src/*.c minus the backends and probe.c, plus tests/ -- always
+#   sdl       platform_sdl.c + the host main.c, only with pkg-config sdl2
+#   kobo      platform_kobo.c, probe.c and main.c under
+#             -DKOBOY_PLATFORM_KOBO, only once third_party/fbink/fbink.h has
+#             been fetched (`make fbink`)
+# A missing group is SKIPPED with a message rather than failing the target:
+# this has to be runnable on a bare CI box, which is the whole point of it
+# being cheap. `make kobo-syntax` above is the guard that does NOT skip.
+#
+# -Wshadow IS ON FOR src/ AND OFF FOR tests/, and that asymmetry is a
+# measurement rather than a compromise: on the tree as of this commit clang
+# reports EIGHTY shadowed locals and every single one of them is in tests/ --
+# the `int i` reused in a nested block that test files are made of. src/ has
+# none. Turning it on for the half that is clean makes it a real guard; turning
+# it on for the half that is not would make `make lint` red on day one and
+# therefore ignored. To see them anyway: make lint LINT_TEST_EXTRA=-Wshadow
+#
+# -Werror IS LOAD-BEARING HERE, and it is the difference between a target and
+# a target that works. Verified by mutant: a shadowed local injected into
+# src/pacing.c was REPORTED by clang and `make lint` still exited 0, because a
+# warning is not an error and `make` only reads the exit code. A lint target
+# nothing gates on is a lint target nobody runs. It is safe to be strict here
+# precisely because this target is not on the path of `make test`, `make
+# host`, `make kobo` or `make dist`: a future clang that adds a warning to
+# -Wall can make `make lint` red without making the project unbuildable.
+LINTCC        ?= clang
+#
+# THE FLAG NAMES WERE CHOSEN BY MUTANT, NOT FROM THE MANUAL, and two of them
+# are not what a reader would guess. `-Wtautological-compare` does NOT catch
+# `unsigned x >= 0` -- that is -Wtautological-unsigned-zero-compare, which no
+# -W group turns on. `-Wunreachable-code` does NOT catch a statement after a
+# `return` -- that is -Wunreachable-code-return, reachable only through
+# -Wunreachable-code-aggressive. Both were verified by injecting exactly those
+# two shapes into src/ and watching this target stay GREEN with the obvious
+# flags, then go red with these.
+LINTFLAGS     ?= -std=c11 -Werror -Wall -Wextra -Wno-unused-parameter \
+                 -Wtautological-compare -Wtautological-unsigned-zero-compare \
+                 -Wtautological-constant-in-range-compare \
+                 -Wunreachable-code-aggressive
+LINT_SRC_EXTRA  ?= -Wshadow
+LINT_TEST_EXTRA ?=
+LINTPORTABLE  := $(filter-out src/probe.c src/platform_%.c,$(wildcard src/*.c))
+
+# ONE SHELL FOR THE WHOLE RECIPE, and it is not style. Make runs each recipe
+# LINE in its own shell, so the `exit 0` that skips a missing clang exited only
+# that line's shell and the next line ran anyway -- caught by running
+# `make lint LINTCC=clang-does-not-exist` and watching it fail with 127 after
+# printing "skipping". A skip has to skip.
+lint:
+	@set -e; \
+	if ! command -v $(LINTCC) >/dev/null 2>&1; then \
+	    echo "lint: no $(LINTCC) on PATH -- skipping (install clang, or set LINTCC)"; \
+	    exit 0; \
+	fi; \
+	echo "lint: portable src/ + tests/"; \
+	$(LINTCC) $(LINTFLAGS) $(LINT_SRC_EXTRA) $(INC) -fsyntax-only $(LINTPORTABLE); \
+	$(LINTCC) $(LINTFLAGS) $(LINT_TEST_EXTRA) $(INC) -fsyntax-only $(wildcard tests/*.c); \
+	if pkg-config --exists sdl2 2>/dev/null; then \
+	    echo "lint: SDL backend"; \
+	    $(LINTCC) $(LINTFLAGS) $(LINT_SRC_EXTRA) $(INC) `pkg-config --cflags sdl2` \
+	        -fsyntax-only src/platform_sdl.c src/main.c; \
+	else echo "lint: no sdl2 via pkg-config -- SDL backend skipped"; fi; \
+	if [ -f $(FBINK_DIR)/fbink.h ]; then \
+	    echo "lint: Kobo backend"; \
+	    $(LINTCC) $(LINTFLAGS) $(LINT_SRC_EXTRA) $(INC) -I$(FBINK_DIR) -DKOBOY_PLATFORM_KOBO \
+	        -fsyntax-only src/platform_kobo.c src/probe.c src/main.c; \
+	else echo "lint: no $(FBINK_DIR)/fbink.h -- Kobo backend skipped (make fbink)"; fi; \
+	echo "lint: clean"
+
+# --------------------------------------------------------------- coverage
+# Per-file line coverage of src/, from running the whole host suite. See the
+# ceiling note on `lint` above -- this links nothing into koboy-arm either.
+#
+# The work is in scripts/coverage.sh rather than here because the interesting
+# part is a MERGE, not a compile: the pattern rule above is whole-program, so
+# every one of the 28 test binaries contains its own copy of every file in
+# $(SRC), and gcov reports 28 separate instances of src/video.c. The suite's
+# real coverage is the union of them. The script's header has the rest,
+# including why src/main.c, src/probe.c and the two backends -- which no test
+# binary links at all -- are compiled unrun so their zero has a denominator.
+coverage:
+	@sh scripts/coverage.sh
+
+.PHONY: build test clean host kobo-syntax lint coverage
 
 SDL_CFLAGS := $(shell pkg-config --cflags sdl2)
 SDL_LIBS   := $(shell pkg-config --libs sdl2)

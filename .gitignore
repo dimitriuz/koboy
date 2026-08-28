@@ -109,3 +109,9 @@ roms/*.md
 # binary on every load. Anchored to the repository root so it cannot shadow
 # third_party/fbneo/ (already ignored above) or a future src/fbneo/.
 /fbneo/
+# gcov artifacts. `make coverage` keeps everything under build/ (already
+# ignored above), but gcov run by hand writes .gcov into the CURRENT
+# directory, which is usually the repo root.
+*.gcov
+*.gcda
+*.gcno
