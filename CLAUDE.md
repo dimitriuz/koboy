@@ -312,7 +312,7 @@ the redrawn faceplate) is done as of this task; the Bluetooth companion plan
 |---|---|
 | `docs/superpowers/specs/2026-08-24-koboy-design.md` | The v1 design, and **four appendices of measured corrections**. The appendices override the body wherever they disagree. |
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
-| `docs/FOLLOWUPS.md` | 83 deferred findings, ordered by what bites first. Start here for the next session's scope. **#40 and #55 are the live ones: TEN of the fourteen systems have never run on hardware at all**; #46 is its twin for the greyscale default, #51 is a device-visible defect found by looking at a rendered frame (every Atari 2600 title is ~1.75x too tall), and #57 is frame pacing, which arcade turns from a rounding error into 77 boards running at the wrong speed. From the newest batch, **#67 is the biggest presentation win in the project** (SNES and PC Engine present at under half the Game Boy's area because the rect is sized from a max their cores never draw) and #68 is why every speed figure for those systems is a model rather than a measurement. #47 and #97 are CLOSED (`--ui-script` gained a `menu` verb; DU has a timing number at last), #98-#100 are what the area-pacing work left open, and #101-#104 are the in-game SCREENSHOT's -- **#101 first: none of that feature has run on a Kobo**. |
+| `docs/FOLLOWUPS.md` | 63 findings that are still open, grouped by subsystem, with a six-item "Start here" at the top. Everything CLOSED and everything whose only content was "not run on hardware" was cut (2026-08-28); the 41 retired numbers are indexed in a table at the bottom, so a `#N` in a source comment still resolves. Numbers are never reused. The live ones: **#23** (`video_submit` is the bottleneck on all fifteen systems and nothing has optimised it), **#84 / #72** (one file segfaults the process, and twelve cores have never been swept for the same), **#92 / #95** (two unexplained SIGSEGVs in the owner's log, on a path a remote session cannot exercise), **#78** (nine systems auto-fit with no measured scale ceiling), **#25** (scroller smearing, improved by 1-bit output and not solved). |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
 | `TESTED.md` | The device matrix. Exactly one device is verified; v2-core's core/SRAM/browser have run on it directly with `--frames`, the takeover/MENU/touch have not. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
@@ -363,10 +363,11 @@ spec's appendices are the record; the short version:
   new value is one of the two MIDDLE levels is a pixel the panel declines to
   touch, which is exactly what "DU4 cannot erase" looked like from the inside.
   `waveform_fast = du` plus `force_dither` (the in-game **MENU → MOTION** row,
-  which cycles the PAIR) is the untried combination; neither half is expected
-  to be worth anything alone. **UNPROVEN ON A PANEL** — see "Known unfinished"
-  and `docs/FOLLOWUPS.md` #25/#96/#97. Do not promote this bullet to a
-  measured one without a play session.
+  which cycles the PAIR) was the untried combination, and it is the one that
+  worked: 1-bit output ships as the default and the owner confirms it fixes
+  the smearing. It is not free — clean two-level transitions cost 153.5 ms a
+  full-rect refresh where four-level DU4 cost 24.1 ms, which is what
+  area-aware pacing now paces to. `docs/FOLLOWUPS.md` #25 and #96.
 - **Refresh cost scales with area**, so dirty rectangles pay for themselves, and
   non-blocking submission beats blocking by ~2.6x. The main loop never waits for
   completion.
@@ -453,7 +454,7 @@ spec's appendices are the record; the short version:
   waveform `1-BIT / AUTO` was already getting, which is why the owner found
   them indistinguishable on the panel. It also prices the 1-bit fix: clean
   two-level transitions cost 153.5 ms where four-level DU4 cost 24.1 ms, a
-  factor of 6.4. `docs/FOLLOWUPS.md` #97 (closed) and #98.
+  factor of 6.4. `docs/FOLLOWUPS.md` #98.
 - **Nothing below koboy applies back-pressure.** The probe submitted a new
   full-rect update every 6-13 ms, without ever blocking, against a 153 ms
   completion. The EPDC driver accepts work it cannot do and says nothing, so
@@ -548,47 +549,45 @@ hiding.
   was a 212-byte macOS `._*.smc` AppleDouble stub, the kind every FAT32 card
   grows. If another core is ever measured to do worse than refuse bad
   content, that is where the row goes.
-- **Every Atari 2600 title renders about 1.75x too tall**, found by rendering
-  frames and looking at them after every numeric check passed. The 2600 is
-  the only non-square-pixel system koboy runs. Not fixed here because the fix
-  is anisotropic fitting in `video.c`'s hot path, which is the one
-  presentation verified on hardware. `docs/FOLLOWUPS.md` #51 has the
-  mechanism.
+- **The Atari 2600 rendered about 1.75x too tall, and only rendering frames
+  and looking at them found it** — every numeric check passed. Fixed: the
+  core's `geometry.aspect_ratio` is carried through the fit. Two corrections
+  the original diagnosis needed, both worth keeping because they are the kind
+  of thing that gets re-derived wrong: the 2600 was **not** the only affected
+  system (eight are, including the NES), and `base_width / delivered width` is
+  the WRONG signal — it gives 2.0 where the truth is 1.75.
+  `docs/FOLLOWUPS.md` #65 has the two structural choices the fix made and
+  nobody has re-examined.
 - **The save path (cartridge SRAM) has now run on hardware, and the
   destructive-truncation bug it was carried to test has been proven fixed.**
   2026-08-26 device session: Zelda (cart type `0x03`, `rambanks: 1`, the
   first battery-backed title this project has run — both prior titles were
   `rambanks: 0`) verified write, read round-trip (md5-identical), and the
   truncated-`.srm` destructive path, which left the file at its truncated
-  size instead of destroying it further. See `docs/FOLLOWUPS.md` #3
-  (closed) for the numbers. **Save *states*** (`state.c`, `safefile.c` — a
-  different mechanism from cartridge SRAM, reached through `MODE_MENU`) are
-  a separate code path and remain untested **on hardware**. They are no
-  longer untested: `--ui-script` can open `MODE_MENU` (the `menu` verb,
-  2026-08-27), and `tests/smoke_host.sh` now writes a state to slot 1 from a
-  script and reads it back. The same two runs would work on the device with
-  Nickel up, exactly as the FRAMES row was verified there. Nobody has done
-  it. See `docs/FOLLOWUPS.md` #76.
-- **The in-game SCREENSHOT has never run on a Kobo.** `MENU -> SCREENSHOT`
-  arms a capture that the next presented frame writes as a PNG into
-  `shot_dir` (`src/shot.c`, `src/png.c`, and the arming branch and capture
-  site in `main.c`). All of it is host-verified end to end --
-  `tests/smoke_host.sh` arms one through `--ui-script` and decodes the result
-  with python3's zlib -- and none of it has been executed on the device. What
-  a trip there would answer: how long a 2 MB composite plus a FAT32 write
-  takes on the ARM (it happens on the main loop), and whether the
-  confirmation plaque's erase leaves residue where the text was. See
-  `docs/FOLLOWUPS.md` #101-#104.
-- **The 1-bit motion pair has never been seen on a panel.** `force_dither`
-  now runs end to end (it never had — `docs/FOLLOWUPS.md` #4), `waveform_fast
-  = du` is new, and **MENU → MOTION** cycles the pair `4 GREYS / AUTO` →
-  `1-BIT / AUTO` → `1-BIT / DU`. Everything asserted about it is host-side:
-  the buffer holds exactly 0x00 and 0xFF, both halves reach the live pipeline
-  and the live backend, both ini keys persist. **No measurement koboy can
-  take can see ghosting** — residue is panel-side and the dirty diff only
-  compares koboy's own buffers — so the visual claim is entirely the owner's,
-  on the device. #96 and #97 (DU has no timing number on any panel) are the
-  open ends.
+  size instead of destroying it further. `TESTED.md` has the numbers.
+  **Save *states*** (`state.c`, `safefile.c` — a different mechanism from
+  cartridge SRAM, reached through `MODE_MENU`) are driven end to end on the
+  host by `tests/smoke_host.sh` (write to slot 1, read back in a second run)
+  and have since been exercised by hand on the device by the owner.
+- **A screenshot costs one frame about 6 ms, measured on the device, so it
+  stays on the main loop.** `MENU -> SCREENSHOT` arms a capture that the next
+  presented frame writes as a PNG into `shot_dir` (`src/shot.c`, `src/png.c`,
+  and the arming branch and capture site in `main.c`); the PNG decodes at
+  1264x1680 after transfer, so the hand-rolled stored-DEFLATE writer works
+  there too. What is still unknown is the confirmation plaque: whether its
+  FULL-refresh erase leaves residue where the text was is a judgement no
+  instrument in this project can make. `docs/FOLLOWUPS.md` #101-#104.
+- **The 1-bit motion pair has been seen on a panel and shipped.**
+  `force_dither` is the default, **MENU → MOTION** cycles `4 GREYS / AUTO` →
+  `1-BIT / AUTO` → `1-BIT / DU`, and the owner confirms it fixes the smearing.
+  Two things that stayed open: the third rung selects nothing the second did
+  not already get (AUTO measures identical to DU on 1-bit content —
+  `docs/FOLLOWUPS.md` #98), and the other lever the investigation identified
+  — putting a flat background on an extreme level — has no shipped greyscale
+  mapping that does it without taking the foreground with it (#96). **No
+  measurement koboy can take can see ghosting**: residue is panel-side and the
+  dirty diff only compares koboy's own buffers, which is why this defect
+  outlived two attempts and why the verdict had to be the owner's.
 - **One verified device, and v2-core's UI layer has run on it only partially.**
   The 2026-08-26 session ran the `koboy` binary directly with `--frames` over
   ssh — never through `scripts/koboy.sh`, so Nickel was never stopped and the
@@ -611,10 +610,10 @@ hiding.
   `tests/test_input_touch.c` (search `#1`) now asserts the actual distinction
   (a tap anywhere in the pad steers under CROSS; the same tap reports no
   direction under RELATIVE until the origin is set), not just that both modes
-  compile. `MODE_MENU`'s coverage gap is closed for the settings rows
-  (`docs/FOLLOWUPS.md` #47) and still open for SAVE/LOAD/CHOOSE ROM/QUIT,
-  which the same hook reaches and nothing drives (#76). Four smaller
-  chrome/video findings from that plan are also still open.
+  compile. `MODE_MENU`'s coverage gap is closed for GREYSCALE, FRAMES, SAVE
+  STATE and LOAD STATE, which `tests/smoke_host.sh` now drives through
+  `--ui-script`'s `menu` verb, and **still open for CHOOSE ROM and QUIT** —
+  the same hook reaches both and nothing uses it (`docs/FOLLOWUPS.md` #18).
 
 ## Conventions
 
