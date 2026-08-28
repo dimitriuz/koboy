@@ -198,7 +198,7 @@ static void usage(const char *argv0)
 {
     fprintf(stderr,
         "usage: %s [options]\n"
-        "  --rom PATH        Game Boy ROM to load\n"
+        "  --rom PATH        ROM to load; the core is picked from its extension\n"
         "  --core PATH       libretro core shared object\n"
         "  --config PATH     ini file (default %s)\n"
         "  --save-dir PATH   directory for .srm saves\n"
@@ -731,7 +731,7 @@ int main(int argc, char **argv)
                    there. */
                 const char *why = (br == BROWSE_ERR_DIR)
                     ? "cannot read rom directory\n%s"
-                    : "no .gb, .gbc or .mgw files in\n%s";
+                    : "no games in\n%s";
                 if (any_game_ran) {
                     notify(why, cfg.rom_dir);
                     continue;                     /* back to the MAIN MENU */

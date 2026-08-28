@@ -112,7 +112,17 @@ server** — a real single point of failure nobody should discover the hard way.
    code before trusting a snapshot — many captures under `releases.linaro.org`
    are archived *redirects*, not the file:
    ```sh
-   curl -s 'http://web.archive.org/cdx/search/cdx?url=releases.linaro.org/14.09/components/toolchain/binaries/*&output=json' | grep -i 'gnueabihf.*tar.xz'
+   ```sh
+# Mirrored on this repo, so a build does not depend on the Internet Archive:
+curl -L -o gcc-linaro-4.9-2014.09.tar.xz \
+  https://github.com/dimitriuz/koboy/releases/download/toolchain-linaro-4.9-2014.09/gcc-linaro-4.9-2014.09.tar.xz
+echo "0cffac0caea0eb3c8bdddfa14be011ce366680f40aeddbefc7cf23cb6d4f1891  gcc-linaro-4.9-2014.09.tar.xz" | sha256sum -c -
+```
+
+If that mirror is ever gone, the original is only reachable through a Wayback
+capture of Linaro's decommissioned server:
+
+curl -s 'http://web.archive.org/cdx/search/cdx?url=releases.linaro.org/14.09/components/toolchain/binaries/*&output=json' | grep -i 'gnueabihf.*tar.xz'
    ```
    A `statuscode` of `200` on a non-redirect capture is what you want.
 2. **Look for a mirror.** Linaro's 14.09 release was widely rehosted by

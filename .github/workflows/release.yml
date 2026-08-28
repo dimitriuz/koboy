@@ -66,7 +66,15 @@ env:
   # BUILD.md says what to do if it dies, and the cache key below is the hash
   # of this string, so changing it invalidates the cache exactly when it
   # should.
-  TOOLCHAIN_URL: "http://web.archive.org/web/20150803153714id_/http://releases.linaro.org/14.09/components/toolchain/binaries/gcc-linaro-arm-linux-gnueabihf-4.9-2014.09_linux.tar.xz"
+  # MIRRORED ON THIS REPO, because the only other copy is a Wayback capture
+  # of a server Linaro decommissioned, and a release that cannot be rebuilt
+  # when the Internet Archive has an outage is not much of a release. The
+  # fallback below is that capture, kept for the day somebody deletes the
+  # mirror. sha256 is checked after download: a mirror that silently serves
+  # something else is worse than one that is missing.
+  TOOLCHAIN_URL: "https://github.com/dimitriuz/koboy/releases/download/toolchain-linaro-4.9-2014.09/gcc-linaro-4.9-2014.09.tar.xz"
+  TOOLCHAIN_FALLBACK_URL: "http://web.archive.org/web/20150803153714id_/http://releases.linaro.org/14.09/components/toolchain/binaries/gcc-linaro-arm-linux-gnueabihf-4.9-2014.09_linux.tar.xz"
+  TOOLCHAIN_SHA256: "0cffac0caea0eb3c8bdddfa14be011ce366680f40aeddbefc7cf23cb6d4f1891"
 
 jobs:
   # ---------------------------------------------------------------- gate
@@ -121,11 +129,25 @@ jobs:
         run: |
           # --retry, because the Internet Archive is not a CDN and a single
           # transient failure here fails the whole release.
+          # Mirror first, Wayback second. The fallback is not decoration: the
+          # mirror is a release asset on this repo and a repo can be renamed,
+          # made private, or have its releases pruned by somebody who does not
+          # know what this one is for.
           curl -fL --retry 5 --retry-delay 10 --retry-all-errors \
-               -o toolchain.tar.xz "$TOOLCHAIN_URL"
+               -o toolchain.tar.xz "$TOOLCHAIN_URL" || {
+            echo "mirror failed, falling back to the Internet Archive"
+            curl -fL --retry 5 --retry-delay 10 --retry-all-errors \
+                 -o toolchain.tar.xz "$TOOLCHAIN_FALLBACK_URL"
+          }
           # A redirect page or an error document would be small and would
           # extract to nothing useful. Fail on the size before anything
           # downstream tries to compile with it.
+          # Checked BEFORE the size test: a mirror that serves the wrong file
+          # is the failure a mirror introduces, and it can be the right size.
+          echo "$TOOLCHAIN_SHA256  toolchain.tar.xz" | sha256sum -c - || {
+            echo "toolchain sha256 mismatch -- refusing to build with it"
+            exit 1
+          }
           sz=$(wc -c < toolchain.tar.xz)
           [ "$sz" -gt 50000000 ] || {
             echo "FAIL: toolchain download is $sz bytes -- that is not the tarball."
