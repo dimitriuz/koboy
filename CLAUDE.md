@@ -572,6 +572,29 @@ skips calibration — **every automated test took the one path that could not
 reach the bug.** When a code path exists only for scripted runs, ask what it is
 hiding.
 
+**The instrument needs a mutant too, and both of ours did.** `make lint` was
+written, ran clean, and was WRONG: clang reported an injected shadowed local
+and `make` still exited 0, because a warning is not an error — `-Werror` is
+what makes that target a gate rather than a printer. Two of its four
+diagnostic flags are also not the ones the names suggest, and only a mutant
+says so: `-Wtautological-compare` does not catch `unsigned x >= 0` and
+`-Wunreachable-code` does not catch a statement after `return`. `make
+coverage` was checked the same way — neutering every `pacer_settle_us` call in
+`tests/test_pacing.c` dropped `src/pacing.c` from 48/48 to 40/48, exactly the
+eight lines of that function and nothing else.
+
+**And `gcov` cannot see inside a test in this project.** `tests/test.h`'s
+`TEST_MAIN(...)` takes the entire test body as one macro argument, so gcc
+attributes all of it to the expansion point: ten instrumented lines for a
+663-line file. So the mechanical hunt for a check that cannot fail does NOT
+exist here yet — `make coverage` measures `src/` honestly and says nothing
+about `tests/`. Finding a vacuous assertion is still a human reading code, and
+the shapes to read for are: **an assertion gated on the behaviour under test**
+(`if (a2 == UI_SELECT) CHECK(...)`), **a counter asserted against its own
+initialiser** with a `continue` above it, and **a comparison of two things the
+test itself wrote down**. All three were live in this tree as of 2026-08-28.
+The fix for the tooling is `docs/FOLLOWUPS.md` #105.
+
 ## Known unfinished
 
 - **ALL FIFTEEN SYSTEMS HAVE NOW RUN ON A KOBO.** This entry used to read
