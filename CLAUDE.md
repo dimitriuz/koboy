@@ -588,18 +588,16 @@ hiding.
   measurement koboy can take can see ghosting**: residue is panel-side and the
   dirty diff only compares koboy's own buffers, which is why this defect
   outlived two attempts and why the verdict had to be the owner's.
-- **One verified device, and v2-core's UI layer has run on it only partially.**
-  The 2026-08-26 session ran the `koboy` binary directly with `--frames` over
-  ssh — never through `scripts/koboy.sh`, so Nickel was never stopped and the
-  takeover, touch d-pad, in-game MENU, and the ROM browser's real touch input
-  were **not** exercised. The ROM browser itself did run, driven by
-  `--ui-script` against a real directory listing, and device identification
-  (panel size, stride, waveform) was correct. Still needed: a NickelMenu
-  playtest with real touch input, exercising the takeover and `MODE_MENU`.
-  A 2026-08-27 session added the first scripted `MODE_MENU` run on the panel
-  (MENU -> FRAMES cycling `present_divisor` and persisting it), which covers
-  the handlers but NOT the takeover and not real touch — the script feeds
-  panel coordinates straight past the touch transform. See `TESTED.md`.
+- **One verified device, and everything measured on it is measured on that
+  one.** The owner has since played on it by hand — the cores, the controls,
+  the in-game MENU, cartridge saves and save states — so the long-running
+  "nobody has run this on hardware" gap is closed. What that does NOT create
+  is a regression test: a thing verified once by a hand on a panel is still
+  driven by nothing in `make test`, and `docs/FOLLOWUPS.md`'s "Coverage gaps"
+  section is where those live. Nearly every automated device run in `TESTED.md`
+  is still `--frames` over ssh with Nickel up, which is why #95 matters: the
+  takeover and input path is a surface a remote session cannot exercise at
+  all.
 - `refresh_fixed_tiles` ships at a starting guess (40), still not a validated
   value: an on-device sweep (20/40/80/split-off) found 20/40/80
   behaviourally identical on real content, which the measurement method
