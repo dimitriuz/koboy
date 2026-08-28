@@ -12,15 +12,12 @@
  * version. It is distributed WITHOUT ANY WARRANTY; see the LICENSE file at
  * the root of this repository, or <https://www.gnu.org/licenses/>.
  *
- * THIS NOTICE IS IN THIS FILE ONLY, and that is deliberate rather than an
- * unfinished job: no source file in this project carries a per-file header,
- * so adding thirty of them would bury a year of real history in `git blame`
- * for no legal gain that LICENSE and README.md do not already supply. The
- * entry point is the customary place for the one that does exist.
- * LICENSES.md covers the fourteen emulator cores, which are NOT under this
- * licence and are not linked into this binary -- they are separate shared
- * objects, dlopen'd at runtime, each with its own terms, and three of them
- * restrict commercial use.
+ * THIS NOTICE IS IN THIS FILE ONLY, deliberately: no source file here carries
+ * a per-file header, and adding thirty would bury a year of `git blame` for no
+ * legal gain LICENSE and README.md do not already supply. LICENSES.md covers
+ * the emulator cores, which are NOT under this licence and are not linked into
+ * this binary -- separate shared objects, dlopen'd at runtime, each with its
+ * own terms, three restricting commercial use.
  */
 #define _DEFAULT_SOURCE
 #define _POSIX_C_SOURCE 200809L
@@ -56,10 +53,9 @@
 #include <sys/stat.h>      /* stat(), for the too-short-to-be-a-cartridge floor */
 #include <unistd.h>
 
-/* Provided by the backend translation unit. Exactly one is linked in: the
-   desktop build takes platform_sdl.c, the device build platform_kobo.c and
-   -DKOBOY_PLATFORM_KOBO. Everything between here and the end of main() is the
-   same code either way; these few lines are the whole of the difference. */
+/* Provided by the backend translation unit; exactly one is linked in
+   (platform_sdl.c on the desktop, platform_kobo.c + -DKOBOY_PLATFORM_KOBO on
+   the device). These few lines are the whole of the difference. */
 extern bool platform_poll_raw_key(koboy_platform *pf, uint16_t *code);
 
 #ifdef KOBOY_PLATFORM_KOBO
@@ -71,9 +67,9 @@ extern void            platform_sdl_set_panel(koboy_platform *pf, int w, int h);
 
 #define DEFAULT_INI "config/koboy.ini"
 
-/* koboy_stop itself is DEFINED IN screens.c, and screens.h says why: the
-   screen loops poll it, and that file has to link into 28 test binaries that
-   contain no main.c. This handler is still its only writer. */
+/* koboy_stop is DEFINED IN screens.c (screens.h says why: the screen loops
+   poll it, and that file links into test binaries with no main.c). This
+   handler is still its only writer. */
 static void on_signal(int sig) { (void)sig; koboy_stop = 1; }
 
 /* set by the frame callback each time the core emits a frame */
@@ -83,45 +79,38 @@ static void on_frame(void *ud, const void *d, unsigned w, unsigned h, size_t pit
 
 static uint16_t on_input(void *ud) { return input_state((koboy_input *)ud)->buttons; }
 
-/* Named in the log because "why are the controls gone?" is otherwise
-   unanswerable on a device with no terminal: the layout is chosen from the
-   ROM's extension, so a mis-named file is a plausible cause of a faceplate
-   nobody expected. */
-/* The pixel aspect of the frames THIS core is currently rendering, from the
-   display aspect it reported and the base geometry it reported alongside it.
-   KOBOY_ASPECT_ONE for a square-pixel core, which is what makes every rect and
-   every fit below identical to what they were before non-square pixels
-   existed. Base and not max: see config_resolve_profile_par in config.h. */
 /* The core's DISPLAY aspect as the pipeline should treat it: what the core
-   reported, or "absent" when the owner has turned the correction off. Every
-   reader of the core's aspect goes through this or through core_par below --
-   video_set_aspect included, which is a second path into the same decision
-   and would otherwise leave video scaling corrected while the rect was not. */
+   reported, or "absent" when the owner turned the correction off. Every reader
+   of the core's aspect goes through this or core_par -- video_set_aspect
+   included, which is a second path into the same decision and would otherwise
+   leave video scaling corrected while the rect was not. */
 static uint32_t core_aspect(const koboy_config *cfg, const koboy_core *c)
 {
     return cfg->pixel_aspect ? core_display_aspect(c) : 0u;
 }
 
+/* The pixel aspect of the frames this core is rendering NOW, from its reported
+   display aspect and BASE geometry (not max -- see config_resolve_profile_par).
+   KOBOY_ASPECT_ONE for a square-pixel core, which is what makes every rect and
+   fit identical to what they were before non-square pixels existed. */
 static uint32_t core_par(const koboy_config *cfg, const koboy_core *c,
                          int base_w, int base_h)
 {
-    /* The one place the pixel_aspect key is read, so turning it off cannot
-       leave half the pipeline corrected and half not: every rect and every
-       fit downstream derives from this value, and KOBOY_ASPECT_ONE is
-       exactly what they all saw before non-square pixels existed. */
     return video_pixel_aspect(core_aspect(cfg, c), base_w, base_h);
 }
 
+/* Named in the log because "why are the controls gone?" is otherwise
+   unanswerable on a device with no terminal: the layout comes from the ROM's
+   extension, so a mis-named file is a plausible cause. */
 static const char *layout_name(int mode)
 {
     return mode == KOBOY_LAYOUT_LCD ? "LCD" : "DMG";
 }
 
-/* The other half of the input surface, for a core that reads a pointer rather
-   than (only) buttons -- see core_set_pointer_fn. input.c fills this in
-   whenever the LCD layout is live and leaves pressed false otherwise, so
-   installing it unconditionally costs a Game Boy session three stores per
-   frame and changes nothing it sees. */
+/* The other half of the input surface, for a core that reads a pointer -- see
+   core_set_pointer_fn. input.c fills it in whenever the LCD layout is live and
+   leaves pressed false otherwise, so installing it unconditionally costs a
+   Game Boy session three stores per frame. */
 static void on_pointer(void *ud, int16_t *x, int16_t *y, bool *pressed)
 {
     const koboy_input_state *st = input_state((koboy_input *)ud);
@@ -138,19 +127,15 @@ static void say(const char *fmt, ...)
     va_end(ap);
 }
 
-/* Every message the user must SEE goes through here. On the desktop that is
-   just stderr; on the device there is no terminal, so an error that only
-   reaches stderr is indistinguishable from a crash -- the panel keeps whatever
-   was on it and the user power-cycles. The Kobo backend draws the message on
-   the panel and waits for an acknowledgement (bounded: 20s, so an unattended
-   run cannot hang here).
+/* Every message the user must SEE goes through here. On the device there is
+   no terminal, so an error reaching only stderr is indistinguishable from a
+   crash; the Kobo backend draws it on the panel and waits for an
+   acknowledgement (bounded at 20 s, so an unattended run cannot hang).
 
-   Nothing in here ends the process, and nothing ever did -- the CALLERS did.
-   Two of them already did not, and the split below says which is which by
-   name: notify() for a condition the session survives, fatal() for one it
-   does not. The names are the whole point. "fatal" sitting above a return to
-   the ROM browser reads as a bug for as long as it takes to check, and a
-   failed ROM load is now the most common thing this function prints. */
+   NOTHING HERE ENDS THE PROCESS -- the CALLERS do. The split below says which
+   by name: notify() for a condition the session survives, fatal() for one it
+   does not. The names are the point: "fatal" above a return to the ROM browser
+   reads as a bug until someone checks. */
 static koboy_platform *g_pf;
 static void message_v(const char *fmt, va_list ap)
 {
@@ -180,22 +165,15 @@ static void fatal(const char *fmt, ...)
     va_end(ap);
 }
 
-/* One place for "that game did not start", because there are three sites --
-   the core would not open, the ROM would not load, and the same pair again
-   mid-session -- and they must all reach the same two decisions.
+/* One place for "that game did not start" -- three sites reach the same two
+   decisions. Returns true if the caller should go BACK TO THE MAIN MENU, false
+   if it must end the run; `recoverable` is the caller's used_startup_ui, and a
+   run given its ROM on the command line has no list behind it.
 
-   Returns true if the caller should go BACK TO THE MAIN MENU, false if it
-   must end the run. The difference is whether there is anywhere to go back
-   to: `recoverable` is the caller's used_startup_ui / mid-session state, and
-   a run given its ROM on the command line has no list behind it.
-
-   The message names the game FIRST, on its own line, and the technical
-   reason after it. `err` already contains the full path (core.c writes it
-   into every one of its messages), so the panel repeats the name -- that is
-   deliberate: fbink wraps at the column edge rather than at word boundaries
-   and at fontmult 3 a full path is several unreadable lines, while the head
-   of the message has to be legible at a glance to be worth drawing at all.
-   The log line, which has room, keeps the path. */
+   The message names the game FIRST on its own line, then the reason. `err`
+   already contains the full path, so the panel deliberately repeats the name:
+   fbink wraps at the column edge, not at word boundaries, so at fontmult 3 a
+   full path is several unreadable lines. The log line keeps the path. */
 static bool load_failed_recoverable(bool recoverable, const char *rom_path,
                                     const char *err)
 {
@@ -205,12 +183,11 @@ static bool load_failed_recoverable(bool recoverable, const char *rom_path,
     }
     char name[KOBOY_RECENT_DISPLAY];
     recent_name_from_path(name, sizeof name, rom_path);
-    /* Explicit precisions, not snprintf's own bound: `name` and `err` can
-       each fill the 512-byte message buffer on their own, and left to
-       snprintf the FIRST one to overflow would silently eat the other. The
-       two numbers are a panel budget, not a guess -- at fontmult 3 the Libra
-       2's 1264px width takes about 20 characters, so 60 is three lines of
-       filename and 300 is the reason under it. */
+    /* Explicit precisions, not snprintf's own bound: `name` and `err` can each
+       fill the 512-byte buffer alone, and the first to overflow would silently
+       eat the other. The numbers are a panel budget -- at fontmult 3 the Libra
+       2's 1264 px takes ~20 characters, so 60 is three lines of filename and
+       300 is the reason under it. */
     notify("COULD NOT LOAD\n%.60s\n\n%.300s", name, err);
     return true;
 }
@@ -239,14 +216,12 @@ static void usage(const char *argv0)
         argv0, DEFAULT_INI);
 }
 
-/* MODE_BROWSE is gone: the startup file browser is now reached only via
-   MODE_MAIN -> ALL GAMES (screen_browser, in screens.c), not a mode of its
-   own -- see task 5's MAIN MENU. */
+/* No MODE_BROWSE: the startup file browser is reached only via MODE_MAIN ->
+   ALL GAMES (screen_browser, screens.c). */
 typedef enum { MODE_MAIN, MODE_PLAY, MODE_MENU, MODE_QUIT } koboy_mode;
 
-/* One definition of "put the faceplate back", replacing three hand-copied
-   blocks (post-calibration, post-fatal, post-SRAM-warning) and now used by
-   every exit from a UI mode as well. */
+/* One definition of "put the faceplate back", used by every exit from a UI
+   mode and by the post-calibration/fatal/SRAM-warning paths. */
 static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
                           int pw, int ph, const koboy_profile *prof,
                           const koboy_layout *layout)
@@ -262,39 +237,32 @@ static void redraw_chrome(koboy_platform *pf, uint8_t *panel, int stride,
 
 /* --------------------------------------------------------- SCREENSHOT note
  *
- * The owner is looking at the panel, not at koboy.log, so a capture has to
- * confirm itself where he is looking. Two constraints shape how:
+ * A capture has to confirm itself on the panel, under two constraints:
  *
- *  - IT MUST NOT PAINT OVER THE FRAME BEING SAVED. The file is written
- *    first, from the composited frame, and only then is anything drawn --
- *    so what lands on disk is the game exactly as it was, never a game with
- *    a notification on it.
- *  - IT MUST NOT COST A FULL-PANEL FLASH. notify() repaints everything and
- *    is right for an error you have stopped playing to read; mid-game it
- *    would be a worse interruption than the thing it is reporting. This
- *    paints a small plaque in the background band BETWEEN the game rect and
- *    the drawn controls, refreshes that rectangle alone, and takes it away
- *    a couple of seconds later.
+ *  - IT MUST NOT PAINT OVER THE FRAME BEING SAVED. The file is written first,
+ *    from the composited frame; only then is anything drawn.
+ *  - IT MUST NOT COST A FULL-PANEL FLASH. notify() repaints everything, which
+ *    mid-game is a worse interruption than what it reports. This paints a
+ *    small plaque in the band BETWEEN the game rect and the controls,
+ *    refreshes that rectangle alone, and takes it away seconds later.
  *
- * A WHITE PLAQUE WITH BLACK TEXT rather than text drawn onto whatever chrome
- * put there: the band is not uniform on every layout (the DMG faceplate has
- * a case shade, a wordmark and a bezel edge through parts of it), and text
- * over an unknown background is text that might not be readable. The plaque
- * is legible on any of them. Erasing is exact for the same reason it is
- * cheap: chrome is re-rendered into the panel buffer and only the plaque's
- * rectangle is blitted back, so whatever was underneath returns byte for
- * byte without anyone here having to know what it was. */
+ * A WHITE PLAQUE WITH BLACK TEXT rather than text on whatever chrome put
+ * there: the band is not uniform across layouts (the DMG faceplate has a case
+ * shade, a wordmark and a bezel edge through parts of it). Erasing is exact
+ * and cheap for the same reason: chrome is re-rendered into the panel buffer
+ * and only the plaque's rectangle is blitted back, so what was underneath
+ * returns byte for byte without this code knowing what it was. */
 #define SHOT_NOTE_PX  3          /* 5x7 font scale: 21px glyphs, as the menus */
 #define SHOT_NOTE_PAD 12
 #define SHOT_NOTE_MS  2500
 
 /* Where the plaque goes, or false when there is nowhere for it. The band
-   between the bottom of the game rect and the top of the controls is the one
-   part of the panel that is neither the picture nor a touch target -- but its
-   height is a consequence of the fitted game rect, not a reservation, so on
-   some layouts (the Game & Watch strip, or a small panel with a tall game) it
-   is too short. False there, and the capture is reported to the log only:
-   a plaque over the controls, or over the game, would be worse than none. */
+   between the game rect and the controls is the one part of the panel that is
+   neither picture nor touch target, but its height is a consequence of the
+   fitted rect rather than a reservation, so on some layouts (the Game & Watch
+   strip, a small panel with a tall game) it is too short. Then the log line is
+   the only report: a plaque over the controls or the game is worse than
+   none. */
 static bool shot_note_rect(const koboy_profile *prof, const koboy_layout *layout,
                            int pw, int ph, const char *msg, koboy_rect *out)
 {
@@ -307,9 +275,9 @@ static bool shot_note_rect(const koboy_profile *prof, const koboy_layout *layout
     out->w = w;
     out->h = h;
     out->y = top + (bot - top - h) / 2;
-    /* Centred on the GAME rect, not on the panel: on a layout whose rect is
-       off-centre the plaque belongs under the picture it is about. Clamped,
-       because a rect near an edge could otherwise put it off the panel. */
+    /* Centred on the GAME rect, not the panel: the plaque belongs under the
+       picture it is about. LIVE CLAMP -- a rect near an edge would otherwise
+       put it off the panel. */
     out->x = prof->game_x + (prof->game_w - w) / 2;
     if (out->x < 0) out->x = 0;
     if (out->x + w > pw) out->x = pw - w;
@@ -317,16 +285,14 @@ static bool shot_note_rect(const koboy_profile *prof, const koboy_layout *layout
 }
 
 /* Everything that must happen when a ROM becomes the current game, in the one
-   order that is safe.
-
-   Three hazards live here, all of them silent if got wrong:
-     - core_sram() is re-fetched every time. The pointer belongs to the core's
-       freshly loaded cartridge; caching it across unload/load is a
+   safe order. Three hazards, all silent if got wrong:
+     - core_sram() is re-fetched every time: the pointer belongs to the core's
+       freshly loaded cartridge, so caching it across unload/load is a
        use-after-free waiting for a second game.
-     - The OUTGOING game's SRAM is flushed by the caller BEFORE unload, never
-       after: retro_unload_game takes the buffer, and its last minutes with it.
+     - The OUTGOING game's SRAM is flushed by the caller BEFORE unload:
+       retro_unload_game takes the buffer and its last minutes with it.
      - sram_writeback stays false for the session when a save file exists but
-       could not be read whole, so nothing is written back over it. */
+       could not be read whole. */
 typedef struct {
     char     path[512];        /* .srm path for the current rom */
     uint8_t *mem;
@@ -337,34 +303,26 @@ typedef struct {
 static bool load_rom_into(koboy_core *core, koboy_config *cfg,
                           koboy_sram_binding *sb, char *err, size_t errlen)
 {
-    /* LIVE GUARD, and the only one in this project that exists to stop a
-       CRASH rather than a wrong picture: snes9x2005 raises SIGFPE inside
-       retro_load_game for a .sfc/.smc under 8192 bytes, which kills koboy
-       outright -- no error screen, no way back to the browser, on a device
-       whose whole point is that it recovers. config_min_rom_bytes carries
-       the measurement and the reason the floor is per-system; here it is
-       enough to know that a file below it must never reach c->load_game.
+    /* LIVE GUARD, the only one here that stops a CRASH rather than a wrong
+       picture: snes9x2005 raises SIGFPE inside retro_load_game for a .sfc/.smc
+       under 8192 bytes, killing koboy outright -- no error screen, no way back
+       to the browser. config_min_rom_bytes has the measurement and why the
+       floor is per-system.
 
-       Checked HERE rather than in core.c because core.c must not know what
-       it is loading, and here rather than in romlist.c because the browser
-       lists names without stat()ing them -- this is the one place that has
-       both the path and a reason to touch the filesystem. Reported as an
-       ordinary load failure, so the browser shows it the same way it shows
-       a core's own refusal. */
+       HERE and not core.c (which must not know what it is loading) or
+       romlist.c (which lists names without stat()ing them): this is the one
+       place with both the path and a reason to touch the filesystem. Reported
+       as an ordinary load failure. */
     size_t floor_bytes = config_min_rom_bytes(cfg->rom_path);
     if (floor_bytes) {
         struct stat st;
         if (stat(cfg->rom_path, &st) == 0 && st.st_size >= 0 &&
             (size_t)st.st_size < floor_bytes) {
-            /* The REASON is formatted before the path, deliberately: err is a
-               fixed buffer and rom_path can fill it on its own, so putting
-               the path last means a long name truncates the name rather than
-               the explanation. A message that says only "rom
-               /very/long/pa..." helps nobody. The %.200s precision clips the
-               path explicitly rather than letting snprintf do it silently --
-               same result, but it is the thing that keeps this line free of
-               a -Wformat-truncation warning, and a warning nobody can fix is
-               a warning everybody learns to ignore. */
+            /* REASON BEFORE PATH: err is a fixed buffer and rom_path can fill
+               it alone, so putting the path last truncates the name rather
+               than the explanation. The explicit %.200s (rather than letting
+               snprintf clip silently) is what keeps this line free of a
+               -Wformat-truncation warning. */
             if (err && errlen)
                 snprintf(err, errlen,
                          "too short to be a cartridge: %lld bytes, minimum "
@@ -431,9 +389,8 @@ int main(int argc, char **argv)
         } else { fprintf(stderr, "koboy: unknown option %s\n", a); usage(argv[0]); return 2; }
     }
 
-    /* Applied after both the ini and the command line, so a bare name from
-       either source is treated the same. A slashless core name is otherwise
-       unloadable on the device: dlopen never searches the cwd. */
+    /* After both the ini and the command line, so a bare name from either is
+       treated the same. dlopen never searches the cwd. */
     config_resolve_paths(&cfg);
 
     /* ------------------------------------------------ platform and profile */
@@ -448,15 +405,13 @@ int main(int argc, char **argv)
     if (panel_w > 0 && panel_h > 0) platform_sdl_set_panel(pf, panel_w, panel_h);
 #endif
 
-    /* Only now can fatal() draw: before init there is no framebuffer to draw
-       on, so anything above this point can do no better than stderr. */
+    /* Only now can fatal() draw: before init there is no framebuffer. */
     if (!pf->init(pf->ctx, &cfg)) { fprintf(stderr, "koboy: platform init failed\n"); return 1; }
     g_pf = pf;
 
-    /* Installed here, not beside the emulator loop: the calibration wait below
-       tests koboy_stop, and a handler installed after it would leave that test dead
-       and let a signal during a first-run calibration terminate outright. This
-       is also after platform init on purpose, so it overrides any handler the
+    /* Here, not beside the emulator loop: the calibration wait below tests
+       koboy_stop, and a handler installed after it would leave that test dead.
+       After platform init on purpose, so it overrides any handler the
        backend's own library installed. */
     signal(SIGTERM, on_signal);
     signal(SIGINT,  on_signal);
@@ -464,8 +419,8 @@ int main(int argc, char **argv)
     int pw = 0, ph = 0;
     pf->screen_info(pf->ctx, &pw, &ph);
 
-    /* Printed before anything else can fail, so the smoke test still gets its
-       facts out of a run that then dies on a missing core or ROM. */
+    /* Before anything else can fail, so the smoke test still gets its facts
+       out of a run that then dies on a missing core or ROM. */
     if (selftest) {
 #ifdef KOBOY_PLATFORM_KOBO
         platform_kobo_selftest(pf);
@@ -476,11 +431,10 @@ int main(int argc, char **argv)
 #endif
     }
 
-    /* --message exists for the launcher script, which has a message for the user
-       ("this needs a reboot") and no terminal to put it in. It reuses fatal()
-       rather than shelling out to the device's own fbink, so there is exactly
-       one on-panel error presentation and it looks the same wherever the error
-       came from. Always non-zero: it is only ever used to report a failure. */
+    /* --message is for the launcher script, which has something to tell the
+       user and no terminal to put it in. It reuses fatal() rather than the
+       device's own fbink so there is exactly one on-panel error presentation.
+       Always non-zero: it only ever reports a failure. */
     if (message) {
         fatal("%s", message);
         pf->shutdown(pf->ctx);
@@ -501,15 +455,12 @@ int main(int argc, char **argv)
             pf->shutdown(pf->ctx);
             return 2;
         }
-        /* uiscript.h's own contract: "an error must fail the run rather than
-           silently pass a test that exercised nothing". An empty or
-           comment-only script is not a read error -- uiscript_load returns 0,
-           not -1 -- but treating it as "no script" here would fall back to
-           screen_list's live-polling branch, and a --ui-script was explicitly
-           requested precisely because nobody is at the panel to poll. That
-           run then blocks forever instead of failing, which is a worse
-           silence than a bad read: this is exactly the unattended-run blind
-           spot uiscript.h exists to close. */
+        /* uiscript.h's contract: an error must FAIL the run rather than
+           silently pass a test that exercised nothing. An empty or
+           comment-only script is not a read error (uiscript_load returns 0,
+           not -1), but treating it as "no script" falls back to screen_list's
+           live-polling branch -- and nobody is at the panel to poll, so the
+           run blocks forever instead of failing. */
         if (ui_script_n == 0) {
             fatal("ui script %s is empty (no verbs)", ui_script_path);
             pf->shutdown(pf->ctx);
@@ -517,41 +468,29 @@ int main(int argc, char **argv)
         }
     }
 
-    /* An explicit --rom or rom= goes straight to play, which keeps every
-       existing smoke test, --frames run and scripted path behaving exactly as
-       it did in v1 -- this is task 5's "the --rom fast path must still bypass
-       everything" requirement. The shipped ini leaves rom commented out, so a
-       real user starts on the MAIN MENU, not the file browser: landing
-       someone in a 300-entry list as the very first screen is the wrong
-       default now that RECENT exists. */
+    /* An explicit --rom or rom= goes straight to play, keeping every smoke
+       test, --frames run and scripted path behaving as it did in v1. The
+       shipped ini leaves rom commented out, so a real user starts on the MAIN
+       MENU: a 300-entry list is the wrong first screen now RECENT exists. */
     koboy_mode mode = cfg.rom_path[0] ? MODE_PLAY : MODE_MAIN;
 
-    /* Genuinely unused past this point. It was carried here as groundwork for
-       MODE_MENU's CHOOSE ROM entry, on the theory that a ROM picked from
-       --rom (rather than the browser or the ini) might want its containing
-       directory offered as the CHOOSE ROM listing. That would mean silently
-       overriding cfg.rom_dir whenever it still held the compiled-in default,
-       which is a real feature with its own failure modes (what if rom_dir was
-       explicitly set to the same value on purpose?) and no request for it
-       exists -- so it is left alone rather than guessed at. `mode` is the
-       piece of this task's groundwork that actually gets consumed, below. */
+    /* Genuinely unused. Groundwork for offering a --rom's own directory as the
+       CHOOSE ROM listing, which would mean silently overriding cfg.rom_dir
+       whenever it still held the compiled-in default -- a real feature with
+       its own failure modes and no request for it. Left alone rather than
+       guessed at. */
     (void)rom_from_argv;
 
-    /* A PLACEHOLDER profile, resolved against the Game Boy's fixed 160x144
-       rather than any real core's geometry: no ROM has been chosen yet at
-       this point (MODE_MAIN sends the user to a menu first), and a core's
-       geometry is only meaningful after retro_load_game -- there is nothing
-       else honest to lay chrome/calibration/the menu out against. Once a ROM
-       is actually loaded, below, this gets re-resolved against
-       core_get_geometry's answer and the faceplate is redrawn if that
-       changed anything; for the Game Boy it never does, which is what keeps
-       this generalisation a no-op for the only core wired up today. */
+    /* A PLACEHOLDER profile against the Game Boy's fixed 160x144: no ROM has
+       been chosen yet, and a core's geometry is only meaningful after
+       retro_load_game, so there is nothing else honest to lay
+       chrome/calibration/the menu out against. Re-resolved below once a ROM is
+       loaded, with the faceplate redrawn if anything changed -- which for a
+       Game Boy it never does. */
     koboy_profile prof;
-    /* THE PIXEL ASPECT `prof` WAS RESOLVED WITH, carried alongside it because
+    /* THE PIXEL ASPECT `prof` WAS RESOLVED WITH, carried alongside because
        koboy_profile does not hold it and the staleness test below needs it.
-       Square here, and not for want of asking: no ROM is loaded at this point,
-       so there is no core to ask for a display aspect. The real rect is
-       resolved below from the real geometry AND the real pixel aspect. */
+       Square here because no ROM is loaded yet, so there is no core to ask. */
     uint32_t prof_par = KOBOY_ASPECT_ONE;
     if (!config_resolve_profile(&prof, &cfg, pw, ph,
                                 KOBOY_GB_W, KOBOY_GB_H, KOBOY_GB_W, KOBOY_GB_H)) {
@@ -577,19 +516,16 @@ int main(int argc, char **argv)
     /* ------------------------------------------------------- calibration */
     if (calib_needed(&cfg)) {
         if (frame_limit) {
-            /* A scripted, bounded run has nobody to press a button; blocking
-               here would hang the smoke test forever. */
+            /* A scripted, bounded run has nobody to press a button. */
             say("koboy: uncalibrated, skipping calibration for a scripted run\n");
         } else {
-            /* A throwaway input object, whose only job is to let this loop SEE A
-               TOUCH. It exists because the loop used to advance on nothing but
-               platform_poll_raw_key(): on a Kobo with no page-turn buttons there
-               was no key to press, no way to answer the prompt, and the only
-               thing that responded at all was the power button, which quits. The
-               real input object is created below instead of being reused here on
-               purpose -- input_create copies the config by value, so one made
-               before calibration would carry the pre-calibration key mapping for
-               the whole session. */
+            /* A throwaway input object, whose only job is to let this loop SEE
+               A TOUCH: the loop used to advance on platform_poll_raw_key()
+               alone, so a Kobo with no page-turn buttons had no way to answer
+               the prompt and only the power button (which quits) responded. Not
+               reused as the session's input object on purpose -- input_create
+               copies the config by value, so one made here would carry the
+               PRE-calibration key mapping for the whole session. */
             koboy_input *cal_in = input_create(&cfg, &prof);
             if (!cal_in) {
                 fatal("out of memory");
@@ -610,18 +546,17 @@ int main(int argc, char **argv)
                     memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
                     text_draw_centred(panel, panel_stride, pw, ph, ph / 2 - 40,
                                  calib_prompt(&k), 5, 0x00);
-                    /* The escape has to be ON THE PANEL. A device that cannot
-                       answer the prompt is exactly the device whose user has no
-                       terminal and no other way to find out. */
+                    /* The escape has to be ON THE PANEL: a device that cannot
+                       answer the prompt has no terminal either. */
                     text_draw_centred(panel, panel_stride, pw, ph, ph / 2 + 40,
                                  calib_escape_prompt(), 3, 0x00);
                     pf->blit_gray8(pf->ctx, panel, pw, ph, panel_stride, 0, 0);
                     pf->refresh(pf->ctx, 0, 0, pw, ph, KOBOY_REFRESH_FULL);
                     say("koboy: %s (%s)\n", calib_prompt(&k), calib_escape_prompt());
                 }
-                /* Touch FIRST, keys second, and the order is load-bearing:
+                /* Touch FIRST, keys second, and the order is LOAD-BEARING:
                    platform_poll_raw_key drains the same event nodes with a NULL
-                   input, which throws away every touch event it passes over. */
+                   input, throwing away every touch event it passes over. */
                 pf->poll_input(pf->ctx, cal_in);
                 const koboy_input_state *cal_st = input_state(cal_in);
                 for (int t = 0; t < KOBOY_MAX_TOUCH; t++)
@@ -637,9 +572,8 @@ int main(int argc, char **argv)
                 say("koboy: calibrated a=%u b=%u -> %s\n",
                     (unsigned)cfg.key_a, (unsigned)cfg.key_b, ini_path);
             if (escaped) {
-                /* Not just "break out of the loop": leaving the zero sentinel in
-                   place would make input_feed_key ignore every key for the rest
-                   of the session. */
+                /* Not just a break: leaving the zero sentinel would make
+                   input_feed_key ignore every key for the rest of the run. */
                 calib_escape(&cfg);
                 say("koboy: calibration skipped by touch, keeping a=%u b=%u\n",
                     (unsigned)cfg.key_a, (unsigned)cfg.key_b);
@@ -650,140 +584,107 @@ int main(int argc, char **argv)
         }
     }
 
-    /* Where the RECENT list lives: beside save_dir (recent.dat next to the
-       .srm/.stN files), not beside koboy.ini. Two reasons, either one
-       sufficient on its own: save_dir is GUARANTEED writable by the time
-       execution reaches here -- config_resolve_paths already resolved it
-       install-relative, and the save-state/SRAM paths below already trust it
-       for exactly this reason -- while koboy.ini can legitimately live
-       somewhere the user chose for CONFIGURATION, not for data, and may not
-       even be writable from a menu-launched process. And recent.dat is data,
-       exactly like a .srm: it belongs with the rest of what koboy owns, not
-       with what the user edits. */
+    /* recent.dat lives beside save_dir, not beside koboy.ini. Two reasons,
+       either sufficient: save_dir is guaranteed writable by the time execution
+       reaches here (config_resolve_paths resolved it install-relative, and the
+       SRAM/state paths already trust it), while koboy.ini may live wherever
+       the user chose for CONFIGURATION and need not be writable from a
+       menu-launched process -- and recent.dat is data, like a .srm. */
     char recents_file[600];
     snprintf(recents_file, sizeof recents_file, "%s/recent.dat", cfg.save_dir);
 
-    /* Shared across every list screen one --ui-script run drives (MAIN MENU,
-       then either RECENT or ALL GAMES) -- see screen_list's script_i comment for
-       why a single flat script can walk through more than one screen. NULL
-       when there is no script, same as every other script-less screen_list
-       call in this file. */
+    /* Shared across every list screen one --ui-script run drives -- see
+       screen_list's script_i comment for why one flat script walks more than
+       one screen. NULL when there is no script. */
     int script_i = 0;
     const koboy_input_state *ui_scr = ui_script_n > 0 ? ui_script : NULL;
     int *ui_scr_i = ui_script_n > 0 ? &script_i : NULL;
 
     /* ------------------------------------------------------- the session loop
        ONE GAME IS ONE SESSION: pick a ROM, derive everything from it, open a
-       core, play, tear all of it down. Two different things send execution
-       round again, and it is the same trip for both.
+       core, play, tear all of it down. Two things send execution round again.
 
-       A FAILED LOAD. A ROM chosen from RECENT or the browser that does not
-       load is an ORDINARY condition -- the file was deleted between the scan
-       and the tap, an SD card is not mounted, a partial copy is short, a core
-       is missing, the core simply refuses it -- and it used to end the
-       process. On the device that is indistinguishable from a crash: koboy
-       vanishes and Nickel comes back, with whatever the user was doing gone.
-       Reported twice from the device, both times from RECENT.
+       A FAILED LOAD is an ORDINARY condition -- the file was deleted between
+       the scan and the tap, an SD card is not mounted, a partial copy is
+       short, a core is missing, the core refuses it. It used to end the
+       process, which on the device is indistinguishable from a crash: koboy
+       vanishes and Nickel comes back. Reported twice from the device.
 
        A MID-SESSION SWITCH. MENU -> CHOOSE ROM used to call load_rom_into on
-       the LIVE core -- the one opened at startup for the FIRST ROM's
-       extension -- and that killed a device: a Mega Drive .md handed to gpSP,
-       which executed it as ARM code and took SIGSEGV ("bad jump 8000000", no
-       second "koboy: core" line in the log because no second core was ever
-       opened). Everything derived from the extension was equally stale, not
-       just the core: layout, extra buttons, scale ceiling, the save binding.
-       The comment that used to sit above that call reasoned only about
-       geometry and dated from when koboy was one core per session; fifteen
-       systems made it wrong and nobody revisited it. So CHOOSE ROM now ends
-       the session and comes back here, where all of that is derived from
-       scratch.
+       the LIVE core -- the one opened for the FIRST ROM's extension -- and it
+       killed a device: a Mega Drive .md handed to gpSP, executed as ARM code,
+       SIGSEGV ("bad jump 8000000", with no second "koboy: core" line because
+       no second core was ever opened). The core was not the only stale thing:
+       layout, extra buttons, scale ceiling and the save binding all derive
+       from the extension. So CHOOSE ROM now ends the session and comes back
+       here, where all of it is re-derived.
 
-       UNCONDITIONALLY, with no same-core fast path. Switching games is not a
-       hot operation -- it is a human tapping through three screens -- and
-       "reload into the live core when the extension happens to match" is a
-       second code path that only the rarest case exercises, which is exactly
-       how the bug above survived. Reopening the same .so for a second Game
-       Boy ROM costs one dlopen.
+       UNCONDITIONALLY, with no same-core fast path: switching games is a human
+       tapping through three screens, and "reload into the live core when the
+       extension happens to match" is a second path only the rarest case
+       exercises -- which is how the bug above survived. Reopening the same .so
+       costs one dlopen.
 
-       Back to the MAIN MENU, not to the exact list the ROM came from: this
-       is the loop's own top, so it costs no new state and no new mode, both
-       lists are one tap away, and the RECENT list in particular must be
-       rebuilt from disk anyway (recent_load/prune below) rather than resumed.
-       Do not add a mode for this.
+       Back to the MAIN MENU, not the list the ROM came from: this is the
+       loop's own top, both lists are one tap away, and RECENT must be rebuilt
+       from disk anyway. DO NOT ADD A MODE FOR THIS.
 
        A run that did NOT come through the startup UI (--rom, or rom= in the
-       ini) still dies on a failed load -- see the branches below. There is no
-       list to go back to, and "koboy --rom nonsense.gb" exiting 0 would be a
-       lie to whatever launched it. used_startup_ui is what tells them apart.
+       ini) still dies on a failed load: there is no list to go back to, and
+       `koboy --rom nonsense.gb` exiting 0 would lie to whatever launched it.
+       used_startup_ui tells them apart.
 
-       ITS BODY IS DELIBERATELY NOT RE-INDENTED. Everything down to the
-       matching brace (marked "end of the session loop") is the same code at
-       the same indentation it has always had; re-indenting four hundred lines
-       to add one enclosing loop would bury the behaviour change in a diff
-       nobody can read. */
+       ITS BODY IS DELIBERATELY NOT RE-INDENTED down to the matching brace
+       ("end of the session loop") -- re-indenting four hundred lines to add
+       one enclosing loop would bury the behaviour change. */
 
-    /* THE RUN'S counters, not the session's: they live out here so a run that
-       plays three games reports one total rather than three summaries, which
-       is what `presented=` has always meant and what the smoke tests grep
-       for. `stats` is cumulative for the same reason it always was across a
-       mid-session switch -- nothing reset it before either. */
+    /* THE RUN'S counters, not the session's: a run that plays three games
+       reports one total, which is what `presented=` has always meant and what
+       the smoke tests grep for. */
     koboy_stats stats;
     stats_reset(&stats);
     unsigned long presented = 0, since_cleanup = 0, cleanups = 0, big_refreshes = 0;
     unsigned long rects_emitted = 0;
-    /* Run-scoped, like presented and frames_done, because the pacer is
-       per-SESSION: pacer_init zeroes its counters, so reading pace.held at
-       session_end would report only the last game a switching run played. */
+    /* Run-scoped because the pacer is per-SESSION: pacer_init zeroes its
+       counters, so pace.held at session_end would report only the last game. */
     unsigned long settle_held = 0;
     uint64_t last_sram_us = 0, last_cleanup_us = 0;
-    /* SCREENSHOT state, and `armed` is the whole design of the feature.
-       Selecting MENU -> SCREENSHOT does NOT take a picture: the menu is drawn
-       OVER the game, so a capture taken there would be a photograph of the
-       menu. It sets this, the menu closes, and the capture happens from the
-       next COMPOSITED frame -- see the arming branch and the capture site for
-       why "next composited frame" is well defined even with present_divisor
-       and the settle pacer both deferring presentation.
-       Run-scoped rather than session-scoped only because everything else here
-       is; an arm that survives to a different game is impossible, since the
-       only ways out of this menu that reach another ROM leave through
-       MODE_MAIN, and this is cleared before the capture either way. */
+    /* SCREENSHOT state, and `armed` IS the design: MENU -> SCREENSHOT does not
+       take a picture, because the menu is drawn OVER the game and a capture
+       there would photograph the menu. It sets this; the capture happens from
+       the next COMPOSITED frame (see the arming branch and the capture site
+       for why that is well defined under present_divisor and the pacer).
+       Run-scoped only because everything else here is. */
     bool       shot_armed = false;
-    /* The on-panel confirmation, and when it gets taken away again. Zero
-       means nothing is showing. */
+    /* The on-panel confirmation and its expiry; zero = nothing showing. */
     uint64_t   shot_note_until_us = 0;
     koboy_rect shot_note = { 0, 0, 0, 0 };
-    /* --frames N is a budget for the RUN. Each session gets its own pacer
-       (a new core reports its own frame rate), and pacer_init zeroes
-       p->frames, so a switch would otherwise hand the second game a fresh
-       budget of N. The pacer keeps counting this session; frames_done holds
-       what the finished ones spent. */
+    /* --frames N is a budget for the RUN. Each session gets its own pacer and
+       pacer_init zeroes p->frames, so a switch would otherwise hand the second
+       game a fresh budget of N. frames_done holds what finished sessions
+       spent. */
     unsigned long frames_done = 0;
-    /* Whether anything has been PLAYED yet, which is what decides how a
-       "nothing chosen" exit behaves: at startup there is no run to report on
-       and koboy exits straight out (0, or 4 for a script that selected
-       nothing); once a game has run, the same choice has to fall through to
-       the run's summary instead of throwing it away. */
+    /* Whether anything has been PLAYED yet, which decides how a "nothing
+       chosen" exit behaves: at startup koboy exits straight out (0, or 4 for a
+       script that selected nothing); once a game has run, the same choice must
+       fall through to the run's summary. */
     bool any_game_ran = false;
 
     char err[512];
     koboy_core *core = NULL;
-    /* Fully braced/enumerated zero-init: a bare {0} zeroes every field on
-       every compiler that matters here, but Linaro GCC 4.9 (the ARM cross
-       compiler; the host's newer GCC does not) applies -Wmissing-braces to
-       the nested path[] array and -Wmissing-field-initializers to the rest,
-       so a bare {0} is warning-free on host and warning-*full* on-device.
-       Spell out every field so both toolchains agree it is zeroed. */
+    /* Fully braced/enumerated zero-init, NOT a bare {0}: Linaro GCC 4.9 (the
+       ARM cross compiler; the host's newer GCC does not) applies
+       -Wmissing-braces to the nested path[] array and
+       -Wmissing-field-initializers to the rest, so {0} is warning-free on host
+       and warning-FULL on-device. */
     koboy_sram_binding sb = {{0}, NULL, 0, false};
 
     for (;;) {
 
-    /* Captured before the picker below can change `mode`: only a session that
-       actually went through a UI screen painted over the faceplate, and only
-       such a session needs it redrawn afterward. The --rom/rom= fast path
-       skips the picker entirely (mode is already MODE_PLAY) and must not pay
-       for a redraw of chrome nothing has touched. Re-evaluated every session,
-       because the SECOND game always comes from the UI even when the first
-       one came from the command line. */
+    /* Captured before the picker can change `mode`: only a session that went
+       through a UI screen painted over the faceplate, and the --rom fast path
+       must not pay for a redraw of chrome nothing touched. Re-evaluated every
+       session -- the SECOND game always comes from the UI. */
     bool used_startup_ui = (mode == MODE_MAIN);
 
     while (mode == MODE_MAIN) {
@@ -807,19 +708,14 @@ int main(int argc, char **argv)
             if (ri >= 0) {
                 snprintf(cfg.rom_path, sizeof cfg.rom_path, "%s", recent_path(&rc, ri));
                 say("koboy: chose %s (recent)\n", cfg.rom_path);
-                /* NOT recorded here. "Played" means LOADED -- the recording
-                   moved below the load for both entry points, and this is
-                   the one where it matters most: recording at pick time
-                   promoted a ROM that then failed to the top of the very
-                   list the user has to walk past to try something else. */
+                /* NOT recorded here: "played" means LOADED. Recording at pick
+                   time promoted a ROM that then failed to the top of the very
+                   list the user must walk past to try something else. */
                 mode = MODE_PLAY;
             }
-            /* else: BACK was tapped, or the run was stopped/exhausted while
-               ON the recent screen -- loop back to MAIN MENU either way. A
-               stopped or script-exhausted run converges on the SAME terminal
-               exit one iteration later, when screen_main_menu itself reports
-               it (the `else` branch below) -- this does not need its own
-               copy of that handling. */
+            /* else: BACK, or the run was stopped/exhausted on the recent
+               screen -- back to MAIN MENU either way, where the `else` branch
+               below converges on the same terminal exit one iteration later. */
         } else if (choice == MAIN_ALL_GAMES) {
             int br = screen_browser(pf, ui_in, panel, panel_stride, pw, ph,
                                  cfg.rom_dir, cfg.rom_path, sizeof cfg.rom_path,
@@ -827,16 +723,12 @@ int main(int argc, char **argv)
             input_destroy(ui_in);
 
             if (br == BROWSE_ERR_DIR || br == BROWSE_ERR_EMPTY) {
-                /* Two distinct messages, deliberately: a wrong rom_dir and an
-                   empty one are different mistakes, and this is the only
-                   diagnostic a user with no terminal gets.
-
-                   Terminal only on the FIRST session. Once a game has run,
-                   an unreadable or empty rom_dir is a dead end in one list,
-                   not a reason to end the run -- RECENT is still there, and
-                   this is exactly what the mid-session picker did before it
-                   was folded into this one. notify()/fatal() picks the
-                   wording to match which of those two it is. */
+                /* Two distinct messages: a wrong rom_dir and an empty one are
+                   different mistakes, and this is the only diagnostic a user
+                   with no terminal gets. Terminal only on the FIRST session --
+                   once a game has run, an unreadable rom_dir is a dead end in
+                   one list, not a reason to end the run; RECENT is still
+                   there. */
                 const char *why = (br == BROWSE_ERR_DIR)
                     ? "cannot read rom directory\n%s"
                     : "no .gb, .gbc or .mgw files in\n%s";
@@ -848,12 +740,10 @@ int main(int argc, char **argv)
                 free(panel); pf->shutdown(pf->ctx); return 2;
             }
             if (br != BROWSE_PICKED) {
-                /* A SCRIPTED run that ends without a rom chosen is a
-                   failure, not a clean exit -- see screen_list's own comment on
-                   why this needs its own exit code. Backing out of ALL GAMES
-                   interactively (only reachable via a signal/should_quit;
-                   the ".." row goes UP a level, it does not leave the
-                   browser) still exits 0. */
+                /* A SCRIPTED run that ends without a rom chosen is a failure,
+                   not a clean exit -- screen_list says why it needs its own
+                   exit code. Backing out interactively (only via a signal or
+                   should_quit; ".." goes UP a level) still exits 0. */
                 if (any_game_ran) goto session_end;
                 if (ui_script_n > 0) {
                     fatal("ui script selected nothing");
@@ -865,16 +755,13 @@ int main(int argc, char **argv)
             say("koboy: chose %s\n", cfg.rom_path);
             mode = MODE_PLAY;
         } else {
-            /* MAIN_QUIT, or screen_main_menu itself was stopped/exhausted
-               (choice == -1: koboy_stop, should_quit, or -- for a script -- the
-               verbs ran out before landing on anything). Every one of these
-               is a deliberate or forced end with nothing to resume to. */
+            /* MAIN_QUIT, or screen_main_menu was stopped/exhausted
+               (choice == -1: koboy_stop, should_quit, or a script's verbs
+               running out). All are ends with nothing to resume to. */
             input_destroy(ui_in);
-            /* A session already played: this is QUIT (or a signal) closing a
-               run that has numbers to report, so it joins the ordinary end
-               of the loop instead of throwing the summary away. That is what
-               the mid-session picker's `mode = MODE_QUIT` did, and koboy.log
-               would otherwise lose the only record of the session. */
+            /* A session already played: this closes a run that has numbers to
+               report, so it joins the ordinary end of the loop rather than
+               throwing the summary -- koboy.log's only record -- away. */
             if (any_game_ran) goto session_end;
             if (ui_script_n > 0) {
                 fatal("ui script selected nothing");
@@ -885,64 +772,37 @@ int main(int argc, char **argv)
         }
     }
 
-    /* mode is MODE_PLAY from here on, until the emulator loop below reads and
-       writes it: MODE_QUIT ends the loop from inside the menu (a chosen QUIT,
-       or CHOOSE ROM leaving nothing loaded), kept distinct from koboy_stop so the
+    /* mode is MODE_PLAY from here until the emulator loop writes it. MODE_QUIT
+       ends the loop from inside the menu, kept distinct from koboy_stop so the
        final status line does not call a menu-driven quit "stopped by
        signal". */
 
-    /* --------------------------------------------------------- core, ROM */
-    /* Opened, and the ROM loaded, BEFORE video_create/input_create below:
-       the real game rect depends on the core's geometry (config_resolve_profile
-       call further down), which libretro only answers honestly once a game is
-       loaded -- so the buffers that rect sizes have to wait for it too. */
-    /* The core is picked from the chosen ROM's extension, and only here:
-       everything above ran before the browser knew which file the user would
-       tap, and config_resolve_paths (way up in the argument parsing) could
-       only resolve the DEFAULT. An explicit `core=` or --core wins outright
-       -- core_explicit is the only way to tell "the user named gambatte"
-       from "config_defaults wrote gambatte because it always does".
-       The name goes back through config_join_sibling rather than being used
-       raw, because dlopen never searches the cwd (see config.c's essay): a
-       bare "gw_libretro.so" would be looked for everywhere except beside the
-       binary. If the exe directory cannot be determined the bare name is
-       kept, matching config_resolve_paths' own "leave paths as-is" fallback. */
-    /* WHICH PRESENTATION this ROM gets, decided here and nowhere else. Set
-       unconditionally, unlike the core just below, and config.h says why: an
-       explicit --core cannot make a Game Boy faceplate right for a Game &
-       Watch unit whose buttons are drawn into its own artwork.
+    /* --------------------------------------------------------- core, ROM
+       The core is opened and the ROM loaded BEFORE video_create/input_create:
+       the real game rect depends on the core's geometry, which libretro only
+       answers honestly once a game is loaded.
 
-       It has to happen BEFORE the config_resolve_profile call further down,
-       which is what reads it. It is re-derived on EVERY session, including a
-       mid-session switch, and the comment that used to stand here said the
-       opposite: that CHOOSE ROM reused one core handle, so switching systems
-       could not work anyway and re-deriving the layout would dress up a path
-       that failed one step later. That was true when koboy was one core per
-       session and it went on being read as true after fifteen systems made
-       it false -- the switch did not fail one step later, it handed a Mega
-       Drive ROM to gpSP and the device took SIGSEGV. Which is why the switch
-       now comes back through this loop, and why this line runs for it. */
+       Everything the ROM's EXTENSION decides is derived here, and re-derived
+       on EVERY session including a mid-session switch (that omission is what
+       handed a Mega Drive ROM to gpSP and took SIGSEGV). All of it must come
+       BEFORE the config_resolve_profile call further down, which reads it. */
+    /* WHICH PRESENTATION this ROM gets. Set unconditionally, unlike the core
+       below: an explicit --core cannot make a Game Boy faceplate right for a
+       Game & Watch unit whose buttons are in its own artwork (config.h). */
     cfg.layout_mode = config_layout_for_rom(cfg.rom_path);
-    /* And the button complement, from the same extension and for the same
-       reasons -- see config.h. Must come before config_resolve_profile too:
-       chrome_controls_top counts the extra discs when there are any, and the
-       profile is resolved against what that returns. */
+    /* And the button complement (config.h). Also before
+       config_resolve_profile: chrome_controls_top counts the extra discs. */
     config_extra_buttons_for_rom(&cfg.layout, cfg.rom_path);
-    /* And what the LCD strip's controls SAY, from the same extension. Only
-       the LCD faceplate reads these, but they are set unconditionally beside
-       the two calls above so there is one place a reader can see everything
-       the ROM's extension decides. Order does not matter to the resolver --
-       labels have no geometry -- but keeping the three together is what stops
-       a fourth being added somewhere else. */
+    /* And what the LCD strip's controls SAY. Only the LCD faceplate reads
+       these, but they are set beside the calls above so one place shows
+       everything the extension decides -- which is what stops a fourth being
+       added elsewhere. */
     config_lcd_pad_for_rom(&cfg.layout, cfg.rom_path);
-    /* Which geometry the LCD rect is sized from. MUST come before
-       config_resolve_profile, which is what reads it, and it is a fact about
-       the system exactly like layout_mode above. */
+    /* Which geometry the LCD rect is sized from -- a fact about the system,
+       like layout_mode. MUST precede config_resolve_profile. */
     cfg.lcd_rect_from_max = config_lcd_rect_from_max_for_rom(cfg.rom_path);
-    /* Set from the ROM, and OUTSIDE the core_explicit branch below on
-       purpose: a scale ceiling is a property of the system, not of which
-       core the owner pointed at it. Someone running a .sfc through their own
-       --core still wants the SNES ceiling. */
+    /* OUTSIDE the core_explicit branch on purpose: a scale ceiling is a
+       property of the SYSTEM, not of which core the owner pointed at it. */
     cfg.scale_ceiling = config_scale_ceiling_for_rom(cfg.rom_path);
 
     if (!cfg.core_explicit) {
@@ -955,21 +815,20 @@ int main(int argc, char **argv)
             snprintf(cfg.core_path, sizeof cfg.core_path, "%s", want);
     }
 
-    /* Logged, not silent: six cores ship now and "which one did it pick?" is
-       otherwise unanswerable on a device with no terminal, where the only
-       symptom of a wrong pick is a core that rejects the ROM. */
+    /* Logged: "which core did it pick?" is otherwise unanswerable on a device
+       with no terminal, where the only symptom of a wrong pick is a core that
+       rejects the ROM. */
     say("koboy: core %s\n", cfg.core_path);
-    /* And the faceplate, for the same reason and in the same breath. The
-       button complement is decided a few lines above and drawn hundreds of
-       lines later; the only symptom of this file forgetting to ask for it is
-       a button that quietly is not there, which is indistinguishable from a
-       system that never had one. tests/smoke_host.sh reads this line. */
+    /* And the faceplate, for the same reason: the button complement is decided
+       above and drawn hundreds of lines later, and the only symptom of
+       forgetting to ask for it is a button that quietly is not there --
+       indistinguishable from a system that never had one.
+       tests/smoke_host.sh reads this line. */
     {
-        /* Every extra disc by NAME, not a yes/no: two systems now add discs
-           and they add different ones, so "with a C button" could no longer
-           tell a WonderSwan's L1/R1 pair from a missing pair. Built into one
-           buffer so the line stays one say() call, which is what
-           tests/smoke_host.sh matches against. */
+        /* Every extra disc by NAME, not a yes/no: different systems add
+           different discs, so "with a C button" could not tell a WonderSwan's
+           L1/R1 pair from a missing pair. One buffer so the line stays one
+           say() call, which is what tests/smoke_host.sh matches. */
         char extras[64] = "";
         for (int i = 0; i < KOBOY_MAX_EXTRA_BTNS; i++)
             if (cfg.layout.extra[i].r > 0) {
@@ -982,12 +841,10 @@ int main(int argc, char **argv)
 
     core = core_open(cfg.core_path, cfg.save_dir, err, sizeof err);
     if (!core) {
-        /* A MISSING CORE IS A FAILED LOAD, not a broken installation. Fifteen
-           systems ship now and the core is picked from the extension, so
-           "tapped a .gba on a device whose gba_libretro.so did not survive
-           the copy" arrives here -- and it is exactly the same user-visible
-           event as a ROM the core refuses: this game did not start. It is
-           handled the same way. */
+        /* A MISSING CORE IS A FAILED LOAD, not a broken installation: the core
+           is picked from the extension, so "tapped a .gba on a device whose
+           gpsp_libretro.so did not survive the copy" arrives here, and to the
+           user it is the same event as a ROM the core refuses. */
         if (!load_failed_recoverable(used_startup_ui, cfg.rom_path, err)) {
             free(panel);
             pf->shutdown(pf->ctx); return 1;
@@ -997,10 +854,9 @@ int main(int argc, char **argv)
     }
 
     if (!load_rom_into(core, &cfg, &sb, err, sizeof err)) {
-        /* Closed, not kept: the next ROM through this loop picks its own
-           core from its own extension, and a handle left open here would
-           leak one .so per failed tap. core_close on a core with no ROM
-           loaded is the ordinary shutdown path (core.c). */
+        /* Closed, not kept: the next ROM picks its own core, and a handle left
+           open here leaks one .so per failed tap. core_close on a core with no
+           ROM loaded is the ordinary shutdown path. */
         core_close(core);
         core = NULL;
         if (!load_failed_recoverable(used_startup_ui, cfg.rom_path, err)) {
@@ -1011,32 +867,25 @@ int main(int argc, char **argv)
         continue;
     }
 
-    /* --------------------------------------------- re-fit for real geometry */
-    /* `prof` is still the shape of the PREVIOUS game -- the Game-Boy-shaped
-       placeholder on the first session, the outgoing game's real profile on
-       any later one. Re-resolve it against what the just-loaded ROM's core
-       actually reports, and only redraw the faceplate (an extra full-panel
-       refresh, so worth avoiding when nothing changed) when that answer
-       differs -- which for a second Game Boy ROM it never does, since base
-       and max are both always 160x144. This is what keeps
-       `bash tests/smoke_host.sh` and the video goldens byte-identical for the
-       one core wired up today.
+    /* --------------------------------------------- re-fit for real geometry
+       `prof` is still the PREVIOUS game's shape -- the Game-Boy placeholder on
+       the first session, the outgoing game's profile later. Re-resolve against
+       what the loaded core reports and redraw the faceplate (an extra
+       full-panel refresh, worth avoiding) only when the answer differs.
 
-       Comparing against the OUTGOING game rather than against the placeholder
-       is not a shortcut: two ROMs of the same system need no re-fit and no
-       repaint, and two of different systems differ in geometry or in
-       layout_mode, which is the last term of the condition below. */
+       Comparing against the OUTGOING game rather than the placeholder is not a
+       shortcut: two ROMs of the same system need no re-fit, and two of
+       different systems differ in geometry or in layout_mode, which is the
+       last term of the condition below. */
     bool chrome_stale = used_startup_ui;
     {
         int rbw, rbh, rmw, rmh;
-        /* The LAYOUT is part of what makes the placeholder profile stale, not
-           just the geometry: a .mgw whose core happened to report the same
-           numbers the Game Boy placeholder was seeded with would still need
-           the whole faceplate replaced. It cannot happen with the one core
-           wired up today (gw answers 128x128 here, never 160x144), which is
-           exactly why it is written down rather than relied on. */
-        /* Assigned INSIDE the condition below, after core_get_geometry has
-           filled rbw/rbh -- computing it here would read them uninitialised. */
+        /* The LAYOUT is part of what makes the placeholder stale, not just the
+           geometry: a .mgw reporting the Game Boy's numbers would still need
+           the whole faceplate replaced (gw answers 128x128 here, so it cannot
+           happen today -- written down rather than relied on).
+           rpar is assigned INSIDE the condition, after core_get_geometry has
+           filled rbw/rbh; computing it here would read them uninitialised. */
         uint32_t rpar = prof_par;
         if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
             ((rpar = core_par(&cfg, core, rbw, rbh)) != prof_par ||
@@ -1046,17 +895,12 @@ int main(int argc, char **argv)
             koboy_profile real_prof;
             if (!config_resolve_profile_par(&real_prof, &cfg, pw, ph,
                                             rbw, rbh, rmw, rmh, rpar)) {
-                /* A PER-ROM FAILURE, handled like every other one. This can
-                   only be discovered after the core is open and the ROM is
-                   loaded -- it is the core's own max geometry that does not
-                   fit -- so it lands here rather than beside the other
-                   refusals, but to the user it is the same event: this game
-                   did not start. Ending the run for it would be the same
-                   defect the loop exists to close, one screen later.
-
+                /* A PER-ROM FAILURE like every other, discoverable only after
+                   the core is open and the ROM loaded (it is the core's own
+                   max geometry that does not fit). Ending the run for it would
+                   be the defect this loop exists to close, one screen later.
                    snprintf'd first because load_failed_recoverable takes a
-                   ready-made reason, and this is the one caller whose reason
-                   is composed here rather than by core.c. */
+                   ready-made reason. */
                 char gerr[512];
                 snprintf(gerr, sizeof gerr,
                          "panel %dx%d is too small for this core's %dx%d game "
@@ -1081,76 +925,61 @@ int main(int argc, char **argv)
         }
     }
 
-    /* ONE repaint, not two. The rect chrome was drawn against may have just
-       changed shape or position, and a UI screen may have painted over it --
-       both wanted the faceplate back, and doing them separately meant a
-       system switch drew the OUTGOING game's faceplate for one full-panel
-       refresh on its way to drawing the incoming one's. On e-ink that is a
-       visible flash of the wrong console. */
+    /* ONE repaint, not two: the rect may have changed AND a UI screen may have
+       painted over it. Done separately, a system switch drew the OUTGOING
+       game's faceplate for one full-panel refresh on the way to the incoming
+       one's -- on e-ink, a visible flash of the wrong console. */
     if (chrome_stale)
         redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
 
-    /* Recorded HERE, once, for both entry points, and only now: "played"
-       means the game actually started -- it survived the load AND the re-fit
-       above, which is the last thing that can refuse it. Recording at pick
-       time (where this used to live, twice) put a ROM that failed at the top
-       of the RECENT list -- the wall the user just hit, promoted to row 0 of
-       the screen they have to get past to try anything else. A row that fails
-       is left in the list, deliberately: see the note above the session
-       loop. */
+    /* Recorded HERE, once, for both entry points: "played" means the game
+       actually started -- it survived the load AND the re-fit above, the last
+       thing that can refuse it. Recording at pick time put a ROM that failed
+       at the top of the RECENT list, the wall the user just hit promoted to
+       row 0 of the screen they must get past. */
     if (used_startup_ui) {
         koboy_recent rc;
         recent_load(&rc, recents_file);
         recent_touch(&rc, cfg.rom_path);
         recent_save(&rc, recents_file);
     }
-    /* SECOND AND LATER SESSIONS ONLY -- any_game_ran is still describing the
-       PREVIOUS one here, which is exactly what makes this the switch line.
-       Without it koboy.log reads as one continuous run and the moment a
-       different game took over is invisible; with fifteen systems that was
-       also the only way to see which core a switch actually opened. It is
-       printed after the load AND the re-fit, so the line means the new game
-       started, not merely that it was picked -- tests/smoke_host.sh leans on
-       exactly that. */
+    /* SECOND AND LATER SESSIONS ONLY -- any_game_ran still describes the
+       PREVIOUS one here, which is what makes this the switch line. Without it
+       koboy.log reads as one continuous run. Printed after the load AND the
+       re-fit, so it means the new game STARTED, not that it was picked;
+       tests/smoke_host.sh leans on that. */
     if (any_game_ran) say("koboy: switched to %s\n", cfg.rom_path);
 
-    /* From here to the teardown at the bottom of the loop, this session owns
-       a loaded ROM: any later "nothing chosen" ends the RUN through its
-       summary rather than exiting out from under it. */
+    /* From here to the teardown, this session owns a loaded ROM: any later
+       "nothing chosen" ends the RUN through its summary. */
     any_game_ran = true;
 
     /* ------------------------------------------------------- video, input */
-    /* Logged, not merely applied. This is the setting that changes the most
-       of what a colour system looks like, it is reachable from two places
-       (koboy.ini and the in-game MENU), and the panel itself cannot tell you
-       which mapping produced the frame you are looking at -- so koboy.log has
-       to. Read back off the LIVE koboy_video rather than off cfg, which is
-       what makes tests/smoke_host.sh's assertion end-to-end: it fails if
-       main.c hands video_create the wrong value, not merely if config.c
-       parses the wrong one. */
+    /* Logged, and read back off the LIVE koboy_video rather than off cfg --
+       which is what makes tests/smoke_host.sh's assertion end-to-end: it fails
+       if main.c hands video_create the wrong value, not merely if config.c
+       parsed the wrong one. The panel cannot tell you which mapping produced
+       the frame, and the setting is reachable from two places. */
     koboy_video *vid = video_create(&prof, cfg.force_dither,
                                     (koboy_gray_map)cfg.gray_map);
-    /* The quarter turn a golden-age arcade board asks for. Set here rather
-       than inside video_create because the rotation belongs to the CORE and
-       koboy_profile belongs to the config -- config_resolve_profile is called
-       from tests that have no core at all. prof was already resolved from
-       core_get_geometry's transposed answer, so the two agree by
-       construction; every later rebuild below repeats both halves together
-       for the same reason. */
+    /* The quarter turn an arcade board asks for. Set here rather than in
+       video_create because the rotation belongs to the CORE while
+       koboy_profile belongs to the config, and config_resolve_profile is
+       called from tests with no core at all. prof was resolved from
+       core_get_geometry's TRANSPOSED answer, so the two agree by
+       construction. */
     if (vid) video_set_rotation(vid, (int)core_rotation(core));
-    /* Paired with the rotation for the same reason it is paired with it in
-       every rebuild below: both are facts the core announced about how its
-       frames are to be PRESENTED, both are lost when a koboy_video is
-       destroyed, and a presentation that has one without the other is wrong
-       in a way that looks like a broken core rather than a missing line. */
+    /* Paired with the rotation everywhere, including every rebuild below: both
+       are facts the core announced about how its frames are PRESENTED, both
+       are lost when a koboy_video is destroyed, and one without the other
+       looks like a broken core rather than a missing line. */
     if (vid) video_set_aspect(vid, core_aspect(&cfg, core));
     if (vid) say("koboy: gray_map %s\n", video_gray_map_name(video_get_gray_map(vid)));
-    /* Both halves of the MOTION pair, read back off the LIVE pipeline and the
-       LIVE platform rather than off cfg -- same trick as the line above and
-       the pacer's below. A line printed from cfg would prove the parser; this
-       one fails if video_create ignored force_dither or the backend never got
-       the policy, which are the two ways this setting can be on in the file
-       and off on the panel. */
+    /* Both halves of the MOTION pair, read back off the LIVE pipeline and
+       platform: a line printed from cfg proves only the parser, while this one
+       fails if video_create ignored force_dither or the backend never got the
+       policy -- the two ways this setting is on in the file and off on the
+       panel. */
     if (vid)
         say("koboy: motion %s / %s\n",
             video_get_dither(vid) ? "1-bit" : "4-level",
@@ -1170,32 +999,27 @@ int main(int argc, char **argv)
     }
 #ifdef KOBOY_PLATFORM_KOBO
     /* The device's touch layer has its own raw range and is mounted rotated;
-       only the backend knows by how much, so it installs the transform. */
+       only the backend knows by how much. */
     platform_kobo_setup_touch(pf, in);
 #else
-    /* The desktop mouse already reports panel coordinates: no transposition,
-       no flips, raw range == panel range. */
+    /* The desktop mouse already reports panel coordinates. */
     input_set_touch_transform(in, pw, ph, false, false, false);
 #endif
     core_set_frame_cb(core, on_frame, NULL);
     core_set_input_fn(core, on_input, in);
     /* Additive: gambatte never issues a POINTER query, so this is inert for
-       the Game Boy. It is installed unconditionally rather than only for the
-       LCD layout because the state it forwards is already gated in input.c,
-       and one install site is one fewer place for the two to disagree. */
+       the Game Boy. Installed unconditionally rather than only for the LCD
+       layout because input.c already gates the state it forwards. */
     core_set_pointer_fn(core, on_pointer, in);
 
-    /* Tetris is cartridge type 0x00: no battery-backed SRAM at all, so this is
-       NULL/0 on the development ROM and must not be dereferenced. */
-    /* Set false when a save file exists but could not be loaded whole. Then
-       NOTHING is written back over it for the rest of the session.
-       The reasoning, because "saving is off" looks like a bug otherwise: a file
-       that fails to load is either truncated or from another cartridge, and in
-       both cases it is the only copy of something the user cares about. Writing
-       this session's SRAM over it destroys whatever is recoverable, for the sake
-       of progress made in a game that started from a blank save anyway. So the
-       file is left exactly as found, the user is told on the panel, and the fix
-       is theirs to make (move the file aside, and saving resumes next run). */
+    /* sb.mem is NULL/0 for a cartridge type with no battery-backed SRAM
+       (Tetris is 0x00) and must not be dereferenced.
+       writeback goes false when a save file EXISTS but could not be read
+       whole, and then nothing is written over it for the rest of the session.
+       "Saving is off" looks like a bug otherwise: such a file is truncated or
+       from another cartridge, and either way it is the only copy of something
+       the user cares about. It is left exactly as found, the user is told on
+       the panel, and the fix is theirs (move it aside). */
     if (sb.mem && sb.len) {
         if (sram_load(sb.path, sb.mem, sb.len)) {
             say("koboy: loaded %s\n", sb.path);
@@ -1203,9 +1027,9 @@ int main(int argc, char **argv)
             sb.writeback = false;
             say("koboy: %s could not be read whole; SRAM left as the core "
                 "initialised it and saving is disabled this session\n", sb.path);
-            /* On the panel, not just the log: a save that silently did not load
-               is how a user loses hours without ever being told. Short lines --
-               FBInk wraps at the column edge, not at word boundaries. */
+            /* On the panel, not just the log: a save that silently did not
+               load is how a user loses hours. Short lines -- FBInk wraps at the
+               column edge, not at word boundaries. */
             notify("Save file unreadable.\nStarting fresh.\nSaving is OFF this run.");
             /* The message drew over the faceplate; put it back. */
             redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
@@ -1216,88 +1040,72 @@ int main(int argc, char **argv)
 
     /* ------------------------------------------------------------- the loop */
     koboy_pacer pace;
-    /* Paced at the rate THIS core reports, not at the Game Boy's 59.7275 Hz
-       that KOBOY_FRAME_US hardcodes -- see docs/FOLLOWUPS.md #38 and #57,
-       where two FinalBurn Neo boards report 30 fps and were therefore running
-       at double speed. Both numbers are logged, the raw one and the resolved
-       one, because a core whose fps is refused by the plausibility bound in
-       pacer_frame_us_from_fps is otherwise indistinguishable on a device from
-       one that genuinely runs at 59.7275. */
+    /* Paced at THIS core's reported rate, not the Game Boy's 59.7275 Hz that
+       KOBOY_FRAME_US hardcodes -- docs/FOLLOWUPS.md #38 and #57, where two
+       FinalBurn Neo boards report 30 fps and ran at double speed. Both the raw
+       and resolved numbers are logged, because a core whose fps is refused by
+       pacer_frame_us_from_fps's plausibility bound is otherwise
+       indistinguishable from one that really runs at 59.7275. */
     double core_hz = core_fps(core);
     uint32_t frame_us = pacer_frame_us_from_fps(core_hz);
     say("koboy: core reports %.4f fps; pacing at %u us/frame\n", core_hz, frame_us);
     pacer_init(&pace, pf->now_us(pf->ctx), cfg.present_divisor, frame_us);
-    /* Read back off the LIVE pacer, not off cfg, for the reason the gray_map
-       line above it is: a log line that reports what config.c parsed proves
-       config.c, while this one fails if main.c hands the pacer the wrong
-       value -- which is the plumbing nothing else can see. It is also the
-       only place the clamp inside pacer_set_divisor is observable. */
+    /* Read back off the LIVE pacer for the reason the gray_map line is: it
+       fails if main.c hands the pacer the wrong value, which nothing else can
+       see. Also the only place pacer_set_divisor's clamp is observable. */
     say("koboy: present_divisor %d\n", pace.divisor);
-    /* Printed unconditionally, INCLUDING the disabled 0/0 case, because "did
-       the throttle engage" is the first question any report about scrolling
-       will ask and a line that only appears when it is on cannot answer it in
-       the negative. The full-rect figure is spelled out rather than left to
-       be recomputed from the two halves: it is the number that has to be
-       compared against 1000/present_divisor*frame_ms to see whether the
-       throttle can bind at all. */
+    /* Printed unconditionally, INCLUDING the disabled 0/0 case: "did the
+       throttle engage" is the first question any scrolling report asks, and a
+       line that appears only when it is on cannot answer in the negative. The
+       full-rect figure is spelled out because it is what gets compared against
+       1000/present_divisor*frame_ms to see whether the throttle can bind. */
     say("koboy: settle model %d ms + %d ms/full rect (%u us at a full %dx%d)\n",
         cfg.settle_base_ms, cfg.settle_full_ms,
         pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
                         (uint32_t)cfg.settle_full_ms * 1000u, 1, 1),
         prof.game_w, prof.game_h);
 
-    /* Re-anchored per session, not reset: both are wall-clock marks for
-       "how long since the last flush / cleanup", and a session that starts
-       after a minute in the menus must not immediately believe both are
-       overdue. The COUNTERS they gate live outside the loop, with the rest of
-       the run's numbers. */
+    /* Re-anchored per session, not reset: both are wall-clock marks, and a
+       session starting after a minute in the menus must not immediately
+       believe both are overdue. */
     last_sram_us = pf->now_us(pf->ctx);
     last_cleanup_us = last_sram_us;
 
-    /* mode != MODE_QUIT joins koboy_stop and should_quit() as a third way out: the
-       in-game menu sets it (QUIT, or CHOOSE ROM leaving nothing loaded) from
-       inside the loop body below. Kept separate from koboy_stop on purpose -- that
-       flag is the signal handler's, set from outside any call frame, and
-       reusing it for a menu-driven exit would make the final status line call
-       a chosen QUIT "stopped by signal". */
+    /* mode != MODE_QUIT is a third way out, beside koboy_stop and
+       should_quit(): the in-game menu sets it from inside the loop body.
+       Separate from koboy_stop, which is the signal handler's -- reusing it
+       would make the final status line call a chosen QUIT "stopped by
+       signal". */
     while (mode != MODE_QUIT && mode != MODE_MAIN &&
            !koboy_stop && !pf->should_quit(pf->ctx)) {
-        /* frames_done + pace.frames, not pace.frames: --frames N is a budget
-           for the RUN, and each session gets a fresh pacer (see frames_done's
-           declaration). */
+        /* frames_done + pace.frames: --frames N is a RUN budget and each
+           session gets a fresh pacer. */
         if (frame_limit && frames_done + pace.frames >= frame_limit) break;
 
-        /* Poll EVERY core iteration (60Hz), not once per presented frame.
-           Polling only on presentation would drop short presses and add up to
-           50ms of latency on top of the panel's own. */
+        /* EVERY core iteration (60 Hz), not once per presented frame: that
+           would drop short presses and add up to 50 ms of latency on top of
+           the panel's own. */
         pf->poll_input(pf->ctx, in);
 
-        /* The in-game MENU is the one screen no tap on a previous screen leads
-           to: it is entered by ASKING, and the ask is a touch zone this loop
-           polls. So --ui-script gets a verb of its own for it, and this is
-           where that verb is consumed -- the emulator loop, not screen_list.
+        /* The in-game MENU is entered by ASKING -- a touch zone this loop
+           polls -- so --ui-script gets a verb of its own, consumed here rather
+           than in screen_list. This closes docs/FOLLOWUPS.md #47: every branch
+           below had been verified by READING only, because the scripted path
+           (the only one an automated test can take) could not reach here at
+           all -- the v1 first-run-deadlock shape exactly, with five
+           inhabitants.
 
-           This closes docs/FOLLOWUPS.md #47, which was filed against
-           MENU_GRAY's handler and applies word for word to every other branch
-           below it: each one was verified by READING, because the scripted
-           path -- the only path an automated test can take -- could not get
-           here at all. That is the v1 first-run-deadlock shape exactly ("every
-           automated test took the one path that could not reach the bug"), and
-           it had already collected five inhabitants.
-
-           The real request is tested FIRST and the marker only consumed if it
-           did not fire, so a scripted run that somehow also sees a live MENU
-           tap spends one, not both. */
+           The real request is tested FIRST and the marker consumed only if it
+           did not fire, so a scripted run that also sees a live MENU tap spends
+           one, not both. */
         bool want_menu = input_take_menu_request(in);
         if (!want_menu && ui_scr) {
-            /* Step over the cleared states a list screen left behind before
-               looking for a marker -- uiscript_state_is_idle says why, and
-               why this cannot swallow a tap. Without it a script can open the
-               in-game MENU exactly once: every screen selects on touch-down
-               and leaves the release, so the cursor parks on that release and
-               nothing here ever moves it again. A second `menu` verb was
-               unreachable, and so was any test that switches games twice --
-               which is the one shape the session loop most needs tested. */
+            /* Step over the cleared states a list screen left behind --
+               uiscript_state_is_idle says why this cannot swallow a tap.
+               Without it a script opens the in-game MENU exactly once: every
+               screen selects on touch-DOWN and leaves the release, so the
+               cursor parks there forever. A second `menu` verb was
+               unreachable, and so was any test that switches games twice. */
             while (script_i < ui_script_n && !ui_script_menu[script_i] &&
                    uiscript_state_is_idle(&ui_script[script_i]))
                 script_i++;
@@ -1308,11 +1116,10 @@ int main(int argc, char **argv)
         }
         if (want_menu) {
             size_t ssz = core_state_size(core);
-            /* Read off the DIRECTORY every time the menu opens, not carried
-               in a variable: the number in the row is the file that is about
-               to be written, and after a relaunch (or a shot deleted over
-               USB) an in-memory counter would name a file that is not the
-               next one. One opendir per menu open costs nothing a human
+            /* Read off the DIRECTORY every menu open, not carried in a
+               variable: the row names the file about to be written, and after
+               a relaunch (or a shot deleted over USB) an in-memory counter
+               would name the wrong one. One opendir costs nothing a human
                opening a menu can perceive. */
             char shot_stem[96];
             shot_stem_for_rom(shot_stem, sizeof shot_stem, cfg.rom_path);
@@ -1343,16 +1150,14 @@ int main(int argc, char **argv)
                             fatal("could not write\nsave state %d", slot);
                     } else {
                         /* All or nothing: safefile_read_exact leaves blob
-                           untouched on a short file, and only a complete blob
-                           ever reaches the running core. */
+                           untouched on a short file. */
                         if (safefile_read_exact(sp, blob, ssz) &&
                             core_state_load(core, blob, ssz)) {
                             say("koboy: loaded state %d\n", slot);
-                            /* The core's cartridge RAM was just rewritten --
-                               gambatte's blob includes it -- so the periodic
-                               flush will now write that to .srm. Correct, and
-                               worth knowing: a state load is indirectly a
-                               save-file write. Re-fetch in case the pointer
+                            /* The core's cartridge RAM was just rewritten (the
+                               blob includes it), so the periodic flush will
+                               write that to .srm -- a state load is indirectly
+                               a save-file write. Re-fetch: the pointer may have
                                moved. */
                             sb.mem = core_sram(core, &sb.len);
                         } else {
@@ -1364,26 +1169,23 @@ int main(int argc, char **argv)
             } else if (act == MENU_RESET) {
                 core_reset(core);
             } else if (act == MENU_GRAY) {
-                /* Cycles, and returns to the GAME rather than reopening the
-                   menu. That is the point: this is a subjective judgement
-                   about how a reflective panel looks, and it can only be made
-                   while looking at the game. Two taps to advance one step is
-                   the price of seeing the step.
+                /* Cycles and returns to the GAME rather than reopening the
+                   menu: this is a subjective judgement about a reflective
+                   panel and can only be made while looking at the game. Two
+                   taps per step is the price of seeing the step.
 
-                   It takes effect on the very next presented frame, not next
-                   launch: video_set_gray_map rebuilds the LUT here, and the
-                   return-from-menu path below already does redraw_chrome +
-                   video_invalidate unconditionally. Without that invalidate
-                   the dirty diff would leave every unchanged tile carrying
-                   pixels from the OLD mapping -- half-old, half-new, and on
-                   e-ink it persists until something else happens to touch
-                   those tiles. */
+                   Live on the next presented frame: video_set_gray_map
+                   rebuilds the LUT, and the return-from-menu path below does
+                   redraw_chrome + video_invalidate unconditionally. Without
+                   that invalidate the dirty diff leaves unchanged tiles
+                   carrying OLD-mapping pixels, which on e-ink persist until
+                   something else touches them. */
                 cfg.gray_map = (cfg.gray_map + 1) % KOBOY_GRAY_COUNT;
                 video_set_gray_map(vid, (koboy_gray_map)cfg.gray_map);
-                /* The ini key and this menu are ONE setting. A failure here
-                   is not fatal and must not be silent: the mapping is live
-                   for this session either way, it just will not survive a
-                   relaunch (a read-only .adds, most likely). */
+                /* The ini key and this menu are ONE setting. A failed write is
+                   not fatal and must not be silent: live this session either
+                   way, but it will not survive a relaunch (a read-only .adds,
+                   most likely). */
                 if (config_save_gray_map(ini_path, (koboy_gray_map)cfg.gray_map))
                     say("koboy: gray_map = %s\n",
                         video_gray_map_name((koboy_gray_map)cfg.gray_map));
@@ -1392,70 +1194,48 @@ int main(int argc, char **argv)
                         "could not write %s)\n",
                         video_gray_map_name((koboy_gray_map)cfg.gray_map), ini_path);
             } else if (act == MENU_FRAMES) {
-                /* Cycles and returns to the GAME, exactly like GREYSCALE above
-                   and for the same reason: how many updates per second an
-                   e-ink panel wants is a judgement about smearing against
-                   choppiness, and it can only be made while looking at the
-                   game in motion.
+                /* Cycles and returns to the GAME, like GREYSCALE and for the
+                   same reason: updates per second is a judgement about
+                   smearing against choppiness, made while looking at motion.
 
-                   THE LADDER GOES ABOVE THE DEFAULT, which is the point of
-                   this entry rather than an afterthought. Residue accumulates
-                   per panel UPDATE, so the untested direction -- fewer
-                   updates -- is the one the evidence points at, and every
-                   value ever tried was 3 or below (docs/FOLLOWUPS.md #26).
+                   THE LADDER GOES ABOVE THE DEFAULT, which is the point of this
+                   entry: residue accumulates per panel UPDATE, so FEWER updates
+                   is the direction the evidence points at, and every value ever
+                   tried was 3 or below (docs/FOLLOWUPS.md #26).
 
-                   No pacer_rebase and no video_invalidate needed here beyond
-                   what the return-from-menu path below already does: the
-                   divisor changes WHICH core frames reach the panel, not what
-                   any of them contain and not when the core runs, so nothing
-                   half-drawn can survive it. The unconditional redraw_chrome
-                   + video_invalidate below is what puts a whole frame back on
-                   the panel after the menu, and it runs whatever was picked.
-
-                   Live immediately: pacer_set_divisor changes the running
-                   pacer, so the very next presented frame is already on the
-                   new pacing -- no reload, and nothing stale in between,
-                   because the pacer holds no per-divisor state other than the
-                   divisor itself. */
+                   Nothing extra needed here: the divisor changes WHICH core
+                   frames reach the panel, not what any contains, so nothing
+                   half-drawn survives it. Live immediately -- the pacer holds
+                   no per-divisor state beyond the divisor. */
                 cfg.present_divisor = config_next_present_divisor(cfg.present_divisor);
                 pacer_set_divisor(&pace, cfg.present_divisor);
-                /* One setting, two doors. A failure to write is not fatal and
-                   must not be silent -- the new pacing is live for this
-                   session either way, it just will not survive a relaunch
-                   (a read-only .adds being the likely cause). */
+                /* One setting, two doors. A failed write is not fatal and must
+                   not be silent: live this session, gone next relaunch. */
                 if (config_save_present_divisor(ini_path, cfg.present_divisor))
                     say("koboy: present_divisor = %d\n", cfg.present_divisor);
                 else
                     say("koboy: present_divisor = %d (this session only -- "
                         "could not write %s)\n", cfg.present_divisor, ini_path);
             } else if (act == MENU_MOTION) {
-                /* Cycles and returns to the GAME, exactly like GREYSCALE and
-                   FRAMES above and for the same reason: whether a dithered
-                   1-bit picture under a two-level waveform smears LESS than
-                   four greys under AUTO is a judgement about a reflective
-                   panel in motion, and no framebuffer measurement can make
-                   it -- residue is panel-side and koboy's dirty diff only
-                   ever sees what koboy itself wrote.
+                /* Cycles and returns to the GAME, like GREYSCALE and FRAMES:
+                   whether a dithered 1-bit picture under a two-level waveform
+                   smears LESS than four greys under AUTO is a judgement about a
+                   reflective panel in motion, and NO framebuffer measurement
+                   can make it -- residue is panel-side and koboy's dirty diff
+                   only sees what koboy wrote.
 
-                   ONE ROW, TWO KEYS, because the thing being tested is the
-                   PAIR. FBInk's header says a DU-class waveform leaves
-                   on-screen pixels as-is for new content that is not black
-                   or white, so four-level content under DU is the forced-DU4
-                   experiment that already failed here, and 1-bit content
-                   under AUTO gives the driver less to work with rather than
-                   more. config_next_motion holds the ladder and the argument
-                   for its three rungs.
+                   ONE ROW, TWO KEYS, because the thing tested is the PAIR.
+                   FBInk's header says a DU-class waveform leaves on-screen
+                   pixels as-is for content that is not black or white, so
+                   four-level content under DU is the forced-DU4 experiment that
+                   already failed here. config_next_motion holds the ladder.
 
-                   BOTH HALVES GO LIVE HERE, and each needs its own call:
+                   BOTH HALVES GO LIVE HERE, each needing its own call:
                    video_set_dither changes what the next frame CONTAINS,
-                   pf->set_wfm_policy changes how the panel is asked to draw
-                   it, and a setting where only one of the two moved would be
-                   a combination the owner never picked. The unconditional
-                   redraw_chrome + video_invalidate below is what makes the
-                   change whole-frame rather than half-old: without it the
-                   dirty diff would leave untouched tiles carrying the
-                   previous rendering, which on e-ink persists until
-                   something else writes them. */
+                   pf->set_wfm_policy changes how the panel is asked to draw it,
+                   and moving only one is a combination nobody picked. The
+                   redraw_chrome + video_invalidate below makes the change
+                   whole-frame rather than half-old. */
                 {
                     bool             nd = cfg.force_dither;
                     koboy_wfm_policy nw = (koboy_wfm_policy)cfg.wfm_fast_policy;
@@ -1463,22 +1243,19 @@ int main(int argc, char **argv)
                     cfg.force_dither    = nd;
                     cfg.wfm_fast_policy = (int)nw;
                     video_set_dither(vid, nd);
-                    /* Optional in the seam (platform_if.h), so null-checked --
-                       both shipped backends implement it, and a future one
-                       that cannot change waveforms should degrade to "the
-                       dithering half still works" rather than crash. */
+                    /* Optional in the seam (platform_if.h), so null-checked: a
+                       backend that cannot change waveforms should degrade to
+                       "the dithering half still works" rather than crash. */
                     if (pf->set_wfm_policy) pf->set_wfm_policy(pf->ctx, nw);
-                    /* Read back off the LIVE pipeline and the LIVE platform,
-                       not off cfg, for the reason the gray_map and
-                       present_divisor lines do it: a line reporting what this
-                       branch just assigned proves this branch, while these
-                       fail if either setter never landed. */
+                    /* Read back off the LIVE pipeline and platform: a line
+                       reporting what this branch assigned proves only this
+                       branch, while these fail if either setter never
+                       landed. */
                     const char *wn = pf->wfm_fast_name ? pf->wfm_fast_name(pf->ctx)
                                                        : config_wfm_policy_name(nw);
                     /* One choice, two keys, ONE write. A failure is not fatal
-                       and must not be silent: the pair is live for this
-                       session either way, it just will not survive a relaunch
-                       (a read-only .adds, most likely). */
+                       and must not be silent: live this session, gone next
+                       relaunch. */
                     if (config_save_motion(ini_path, nd, nw))
                         say("koboy: motion = %s / %s\n",
                             video_get_dither(vid) ? "1-bit" : "4-level", wn);
@@ -1489,54 +1266,37 @@ int main(int argc, char **argv)
                             ini_path);
                 }
             } else if (act == MENU_SHOT) {
-                /* ARMS a capture; it does not take one. THE MENU IS DRAWN
-                   OVER THE GAME -- screen_list paints the whole panel white and
-                   renders the list into it -- so a screenshot taken from
-                   here would be a photograph of this menu, which is not what
-                   anybody opening it wants.
+                /* ARMS a capture; it does not take one. THE MENU IS DRAWN OVER
+                   THE GAME, so a screenshot from here would photograph the
+                   menu.
 
-                   WHAT "THE NEXT FRAME" MEANS, given that present_divisor and
-                   the settle pacer can each defer presentation indefinitely:
-                   the capture site sits after the blit/refresh loop, so it
-                   fires on the next frame that actually REACHES THE PANEL,
-                   however many core frames that takes. That frame is
-                   guaranteed to arrive rather than being suppressed as
-                   unchanged, because the return-from-menu path below calls
-                   video_invalidate: the next submit is full-dirty by
-                   construction, so nrects is non-zero even if the game is
-                   sitting on a static screen.
+                   "THE NEXT FRAME" is well defined even though present_divisor
+                   and the settle pacer can each defer presentation: the capture
+                   site sits after the blit/refresh loop, so it fires on the
+                   next frame that REACHES THE PANEL. That frame is guaranteed
+                   to arrive rather than be suppressed as unchanged, because the
+                   return-from-menu path calls video_invalidate -- the next
+                   submit is full-dirty by construction.
 
-                   And it is a COMPLETE panel, not a dirty-rect fragment:
-                   shot_compose builds it from the whole chrome buffer plus
-                   the whole game rect (video.c's buffer always holds the
-                   entire rect, not just the changed tiles), so what is saved
-                   is what the panel shows even when only eight pixels of it
-                   were updated this frame.
+                   It is a COMPLETE panel, not a dirty-rect fragment:
+                   shot_compose builds it from the whole chrome buffer plus the
+                   whole game rect, so a frame where eight pixels changed still
+                   saves the entire picture.
 
-                   Nothing is written here and nothing is said here: a run
-                   that arms and then quits before a frame is presented leaves
-                   no file, which is correct -- there was no frame to take. */
+                   Nothing is written or said here: a run that arms and quits
+                   before a frame is presented leaves no file, correctly. */
                 shot_armed = true;
             } else if (act == MENU_QUIT) {
                 mode = MODE_QUIT;
             } else if (act == MENU_CHOOSE_ROM) {
-                /* ALL of it is torn down and rebuilt: this ends the session
-                   and the session loop picks the next ROM, opens a core for
-                   ITS extension, and derives the faceplate, the buttons, the
-                   ceiling and the save binding from it.
-
-                   What used to be here was a hundred lines of second picker
-                   that reloaded into the LIVE core, and it killed a device: a
-                   Mega Drive .md handed to gpSP faulted executing it as ARM
-                   code. The core was never the only stale thing -- it was
-                   simply the one that crashed. See the session loop's own
-                   comment.
-
-                   No teardown here either. The flush-before-unload ordering
-                   that used to live in this branch is now the loop's single
-                   teardown, which every way out of a session goes through --
-                   QUIT, a signal, the frame limit and this. One copy cannot
-                   disagree with itself. */
+                /* ALL of it is torn down and rebuilt: this ends the session,
+                   and the loop picks the next ROM, opens a core for ITS
+                   extension and re-derives the faceplate, buttons, ceiling and
+                   save binding. What used to be here reloaded into the LIVE
+                   core and killed a device (see the session loop's comment).
+                   No teardown here either -- the flush-before-unload ordering
+                   is the loop's single teardown, which every way out goes
+                   through, so one copy cannot disagree with itself. */
                 mode = MODE_MAIN;
                 break;
             }
@@ -1544,42 +1304,32 @@ int main(int argc, char **argv)
             /* Whatever happened, the panel is now showing a menu. */
             redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
             video_invalidate(vid);
-            /* That repaint already took any screenshot plaque with it, so the
-               pending erase has nothing left to erase. Left set, it would
-               spend a panel update rubbing out something that is not there.
-               It is also what keeps a plaque out of the NEXT capture: the
-               only route to a second screenshot goes through this menu, so
-               `panel` is guaranteed to be plaque-free by the time
-               shot_compose reads it. Two shots of a static screen are
-               therefore byte-identical, which tests/smoke_host.sh asserts. */
+            /* That repaint already took any screenshot plaque with it, so a
+               pending erase would spend a panel update rubbing out nothing. It
+               also keeps a plaque out of the NEXT capture: the only route to a
+               second screenshot is through this menu, so `panel` is plaque-free
+               when shot_compose reads it. Two shots of a static screen are
+               therefore byte-identical -- tests/smoke_host.sh asserts it. */
             shot_note_until_us = 0;
-            /* Drain, don't just ignore: every screen_list/screen_menu call above
-               polled input while a menu screen -- not the faceplate -- was on
-               the panel, and recompute() latches a MENU-zone tap regardless
-               of what is drawn there. At the default layout the zone
-               overlaps the list's page-forward arrow, so a tap made to page
-               a long list can latch a pending request that nothing here has
-               consumed yet. Left alone, the very next iteration's
-               input_take_menu_request() would see it and reopen the menu
-               immediately -- "the menu keeps reopening by itself". The
-               return value is discarded on purpose: this call exists only to
-               clear the latch, not to act on it. */
+            /* DRAIN, don't ignore: the screen calls above polled input while a
+               menu -- not the faceplate -- was on the panel, and recompute()
+               latches a MENU-zone tap regardless of what is drawn there. At the
+               default layout that zone overlaps the list's page-forward arrow,
+               so paging a long list latches a request nothing consumed, and the
+               next iteration reopens the menu ("it keeps reopening by itself").
+               The return value is discarded on purpose. */
             (void)input_take_menu_request(in);
-            /* REBASE, not re-init: pacer_init zeroes p->frames, and the
-               bounded-run test above is `pace.frames >= frame_limit`, so a
-               --frames N run used to restart its whole budget every time the
-               menu closed. The wall clock does need re-anchoring (the menu may
-               have been open for a minute) -- that is all pacer_rebase does. */
+            /* REBASE, not re-init: pacer_init zeroes p->frames, so a --frames
+               N run used to restart its whole budget every time the menu
+               closed. The wall clock does need re-anchoring. */
             pacer_rebase(&pace, pf->now_us(pf->ctx));
-            /* And charge the redraw_chrome above, which repainted the WHOLE
-               panel. Rebasing does not do this and must not: hold_until_us is
-               an absolute wall-clock mark, so a menu open for thirty seconds
-               leaves it long expired -- correctly, because the panel finished
-               that work thirty seconds ago. What it did NOT finish is the
-               repaint we just issued, and the first frame back from a menu is
-               exactly where a collision would be most visible: everything on
-               screen changed at once. A full-rect charge is a lower bound on a
-               full-PANEL repaint, which is the right direction to be wrong in. */
+            /* Charge the redraw_chrome above, which repainted the WHOLE panel.
+               Rebasing does not and must not: hold_until_us is absolute, so a
+               menu open for thirty seconds leaves it correctly expired -- but
+               the repaint just issued is NOT finished, and the first frame back
+               from a menu is where a collision is most visible. A full-rect
+               charge is a lower bound on a full-PANEL repaint, which is the
+               right direction to be wrong in. */
             pacer_presented(&pace, pf->now_us(pf->ctx),
                             pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
                                             (uint32_t)cfg.settle_full_ms * 1000u,
@@ -1595,56 +1345,40 @@ int main(int argc, char **argv)
         core_run_frame(core);
         stats_add(&stats, KOBOY_STAGE_CORE, pf->now_us(pf->ctx) - t0);
 
-        /* Some cores do not know their real geometry until INSIDE a
-           retro_run() -- measured: the Game & Watch core reports a 128x128
-           placeholder from retro_get_system_av_info called right after
-           retro_load_game, on every one of 59 measured titles, and only
-           resolves the real canvas (Parachute 658x395, Mario Bros. 973x532,
-           Donkey Kong 606x748, ...) from inside its FIRST retro_run(), via
-           the SET_GEOMETRY/SET_SYSTEM_AV_INFO environment calls core.c now
-           handles. Checked after EVERY retro_run(), not just the first: a
-           core may call either command again later too (a Multi Screen
-           title toggling between a folded and an unfolded view is the
-           plausible case for this exact core), and polling
-           core_geometry_changed() here is the one mechanism that covers
-           "resolves late, once" and "changes again mid-session" without
-           special-casing either. For a core that never touches either
-           command -- the Game Boy core, still the only one that does not
-           need any of this -- core_geometry_changed() is always false, so
-           this costs one cheap boolean check per frame and changes nothing
-           else about existing Game Boy behaviour. */
+        /* SOME CORES DO NOT KNOW THEIR GEOMETRY UNTIL INSIDE retro_run().
+           MEASURED: gw-libretro reports a 128x128 placeholder from
+           retro_get_system_av_info on all 59 titles and only announces the
+           real canvas (Parachute 658x395, Mario Bros. 973x532, Donkey Kong
+           606x748) from its FIRST retro_run(), via SET_GEOMETRY /
+           SET_SYSTEM_AV_INFO. Checked after EVERY retro_run(), not just the
+           first: a core may re-announce later (a Multi Screen title folding
+           and unfolding), and polling here covers "resolves late, once" and
+           "changes again mid-session" without special-casing either. For a core
+           that never sends them this is one boolean per frame. */
         if (core_geometry_changed(core)) {
-            /* Timing first, and unconditionally, for the same reason the
-               rotation below is unconditional: SET_SYSTEM_AV_INFO can move
-               the frame rate without moving a single one of the four numbers
-               the base/max comparison below looks at, so a rate change would
-               otherwise be seen only when it happened to arrive alongside a
-               resize. pacer_set_frame_us is a no-op when the rate has not
-               changed, which is the overwhelmingly common case (only the
-               Game & Watch core sends these commands at all today, and it
-               sends the same 60 fps every time). */
+            /* Timing first and unconditionally: SET_SYSTEM_AV_INFO can move the
+               frame rate without moving any of the four numbers the base/max
+               comparison looks at, so a rate change would otherwise be seen
+               only when it arrived alongside a resize. pacer_set_frame_us is a
+               no-op when the rate has not changed. */
             pacer_set_frame_us(&pace, pf->now_us(pf->ctx),
                                pacer_frame_us_from_fps(core_fps(core)));
             /* Rotation first, and unconditionally, because it is the one
                announcement that can arrive WITHOUT the numbers moving: a
-               square frame turned a quarter turn is the same width and
-               height, so the base/max comparison below would see nothing to
-               do and the pipeline would keep presenting the old orientation
-               forever. Cheap when nothing changed (an int compare), and when
-               something did the whole picture moves, so prev is worthless --
-               hence the invalidate, which is exactly the obligation
-               video_set_rotation's own comment hands to a caller that flips
-               it on a live pipeline. The rebuild path below re-applies it
-               anyway; that is a harmless repeat, not a second mechanism. */
+               square frame turned a quarter turn is the same width and height,
+               so the base/max comparison would see nothing to do and the
+               pipeline would present the old orientation forever. Cheap when
+               nothing changed; when something did, the whole picture moves and
+               prev is worthless -- hence the invalidate, the obligation
+               video_set_rotation hands a caller that flips it live. The rebuild
+               path below repeats it harmlessly. */
             if (video_get_rotation(vid) != (int)core_rotation(core)) {
                 video_set_rotation(vid, (int)core_rotation(core));
                 video_invalidate(vid);
             }
-            /* Same shape, same reason: a core can re-announce its aspect
-               without moving base or max (SET_GEOMETRY carries aspect_ratio
-               too), and every pixel of the fit moves when it does -- hence the
-               invalidate, which prev would otherwise make a half-old frame
-               out of. Cheap when nothing changed: one uint32 compare. */
+            /* Same shape, same reason: SET_GEOMETRY carries aspect_ratio too,
+               so a core can re-announce its aspect without moving base or max,
+               and every pixel of the fit moves when it does. */
             if (video_get_aspect(vid) != core_aspect(&cfg, core)) {
                 video_set_aspect(vid, core_aspect(&cfg, core));
                 video_invalidate(vid);
@@ -1652,29 +1386,24 @@ int main(int argc, char **argv)
             int rbw, rbh, rmw, rmh;
             /* RESOLVE FIRST, THEN COMPARE THE ANSWER -- not the inputs.
 
-               This used to test which INPUT had moved and skip the whole
-               rebuild for a base-only change, on the reasoning that the rect,
-               the chrome and video's buffers were all sized from max. Two
-               thirds of that is still true (the buffers are max-sized, and
-               the LCD rect still is), but the DMG rect is now sized from BASE
+               This used to test which INPUT moved and skip the rebuild for a
+               base-only change, because the rect, the chrome and video's
+               buffers were all max-sized. The buffers and the LCD rect still
+               are, but the DMG rect now comes from BASE
                (config_resolve_profile_par), so a base change there really can
-               move the rect and the input test would leave the faceplate
-               drawn around the wrong one.
+               move the rect and the input test would leave the faceplate drawn
+               around the wrong one.
 
-               The cost that test existed to avoid has not gone away, and it
-               is not theoretical: a Game & Watch title alternates
-               654x396 <-> 305x191 several times a second, and a
-               video_destroy/video_create + chrome redraw + forced full-rect
-               refresh at that rate is what the device log showed. So the
-               skip is kept -- keyed on the RESOLVED PRESENTATION being
-               identical rather than on which field changed. That is both
-               safer and stricter: it catches a base change that does move the
-               rect (SNES dropping into a 512-wide hi-res mode) and still
-               skips one that does not (Game & Watch, whose LCD rect comes
-               from max; PC Engine's 256 <-> 352 switch, whose display width
-               is the same in both modes so the rect is byte for byte the
-               same). The Game Boy never reaches any of this: base == max ==
-               160x144 and gambatte never sends these commands at all. */
+               The cost that test avoided is real: a Game & Watch title
+               alternates 654x396 <-> 305x191 several times a second, and a
+               video rebuild + chrome redraw + forced full-rect refresh at that
+               rate is what the device log showed. So the skip is KEPT, keyed on
+               the RESOLVED PRESENTATION being identical -- safer and stricter.
+               It catches a base change that moves the rect (SNES entering
+               512-wide hi-res) and still skips one that does not (Game & Watch,
+               whose LCD rect comes from max; PC Engine's 256 <-> 352, whose
+               display width is identical in both modes). The Game Boy never
+               reaches any of this. */
             uint32_t rpar2 = prof_par;
             if (core_get_geometry(core, &rbw, &rbh, &rmw, &rmh) &&
                 ((rpar2 = core_par(&cfg, core, rbw, rbh)) != prof_par ||
@@ -1688,11 +1417,9 @@ int main(int argc, char **argv)
                     mode = MODE_QUIT;
                     goto sram_check;
                 }
-                /* Nothing a rebuild would change: same rect in the same
-                   place, same scale, and the same max the buffers were
-                   allocated from. Record what the core is rendering now --
-                   base is what changed, and the log and video's own fit both
-                   want it current -- and keep going. */
+                /* Nothing a rebuild would change: same rect, place, scale and
+                   max. Record the new base (the log and video's own fit both
+                   want it current) and keep going. */
                 if (config_profile_presentation_same(&real_prof, &prof)) {
                     prof.base_w = rbw; prof.base_h = rbh;
                     prof_par = rpar2;
@@ -1704,28 +1431,22 @@ int main(int argc, char **argv)
                     "%s layout, game %dx%d at (%d,%d)\n",
                     rbw, rbh, rmw, rmh, layout_name(prof.layout_mode),
                     prof.game_w, prof.game_h, prof.game_x, prof.game_y);
-                /* The faceplate drawn against the old (possibly placeholder)
-                   rect no longer matches -- redraw it before this frame's
-                   pixels land on the panel. */
+                /* The faceplate no longer matches the rect -- redraw before
+                   this frame's pixels land. */
                 redraw_chrome(pf, panel, panel_stride, pw, ph, &prof, &cfg.layout);
-                /* video_create's buffer was sized for the OLD geometry;
-                   video_submit_rects' bounds guard would just drop a bigger
-                   frame rather than corrupt memory, so without this the game
-                   would render nothing from here on. Rebuilding is the only
-                   way to grow it. The diff history the old buffer carried is
-                   not a loss: the new one is being shown for the first time
-                   (video_create seeds prev to force a full-dirty first
-                   submit), and the panel does not yet show anything from it
-                   either way. */
+                /* video_create's buffer was sized for the OLD geometry, and
+                   video_submit_rects' bounds guard would DROP a bigger frame
+                   rather than corrupt memory -- so without this the game
+                   renders nothing from here on. The lost diff history costs
+                   nothing: video_create seeds prev to force a full-dirty first
+                   submit. */
                 video_destroy(vid);
                 vid = video_create(&prof, cfg.force_dither,
                                    (koboy_gray_map)cfg.gray_map);
                 /* Re-applied, not carried over: video_destroy took the old
-                   rotation with it, and a rotation CHANGE is one of the two
-                   things that can have brought us here (core.c sets
-                   geom_dirty for it, precisely so this rebuild happens). A
-                   WonderSwan toggling its display orientation mid-session is
-                   the case that exercises it. */
+                   rotation, and a rotation CHANGE is one of the two things that
+                   can have brought us here (core.c sets geom_dirty for it).
+                   A WonderSwan toggling its orientation exercises this. */
                 if (vid) video_set_rotation(vid, (int)core_rotation(core));
                 if (vid) video_set_aspect(vid, core_aspect(&cfg, core));
                 if (!vid) {
@@ -1735,30 +1456,27 @@ int main(int argc, char **argv)
                 }
             }
         }
-    /* The `;` is required, not stylistic: a label must be followed by a
-       STATEMENT, and the next line is a declaration. Newer host GCC accepts
-       the label-before-declaration form as an extension; the device's Linaro
-       4.9 rejects it outright, so dropping this breaks the ARM build only. */
+    /* The `;` is REQUIRED, not stylistic: a label must be followed by a
+       STATEMENT and the next line is a declaration. Newer host GCC accepts the
+       label-before-declaration form as an extension; Linaro 4.9 rejects it, so
+       dropping this breaks the ARM build only. */
     geometry_done: ;
 
-        /* now_us is read ONCE and handed to pacer_tick rather than letting the
-           pacer call the platform: pacer.c has no platform dependency and must
-           keep none -- it is pure enough to test against a synthetic clock,
-           which is the only way the settle hold can be asserted at all
+        /* now_us is read ONCE and handed to pacer_tick: pacer.c has no platform
+           dependency and must keep none, so it can be tested against a
+           synthetic clock -- the only way the settle hold can be asserted
            (tests/test_pacing.c). */
         bool present = pacer_tick(&pace, pf->now_us(pf->ctx));
         if (!present) goto sram_check;
 
-        /* A NULL g_frame is the core's can-dupe signal, which video_submit_rects
-           turns into zero rects -- so an unchanged frame costs no refresh at
-           all. Up to KOBOY_MAX_RECTS rects instead of one merged box:
-           video_split_dirty (src/video.c) only splits when the summed cost of
-           the pieces beats the merged box's, so a full-screen scroller still
-           comes back as a single rect here. The rects are not guaranteed
-           disjoint (video_split_dirty's own comment has the detail) -- a
-           capped merge can leave one rect containing another -- so blitting
-           and refreshing each in turn can redo a small overlap; it never
-           misses one. */
+        /* A NULL g_frame is the core's can-dupe signal, which
+           video_submit_rects turns into zero rects, so an unchanged frame costs
+           no refresh. Up to KOBOY_MAX_RECTS rects: video_split_dirty only
+           splits when the pieces' summed cost beats the merged box's, so a
+           full-screen scroller still comes back as one. The rects are NOT
+           guaranteed disjoint (a capped merge can leave one containing
+           another), so blitting each in turn can redo a small overlap -- it
+           never misses one. */
         koboy_rect rects[KOBOY_MAX_RECTS];
         t0 = pf->now_us(pf->ctx);
         int nrects = video_submit_rects(vid, g_frame, (int)g_fw, (int)g_fh,
@@ -1767,19 +1485,17 @@ int main(int argc, char **argv)
                                         rects, KOBOY_MAX_RECTS);
         stats_add(&stats, KOBOY_STAGE_SUBMIT, pf->now_us(pf->ctx) - t0);
 
-        /* Keep the LCD layout's touch->pointer normalisation pointed at the
-           pixels the artwork is actually on. video_frame_rect reports where
-           the frame just submitted landed inside the reserved rect, which is
-           SMALLER than that rect whenever the core renders below its max
-           geometry -- a Game & Watch title zooming to the LCD alone does
-           exactly that, several times a second, and the core normalises the
-           pointer it receives against what it is currently showing. Done here
-           rather than in input.c because input.c has no video dependency, and
-           unconditionally rather than only for the LCD layout because
-           input.c ignores the rect entirely in the other one.
-           Before nrects is tested: an unchanged frame still occupies the same
-           rect, and skipping the update on a duplicate would leave the
-           pointer mapped to whatever the last CHANGED frame's size was. */
+        /* Keep the LCD layout's touch->pointer normalisation on the pixels the
+           artwork is actually on. video_frame_rect reports where the submitted
+           frame landed inside the reserved rect, which is SMALLER whenever the
+           core renders below its max geometry -- a Game & Watch title zooming
+           to the LCD alone does that several times a second, and the core
+           normalises the pointer against what it is currently showing. Here
+           rather than input.c (no video dependency there), unconditionally
+           because input.c ignores the rect in the other layout.
+           BEFORE nrects is tested: an unchanged frame still occupies the same
+           rect, and skipping on a duplicate would leave the pointer mapped to
+           the last CHANGED frame's size. */
         {
             koboy_rect fr;
             video_frame_rect(vid, &fr);
@@ -1789,39 +1505,29 @@ int main(int argc, char **argv)
 
         if (nrects == 0) goto sram_check;       /* nothing changed: skip the panel */
 
-        /* Waveform by TOTAL dirty area across every emitted rect, not one
-           waveform for every frame. KOBOY_REFRESH_FAST maps to a non-flashing
-           waveform (DU4 on this panel), which never fully resets pixel state
-           -- residue accumulates on every update regardless of rect size.
-           Observed on the device as several Tetris scenes layered on top of
-           each other.
-           A dirty area covering most of the game rect means the scene has
-           substantially changed, which is both when layered residue is most
-           objectionable and when the refresh is already expensive, so paying
-           for a flashing waveform there is cheap in relative terms. Small
-           incremental updates keep the fast waveform, and the periodic cleanup
-           sweeps whatever they leave behind.
-           Note this cannot be a substitute for the cleanup: the dirty diff
-           compares our own output buffers, so it tracks what we sent, not what
-           the panel shows. A region that ghosts and then stops changing is
-           never revisited by this test at all.
-           Summing before deciding, rather than promoting per rect, matters
-           precisely because splitting exists now: two small pieces that
-           individually look nowhere near the promotion threshold could
-           together represent most of the game rect having changed, and
+        /* Waveform by TOTAL dirty area across every emitted rect.
+           KOBOY_REFRESH_FAST maps to a non-flashing waveform that never fully
+           resets pixel state, so residue accumulates on every update regardless
+           of rect size -- observed on the device as several Tetris scenes
+           layered on each other. A dirty area covering most of the rect means
+           the scene changed, which is both when layered residue is most
+           objectionable and when the refresh is already expensive, so a
+           flashing waveform is cheap in relative terms there.
+           NOT a substitute for the cleanup: the dirty diff compares our OWN
+           output buffers, so a region that ghosts and then stops changing is
+           never revisited by this test.
+           SUMMED before deciding, not promoted per rect: two small pieces each
+           far below the threshold can together be most of the game rect, and
            deciding rect-by-rect would miss exactly the scene change this
            promotion exists to catch. */
         long dirty_px = 0;
         for (int i = 0; i < nrects; i++) dirty_px += (long)rects[i].w * rects[i].h;
 
-        /* Named wfm, not mode: koboy_mode mode is the outer loop's live
-           control variable (MODE_PLAY/MODE_QUIT), declared far above this
-           point. Reusing "mode" here for the waveform shadowed it silently --
-           -Wshadow is not in this project's flags, so nothing caught it, and
-           the code was correct only by accident of line ordering: moving this
-           block above the outer mode's use, or adding a `mode = MODE_QUIT`
-           anywhere after this point in the loop, would have assigned a
-           waveform instead of ending the run. */
+        /* Named wfm, NOT mode: `mode` is the outer loop's live control
+           variable. Reusing the name here shadowed it silently (-Wshadow is not
+           in this project's flags), and the code was correct only by accident
+           of line ordering -- a `mode = MODE_QUIT` anywhere after this point
+           would have assigned a waveform instead of ending the run. */
         koboy_refresh_mode wfm = KOBOY_REFRESH_FAST;
         if (config_promote_full(&cfg, dirty_px,
                                 (long)prof.game_w * (long)prof.game_h)) {
@@ -1829,18 +1535,14 @@ int main(int argc, char **argv)
             big_refreshes++;
         }
 
-        /* Accumulate BLIT and REFRESH across every rect of THIS frame and
-           call stats_add once, not once per rect. CORE and SUBMIT still fire
-           once per presented frame, and stats_mean_us divides by count[stage]
-           -- so a per-rect stats_add would silently change what the mean
-           MEANS, from "cost per presented frame" (CORE, SUBMIT, and every
-           reading before Task 13) to "cost per rect," with nothing in the
-           printed line saying so. That would bias Step 10's on-device tuning
-           run toward splitting by construction: quartering into four rects
-           mechanically quarters a per-rect mean even if the total refresh
-           time went up, which is the opposite of what the tuning run is
-           trying to measure. One stats_add per frame keeps all four stages'
-           means on the same "per presented frame" footing. */
+        /* ONE stats_add per FRAME, accumulating BLIT and REFRESH across every
+           rect -- not one per rect. CORE and SUBMIT fire once per presented
+           frame and stats_mean_us divides by count[stage], so a per-rect
+           stats_add would silently change what the mean MEANS, from "cost per
+           presented frame" to "cost per rect", with nothing in the printed line
+           saying so. It would also bias any split-tuning run by construction:
+           quartering into four rects mechanically quarters a per-rect mean even
+           if total refresh time went UP. */
         uint64_t blit_us = 0, refresh_us = 0;
         for (int i = 0; i < nrects; i++) {
             const koboy_rect *r = &rects[i];
@@ -1859,28 +1561,25 @@ int main(int argc, char **argv)
         stats_add(&stats, KOBOY_STAGE_BLIT, blit_us);
         stats_add(&stats, KOBOY_STAGE_REFRESH, refresh_us);
 
-        /* AREA-AWARE PACING: charge the panel time this update just cost, so
-           the next divisor-eligible frame is vetoed until the panel has had a
-           chance to finish it.
+        /* AREA-AWARE PACING: charge the panel time this update cost, so the
+           next divisor-eligible frame is vetoed until the panel could finish
+           it.
 
-           Charged from dirty_px -- the SAME sum config_promote_full is given a
-           few lines up -- rather than from the game rect, because that is the
-           whole point: a two-tile sprite move gets base alone and keeps
-           present_divisor's rate exactly, while a full-screen scroll gets
-           base + full and drops to whatever the panel can actually complete.
-           A run where every present is a sprite move is bit-identical to one
-           without this call.
+           Charged from dirty_px -- the SAME sum config_promote_full got --
+           rather than from the game rect, which is the whole point: a two-tile
+           sprite move gets base alone and keeps present_divisor's rate exactly,
+           while a full-screen scroll gets base + full and drops to what the
+           panel can complete. A run of nothing but sprite moves is
+           bit-identical to one without this call.
 
-           AFTER the refresh loop, not before it: the hold measures from when
-           the panel was handed the work, and pf->refresh is non-blocking, so
-           `now` here is within a millisecond of the submission it is timing --
-           whereas taking it before the blit would charge the panel for
-           koboy's own blit time as well.
+           AFTER the refresh loop: the hold measures from when the panel was
+           handed the work, and pf->refresh is non-blocking, so `now` is within
+           a millisecond of the submission. Before the blit it would charge the
+           panel for koboy's own blit time.
 
-           Note what is NOT here: no band-splitting, no dropping part of a
-           frame. The update that goes out is the whole update; only the NEXT
-           one waits. Splitting a scroll across frames trades a flash for
-           tearing, and tearing on a scroll is worse. */
+           NOT here: band-splitting or dropping part of a frame. The update that
+           goes out is whole; only the NEXT one waits. Splitting a scroll trades
+           a flash for tearing, and tearing on a scroll is worse. */
         pacer_presented(&pace, pf->now_us(pf->ctx),
                         pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
                                         (uint32_t)cfg.settle_full_ms * 1000u,
@@ -1890,23 +1589,20 @@ int main(int argc, char **argv)
         rects_emitted += (unsigned long)nrects;
 
         /* ------------------------------------------------ the SCREENSHOT
-           HERE, and not one line earlier, is what makes this the shot the
-           owner asked for. The frame has been composited, blitted and handed
-           to the panel; the game is on screen and the menu is gone. The file
-           is written BEFORE anything is drawn to confirm it, so the
+           HERE and not one line earlier: the frame has been composited,
+           blitted and handed to the panel, so the game is on screen and the
+           menu is gone. The file is written BEFORE anything confirms it, so the
            confirmation cannot end up in the picture.
 
-           shot_capture builds the whole panel itself, because koboy never
-           has it in one place: `panel` is the faceplate and video's buffer is
-           the game, blitted separately at an offset. Both are complete
-           regardless of how little of this frame was dirty, so a capture
-           taken on a frame where two tiles moved is still the entire
-           picture -- which is the point.
+           shot_capture builds the whole panel itself, because koboy never holds
+           it in one place: `panel` is the faceplate and video's buffer is the
+           game, blitted separately. Both are complete however little of this
+           frame was dirty.
 
-           After pacer_presented, not before: shot_capture allocates 2 MB,
-           composites and writes a file, and charging the panel's settle time
-           from a clock reading taken after all that would tell the pacer the
-           update finished later than it did. */
+           AFTER pacer_presented: shot_capture allocates 2 MB, composites and
+           writes a file, and charging the settle time from a clock read after
+           all that would tell the pacer the update finished later than it
+           did. */
         if (shot_armed) {
             shot_armed = false;
             koboy_rect gr = { prof.game_x, prof.game_y, prof.game_w, prof.game_h };
@@ -1921,19 +1617,17 @@ int main(int argc, char **argv)
                 say("koboy: screenshot %s\n", sp);
                 snprintf(msg, sizeof msg, "SCREENSHOT %03d SAVED", sq);
             } else {
-                /* Not fatal and not silent, exactly like a failed ini write:
-                   the game is unaffected, but a screenshot that silently went
-                   nowhere is indistinguishable from a feature that does not
-                   work. The directory is named because that is nearly always
-                   the reason -- a read-only .adds, or a full card. */
+                /* Not fatal and not silent, like a failed ini write: a
+                   screenshot that silently went nowhere is indistinguishable
+                   from a feature that does not work. The directory is named
+                   because that is nearly always the reason. */
                 say("koboy: screenshot FAILED (could not write into %s)\n",
                     cfg.shot_dir);
                 snprintf(msg, sizeof msg, "SCREENSHOT FAILED");
             }
-            /* And now, with the file already on disk, say so on the panel.
-               shot_note_rect returns false when there is no band to put it
-               in, and then the log line above is the only report -- see its
-               comment for why a plaque over the controls would be worse. */
+            /* With the file already on disk, say so on the panel.
+               shot_note_rect returns false when there is no band for it, and
+               then the log line above is the only report. */
             if (shot_note_rect(&prof, &cfg.layout, pw, ph, msg, &shot_note)) {
                 for (int y = 0; y < shot_note.h; y++)
                     memset(panel + (size_t)(shot_note.y + y) * panel_stride + shot_note.x,
@@ -1946,16 +1640,12 @@ int main(int argc, char **argv)
                                shot_note.w, shot_note.h, panel_stride,
                                shot_note.x, shot_note.y);
                 /* FULL, not FAST: the fast waveform is two-level and leaves
-                   residue, and text that ghosts where it was is exactly what
-                   this must not leave behind on a panel the owner goes on
-                   playing on. It is a small rectangle, so the flash is
-                   local. */
+                   residue, and ghosted text is exactly what this must not leave
+                   behind. Small rectangle, so the flash is local. */
                 pf->refresh(pf->ctx, shot_note.x, shot_note.y,
                             shot_note.w, shot_note.h, KOBOY_REFRESH_FULL);
                 uint64_t now = pf->now_us(pf->ctx);
-                /* Charged, because the panel does not care which line of this
-                   file asked it for an update -- the same reasoning the
-                   cleanup refresh below carries. */
+                /* Charged: the panel does not care which line asked. */
                 pacer_presented(&pace, now,
                                 pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
                                                 (uint32_t)cfg.settle_full_ms * 1000u,
@@ -1965,16 +1655,16 @@ int main(int argc, char **argv)
             }
         }
 
-        /* A value <= 0 disables cleanup. The explicit guard is required:
-           without it, 0 makes this always true (a full refresh every presented
-           frame, the inverse of "never") and a negative value wraps the cast so
-           cleanup never runs at all. */
+        /* LIVE GUARD: <= 0 disables cleanup. Without the explicit test, 0 makes
+           this always true (a full refresh every presented frame, the inverse
+           of "never") and a negative value wraps the cast so cleanup never
+           runs. */
         bool due = (cfg.cleanup_interval > 0 &&
                     ++since_cleanup >= (unsigned long)cfg.cleanup_interval);
-        /* Wall-clock ceiling. The presented-frame counter above cannot be
-           trusted to fire on any particular schedule: unchanged frames are
-           suppressed, and 70s of measured Tetris gameplay presented only 45
-           frames. Ghosting accumulates with time, so time is the backstop. */
+        /* Wall-clock ceiling: the presented-frame counter fires on no
+           particular schedule, because unchanged frames are suppressed -- 70 s
+           of measured Tetris presented only 45 frames. Ghosting accumulates
+           with time, so time is the backstop. */
         if (!due && cfg.cleanup_max_ms > 0) {
             uint64_t now = pf->now_us(pf->ctx);
             if (now - last_cleanup_us >= (uint64_t)cfg.cleanup_max_ms * 1000ull)
@@ -1984,18 +1674,15 @@ int main(int argc, char **argv)
             since_cleanup = 0;
             last_cleanup_us = pf->now_us(pf->ctx);
             cleanups++;
-            /* Scoped to the game rect, never the full panel: a full-panel flash
-               would disturb chrome that has no reason to change. */
+            /* Game rect, never the full panel: a full-panel flash would
+               disturb chrome that has no reason to change. */
             pf->refresh(pf->ctx, prof.game_x, prof.game_y, prof.game_w, prof.game_h,
                         KOBOY_REFRESH_FULL);
-            /* And charged, because the panel does not care which line of this
-               file asked. A cleanup is by definition a WHOLE-rect update, so
-               it costs the full settle; not charging it would let the next
-               presented frame land on top of the one update in the whole loop
-               that is guaranteed to be the most expensive. This overwrites the
-               charge the presented frame just made rather than adding to it --
-               the panel is doing one thing at a time and the flash is what it
-               is now doing. */
+            /* Charged: a cleanup is by definition a WHOLE-rect update, so it
+               costs the full settle, and not charging it would let the next
+               presented frame land on top of the most expensive update in the
+               loop. It OVERWRITES the presented frame's charge rather than
+               adding: the panel does one thing at a time. */
             pacer_presented(&pace, last_cleanup_us,
                             pacer_settle_us((uint32_t)cfg.settle_base_ms * 1000u,
                                             (uint32_t)cfg.settle_full_ms * 1000u,
@@ -2003,8 +1690,8 @@ int main(int argc, char **argv)
         }
 
 sram_check:
-        /* Periodic flush while dirty: e-readers get suspended and killed
-           unceremoniously, and sram_save is atomic so a kill mid-write is safe. */
+        /* Periodic flush: e-readers get suspended and killed unceremoniously,
+           and sram_save is atomic so a kill mid-write is safe. */
         if (sb.mem && sb.len && sb.writeback) {
             uint64_t now = pf->now_us(pf->ctx);
             if (now - last_sram_us > 10ull * 1000000ull) {
@@ -2013,20 +1700,16 @@ sram_check:
             }
         }
 
-        /* Take the screenshot plaque away again. Here, past the sram_check
-           label, because this is the one point EVERY path through the loop
-           body reaches: the early exits above (`goto sram_check` on a
-           suppressed present, on an unchanged frame) must not be able to
-           leave a confirmation stuck on the panel for the rest of the
-           session. Wall clock, not a frame count, for the same reason the
-           cleanup has a wall-clock ceiling -- a static screen presents almost
-           nothing and would keep the plaque up for minutes.
+        /* Take the plaque away again. PAST the sram_check label because that
+           is the one point EVERY path through the loop body reaches: the early
+           `goto sram_check` exits must not leave a confirmation stuck on the
+           panel for the rest of the session. Wall clock, not a frame count --
+           a static screen presents almost nothing and would keep it up for
+           minutes.
 
-           The erase re-renders the whole faceplate into `panel` and then
-           blits back ONLY the plaque's rectangle. That is exact by
-           construction -- whatever chrome had drawn under it returns byte for
-           byte, without this code knowing what it was -- and the panel update
-           stays the size of the plaque rather than the size of the screen. */
+           The erase re-renders the whole faceplate into `panel` and blits back
+           ONLY the plaque's rectangle: exact by construction, and the panel
+           update stays plaque-sized. */
         if (shot_note_until_us && pf->now_us(pf->ctx) >= shot_note_until_us) {
             shot_note_until_us = 0;
             memset(panel, 0xFF, (size_t)panel_stride * (size_t)ph);
@@ -2049,24 +1732,17 @@ sram_check:
 
     /* ------------------------------------------------------ session teardown
        EVERY way out of a session arrives here -- QUIT, a signal, should_quit,
-       the frame limit, and MENU -> CHOOSE ROM -- so there is exactly one copy
-       of this ordering and nothing can disagree with it.
+       the frame limit, MENU -> CHOOSE ROM -- so there is one copy of this
+       ordering. THE ORDER IS LOAD-BEARING:
 
-       THE ORDER IS THE WHOLE POINT, and two of the three steps are load-
-       bearing:
-
-         - The SRAM flush comes BEFORE core_close, because retro_unload_game
-           takes the buffer with it: sb.mem belongs to the core's cartridge
-           and is freed by the close. Flushing after would write freed memory
-           to the user's save file, or crash.
-         - sb is cleared right after, so a session that ends without ever
-           loading (a failed load coming round again) cannot leave a dangling
-           pointer for the NEXT trip's flush to find.
+         - The SRAM flush comes BEFORE core_close: retro_unload_game takes the
+           buffer with it, so flushing after writes freed memory to the user's
+           save file, or crashes.
+         - sb is cleared right after, so a session that ended without ever
+           loading cannot leave a dangling pointer for the NEXT trip's flush.
          - video and input are built from `prof`, which the next session
-           re-resolves for its own core. Reusing them across a system switch
-           is how a Mega Drive frame would land in a buffer sized for a Game
-           Boy; destroying them here is what makes the rebuild above
-           unconditional rather than something to remember. */
+           re-resolves. Reusing them across a system switch is how a Mega Drive
+           frame lands in a Game-Boy-sized buffer. */
     if (sb.mem && sb.len && sb.writeback) sram_save(sb.path, sb.mem, sb.len);
     core_close(core);
     core = NULL;
@@ -2081,16 +1757,15 @@ sram_check:
 
 session_end:
     /* `settle-held` is the run's only evidence that area pacing did anything:
-       a build where the hold never binds and a build without the hold at all
-       print the same presented= count, and differ only in this number. It is a
-       running total across every session in the process, like `presented`. */
+       a build where the hold never binds and one without the hold at all print
+       the same presented= count and differ only here. Running total across
+       every session, like `presented`. */
     say("koboy: %s, %lu presented frames, %lu settle-held, %lu game-rect cleanups, "
         "%lu large-area full refreshes, %lu rects emitted\n",
         koboy_stop ? "stopped by signal" : "stopped", presented,
         settle_held, cleanups, big_refreshes, rects_emitted);
-    /* Always printed, even under --quiet, for the same reason presented= is:
-       this is the run's evidence, and a run whose numbers were suppressed is a
-       run that has to be done again. */
+    /* Always printed, even under --quiet: this is the run's evidence, and a
+       run whose numbers were suppressed has to be done again. */
     {
         char line[256];
         stats_format(&stats, line, sizeof line);
@@ -2106,9 +1781,8 @@ session_end:
 #endif
     }
 
-    /* The core, the video pipeline and the input state were released by the
-       session teardown above -- every path to this label goes through it, or
-       (the "nothing chosen" gotos) never had them. */
+    /* The core, video and input were released by the session teardown above:
+       every path here goes through it, or never had them. */
     free(panel);
     pf->shutdown(pf->ctx);
     free(pf);
