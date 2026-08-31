@@ -30,7 +30,13 @@
  *   - the emulator screen (input.c's recompute) is LEVEL-triggered -- a held
  *     finger is a held button, so a contact that never falls is a button
  *     STUCK DOWN for the rest of the session.
- * A fix that only cleared the edge state would leave the second one broken. */
+ * A fix that only cleared the edge state would leave the second one broken.
+ *
+ * AND A THIRD THING, which is neither: the SECOND FINGER. Phoenix has no
+ * ABS_MT_SLOT and separates contacts with SYN_MT_REPORT, so until that was
+ * counted a second contact overwrote the first and there was no
+ * d-pad-plus-button -- a menu never needs two fingers and a platformer cannot
+ * do without them. Section 6. */
 #include "test.h"
 #include "config.h"
 #include "input.h"
@@ -83,10 +89,16 @@ static void b_press(koboy_input *in, int x, int y)
     };
     input_feed(in, ev, EVN(ev));
 }
+/* NAMES THE SLOT, unlike the minimal `TRACKING_ID -1` form the other touch
+   tests use: protocol B retires a contact BY SLOT and the cursor is sticky, so
+   after the two-finger block below has retired slot 1 a bare -1 would retire
+   slot 1 twice and leave the d-pad finger down forever. A real driver emits
+   the slot too whenever the cursor is not already there. */
 static void b_lift(koboy_input *in, int x, int y)
 {
     (void)x; (void)y;
     koboy_ev ev[] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,         0 },
         { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
         { KOBOY_EV_SYN, 0,                         0 },
     };
@@ -192,6 +204,71 @@ static void nonmt_lift(koboy_input *in, int x, int y)
         { KOBOY_EV_ABS, EV_ABS_PRESSURE,       0 },
         { KOBOY_EV_KEY, KOBOY_KEY_BTN_TOUCH,   0 },   /* the lift */
         { KOBOY_EV_SYN, 0,                     0 },
+    };
+    input_feed(in, ev, EVN(ev));
+}
+
+/* TWO FINGERS AT ONCE, which is what a game needs and a menu never does.
+   Phoenix has no ABS_MT_SLOT: it separates contacts with SYN_MT_REPORT, the
+   protocol-A way, so the packet below is the single-contact one twice over
+   inside one SYN_REPORT frame. BTN_TOUCH is sent once, in the first block --
+   it is out-of-band and says "something is touching", not "this contact is". */
+static void phoenix_press2(koboy_input *in, int x0, int y0, int x1, int y1)
+{
+    koboy_ev ev[] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 0 },
+        { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, x0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, y0 },
+        { KOBOY_EV_ABS, EV_ABS_PRESSURE,       1024 },
+        { KOBOY_EV_KEY, KOBOY_KEY_BTN_TOUCH,      1 },
+        { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, x1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, y1 },
+        { KOBOY_EV_ABS, EV_ABS_PRESSURE,       1024 },
+        { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+        { KOBOY_EV_SYN, 0,                        0 },
+    };
+    input_feed(in, ev, EVN(ev));
+}
+
+/* The SECOND finger leaving, in each protocol's own idiom -- and they are
+   genuinely different, not two spellings of one thing. Protocol A has no
+   contact identity: a frame lists what is touching NOW, so dropping a block is
+   the whole message. Protocol B has identity, and a contact stays down until
+   its slot is explicitly retired, so a frame that simply omits it means
+   "unchanged", not "gone". A test that used one form for both would be
+   asserting the wrong protocol at one of them. */
+static void phoenix_lift_second(koboy_input *in, int x0, int y0)
+{
+    phoenix_press(in, x0, y0);          /* a one-block frame: only this remains */
+}
+static void b_lift_second(koboy_input *in, int x0, int y0)
+{
+    (void)x0; (void)y0;
+    koboy_ev ev[] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, -1 },
+        { KOBOY_EV_SYN, 0,                         0 },
+    };
+    input_feed(in, ev, EVN(ev));
+}
+
+/* Protocol B's equivalent, as the control. */
+static void b_press2(koboy_input *in, int x0, int y0, int x1, int y1)
+{
+    koboy_ev ev[] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, x0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, y0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 2 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, x1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, y1 },
+        { KOBOY_EV_SYN, 0,                        0 },
     };
     input_feed(in, ev, EVN(ev));
 }
@@ -482,6 +559,133 @@ TEST_MAIN({
         input_feed(in, all_up, EVN(all_up));
         CHECK(!input_state(in)->touch[0].down);
         CHECK(!input_state(in)->touch[1].down);
+
+        input_destroy(in);
+    }
+
+    /* ------------------------- 6. two fingers, which is what a GAME needs
+       A menu never wants more than one contact; the DMG faceplate wants a
+       thumb on the d-pad and a thumb on A at the same moment, and without it
+       nothing with a jump button is playable. Phoenix has no ABS_MT_SLOT, so
+       koboy's slot cursor never moved and the second contact landed on top of
+       the first -- the position would alternate between the pad and the
+       button every frame. `docs/FOLLOWUPS.md` #113.
+
+       ASSERTED AS THE PLAYER'S PROPERTY, not as slot bookkeeping: a direction
+       bit and the A bit set at the same time. Slot bookkeeping is checked too,
+       but on its own it would pass a decode that tracked both contacts and
+       then let dpad_bits claim the wrong one. */
+    {
+        int acx = c.layout.a_cx * PW / 1000, acy = c.layout.a_cy * PH / 1000;
+        int dcx = c.layout.dpad_cx * PW / 1000, dcy = c.layout.dpad_cy * PH / 1000;
+        int dr  = c.layout.dpad_r * PW / 1000;
+        /* Steer RIGHT: inside the pad, past the deadzone, and still on the
+           panel. All three CHECKed -- a probe that fell outside the pad would
+           synthesise no direction and the whole block would pass vacuously. */
+        int steer_x = dcx + dr / 2, steer_y = dcy;
+        CHECK(dr / 2 > c.dpad_deadzone);
+        CHECK(steer_x < PW && steer_x > dcx);
+        CHECK(acx != steer_x || acy != steer_y);
+
+        struct { const char *name;
+                 void (*press2)(koboy_input *, int, int, int, int);
+                 touch_fn lift_second, lift; } two[] = {
+            { "protocol B", b_press2,       b_lift_second,       b_lift       },
+            { "Phoenix",    phoenix_press2, phoenix_lift_second, phoenix_lift },
+        };
+
+        for (size_t f = 0; f < sizeof two / sizeof *two; f++) {
+            koboy_input *in = fresh(&c, &prof);
+
+            two[f].press2(in, steer_x, steer_y, acx, acy);
+
+            /* Both contacts are tracked, each at its OWN place. */
+            CHECK(input_state(in)->touch[0].down);
+            CHECK(input_state(in)->touch[1].down);
+            CHECK_EQ_INT(input_state(in)->touch[0].x, steer_x);
+            CHECK_EQ_INT(input_state(in)->touch[0].y, steer_y);
+            CHECK_EQ_INT(input_state(in)->touch[1].x, acx);
+            CHECK_EQ_INT(input_state(in)->touch[1].y, acy);
+
+            /* And the thing a player actually needs. */
+            uint16_t b = input_state(in)->buttons;
+            if (!(b & KOBOY_BTN_A) || !(b & KOBOY_BTN_RIGHT))
+                fprintf(stderr, "  [%s] d-pad + A together: A=%d RIGHT=%d\n",
+                        two[f].name, (b & KOBOY_BTN_A) != 0,
+                        (b & KOBOY_BTN_RIGHT) != 0);
+            CHECK(b & KOBOY_BTN_A);
+            CHECK(b & KOBOY_BTN_RIGHT);
+
+            /* One finger leaves and the other keeps working: a frame that
+               reports FEWER contacts retires the ones it no longer mentions.
+               Protocol A re-indexes what is left from 0, so the survivor moves
+               to slot 0 -- which is why `dpad_mode = cross` is the shipped
+               default and this still steers. */
+            two[f].lift_second(in, steer_x, steer_y);
+            CHECK(input_state(in)->buttons & KOBOY_BTN_RIGHT);
+            CHECK_EQ_INT(input_state(in)->buttons & KOBOY_BTN_A, 0);
+
+            two[f].lift(in, steer_x, steer_y);
+            CHECK_EQ_INT(input_state(in)->buttons & (KOBOY_BTN_A | KOBOY_BTN_RIGHT), 0);
+            CHECK(!input_state(in)->touch[0].down);
+            CHECK(!input_state(in)->touch[1].down);
+
+            input_destroy(in);
+        }
+    }
+
+    /* ---------------------- 7. protocol A's own way of saying "all up"
+       An EMPTY block -- SYN_MT_REPORT with no contact data in front of it --
+       is how protocol A reports that nothing is touching. It must not be
+       counted as a contact, and it must retire the ones that were. Phoenix
+       also has BTN_TOUCH for this, so nothing above would notice if the empty
+       block were mishandled; this is the check that does. */
+    {
+        koboy_input *in = fresh(&c, &prof);
+        phoenix_press(in, 300, 400);
+        CHECK(input_state(in)->touch[0].down);
+
+        koboy_ev empty[] = {
+            { KOBOY_EV_SYN, EV_SYN_MT_REPORT, 0 },
+            { KOBOY_EV_SYN, 0,                0 },
+        };
+        input_feed(in, empty, EVN(empty));
+        CHECK(!input_state(in)->touch[0].down);
+
+        input_destroy(in);
+    }
+
+    /* ------------------------------- 8. a panel that speaks BOTH dialects
+       The protocol-A cursor is gated on "this panel has never named a slot",
+       and that gate is the only thing standing between the two schemes. Some
+       drivers emit a trailing SYN_MT_REPORT out of habit while still doing
+       real protocol-B slot bookkeeping; if the cursor believed it, it would
+       count contacts the slots had already placed and the two would fight.
+       ABS_MT_SLOT WINS -- it is an explicit statement and SYN_MT_REPORT is an
+       inference. Nothing else in this file would notice the gate going. */
+    {
+        koboy_input *in = fresh(&c, &prof);
+        koboy_ev hybrid[] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        1 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 7 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 400 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 500 },
+            { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },   /* the habit */
+            { KOBOY_EV_SYN, 0,                        0 },
+        };
+        input_feed(in, hybrid, EVN(hybrid));
+
+        /* The contact is where the SLOT said, and slot 0 was never touched. */
+        CHECK(input_state(in)->touch[1].down);
+        CHECK_EQ_INT(input_state(in)->touch[1].x, 400);
+        CHECK_EQ_INT(input_state(in)->touch[1].y, 500);
+        CHECK(!input_state(in)->touch[0].down);
+
+        /* And the frame end did not retire it as an "unmentioned" contact:
+           protocol B keeps a contact until its slot is retired. */
+        koboy_ev nothing[] = { { KOBOY_EV_SYN, 0, 0 } };
+        input_feed(in, nothing, EVN(nothing));
+        CHECK(input_state(in)->touch[1].down);
 
         input_destroy(in);
     }

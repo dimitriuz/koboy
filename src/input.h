@@ -11,6 +11,14 @@ typedef struct { uint16_t type, code; int32_t value; } koboy_ev;
 #define KOBOY_EV_KEY 0x01
 #define KOBOY_EV_ABS 0x03
 
+/* The two EV_SYN codes that mean different things. SYN_REPORT (0) ends a
+   FRAME; SYN_MT_REPORT (2) ends one CONTACT inside a protocol-A frame, and is
+   the only thing that separates two fingers on a panel with no ABS_MT_SLOT.
+   input.c decoded every EV_SYN as a frame boundary until it had to tell a
+   second finger from the first. */
+#define KOBOY_SYN_REPORT    0x00
+#define KOBOY_SYN_MT_REPORT 0x02
+
 #define KOBOY_ABS_MT_SLOT        0x2f
 #define KOBOY_ABS_MT_POSITION_X  0x35
 #define KOBOY_ABS_MT_POSITION_Y  0x36

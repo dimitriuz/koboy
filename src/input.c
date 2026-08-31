@@ -20,6 +20,16 @@ struct koboy_input {
        single-touch ABS_X/ABS_Y position axes -- see input_feed_from. Latched,
        never cleared: a panel does not change protocol mid-session. */
     bool saw_mt;
+    /* ...and whether it has ever named a SLOT, which is the same latch one
+       level finer: a panel that does is protocol B and owns `slot` itself, so
+       the protocol-A contact cursor below must keep its hands off. */
+    bool saw_slot;
+    /* PROTOCOL-A FRAME STATE, all three reset at every SYN_REPORT. A panel
+       with no ABS_MT_SLOT separates contacts with SYN_MT_REPORT instead, so
+       the cursor has to be counted rather than read. */
+    int  mt_reports;      /* SYN_MT_REPORTs this frame, empty blocks included */
+    int  mt_contacts;     /* how many of them carried an actual position */
+    bool mt_block_data;   /* has the block now being read carried one yet */
 
     bool     pad_active;
     int      pad_slot, pad_ox, pad_oy;
@@ -388,12 +398,11 @@ static void all_contacts_up(koboy_input *in)
  * the rest of the session. github issue #1, reported on an Aura H2O.
  * tests/test_input_protocols.c replays all four streams.
  *
- * WHAT THIS DOES NOT FIX: `in->slot` is advanced by ABS_MT_SLOT alone, and the
- * Phoenix packet has none -- it separates contacts with SYN_MT_REPORT, which
- * this loop treats as an ordinary recompute boundary. So those panels track ONE
- * finger, and d-pad-plus-button is not available on them. `docs/FOLLOWUPS.md`
- * #108 has the two candidate demuxes and why neither should be guessed at
- * without a capture.
+ * THE SECOND FINGER is the other half, and a game needs it: `in->slot` is
+ * advanced by ABS_MT_SLOT, which the Phoenix packet does not contain -- it
+ * separates contacts with SYN_MT_REPORT, the protocol-A way. Until that was
+ * counted, a second contact landed on top of the first and d-pad-plus-button
+ * was impossible. See the SYN branch below.
  *
  * WHY BTN_TOUCH AND NOT THE PRESSURE AXES. FBInk's own reader also treats
  * ABS_PRESSURE / ABS_MT_PRESSURE / ABS_MT_WIDTH_MAJOR going to zero as a lift,
@@ -422,8 +431,39 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
             continue;
         }
         if (e->type == KOBOY_EV_SYN) {
-            /* One recompute per SYN, not per event: a protocol B packet is
-               only coherent at the SYN boundary. */
+            /* SYN_MT_REPORT ends a CONTACT, not a frame. On a panel with no
+               ABS_MT_SLOT it is the only thing separating two fingers, so it
+               advances the cursor -- and does NOT recompute, because a frame
+               is only coherent once every contact in it has been read.
+               An EMPTY block (no position in front of it) is protocol A's way
+               of saying "nothing is touching" and must not be counted as a
+               contact, or the all-up frame would read as one finger down. */
+            if (src == KOBOY_EV_SRC_TOUCH && !in->saw_slot &&
+                e->code == KOBOY_SYN_MT_REPORT) {
+                in->mt_reports++;
+                if (in->mt_block_data) {
+                    in->mt_contacts++;
+                    in->slot = in->mt_contacts < KOBOY_MAX_TOUCH
+                             ? in->mt_contacts : KOBOY_MAX_TOUCH - 1;
+                }
+                in->mt_block_data = false;
+                continue;
+            }
+            /* A protocol-A frame LISTS WHAT IS TOUCHING NOW, so a contact it
+               does not mention is gone -- there is no per-slot retirement
+               event to wait for, and waiting for one is what left a lifted
+               finger down. Protocol B is the opposite (an omitted slot means
+               "unchanged"), which is why this runs only for a frame that
+               actually carried a SYN_MT_REPORT. */
+            if (in->mt_reports > 0) {
+                for (int s = in->mt_contacts; s < KOBOY_MAX_TOUCH; s++)
+                    in->st.touch[s].down = false;
+                in->slot = 0;
+            }
+            in->mt_reports = in->mt_contacts = 0;
+            in->mt_block_data = false;
+            /* One recompute per FRAME, not per event: a packet is only
+               coherent at the SYN_REPORT boundary. */
             recompute(in);
             continue;
         }
@@ -468,7 +508,7 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
             if (src != KOBOY_EV_SRC_TOUCH || in->saw_mt) break;
             in->raw_y[in->slot] = e->value; apply_transform(in, in->slot); break;
         case KOBOY_ABS_MT_SLOT:
-            in->saw_mt = true;
+            in->saw_mt = in->saw_slot = true;
             if (e->value >= 0 && e->value < KOBOY_MAX_TOUCH) in->slot = e->value;
             break;
         case KOBOY_ABS_MT_TRACKING_ID:
@@ -479,11 +519,13 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
                is the other half. See input_feed_from's header. */
             in->st.touch[in->slot].down = (e->value >= 0);
             break;
+        /* A POSITION is what makes a protocol-A block a contact rather than
+           the empty terminator -- see the SYN_MT_REPORT branch. */
         case KOBOY_ABS_MT_POSITION_X:
-            in->saw_mt = true;
+            in->saw_mt = in->mt_block_data = true;
             in->raw_x[in->slot] = e->value; apply_transform(in, in->slot); break;
         case KOBOY_ABS_MT_POSITION_Y:
-            in->saw_mt = true;
+            in->saw_mt = in->mt_block_data = true;
             in->raw_y[in->slot] = e->value; apply_transform(in, in->slot); break;
         default: break;
         }
