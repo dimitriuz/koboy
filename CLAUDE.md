@@ -380,6 +380,8 @@ record, not a to-do list.
 | `INTERNALS.md` | The architecture and the measured decisions, for someone reading the source. "What the hardware overruled" below, expanded for an audience that was not in the room. |
 | `LICENSES.md` | koboy is GPL-3 (`LICENSE`). Per-core terms, with pinned commits. **Three cores restrict commercial use** -- Genesis Plus GX, FBNeo, and snes9x2005, whose clause is 160 lines below an MIT grant. |
 | `scripts/pins.txt` | The upstream commit of every shipped dependency. |
+| `VERSION` | The release number, and the ONLY place it is written. Three things read this file -- the Makefile, `tests/test_dist.sh` and `release.yml`'s tag gate -- so a release is one edit. It was a `VERSION :=` line in the middle of the Makefile and the other two each parsed it back out with their own awk. |
+| `.github/RELEASE-NOTES.md` | The body of the NEXT GitHub release, passed to `gh release create --notes-file`. Rewrite its top half before tagging; `release.yml` refuses a tag whose version the file does not mention, because stale notes fail silently and mislead the only person reading them. |
 | `.github/workflows/` | `ci.yml` on push (host only, no toolchain); `release.yml` on a `v*` tag (cores as a matrix, cached per pinned SHA). |
 
 ## What the hardware overruled — do not re-derive these

@@ -74,10 +74,12 @@ if [ -z "$1" ] && [ -z "$SKIPPED" ]; then
     # because that old zip was ALSO a complete build; the day it is not, this
     # reports a package nobody has.
     #
-    # Same awk as .github/workflows/release.yml's tag check, deliberately:
-    # one way to read VERSION out of the Makefile.
-    V=$(awk -F':=' '/^VERSION[[:space:]]*:=/ { gsub(/[[:space:]]/,"",$2); print $2 }' Makefile)
-    [ -n "$V" ] || { echo "FAIL: no VERSION in the Makefile"; exit 1; }
+    # ./VERSION, the one place the release number lives -- the same file the
+    # Makefile and release.yml's tag gate read. It used to be an awk one-liner
+    # against `VERSION :=` in the Makefile, copied here and into the workflow,
+    # which is three parsers for a five-character string.
+    V=$(tr -d '[:space:]' < VERSION 2>/dev/null)
+    [ -n "$V" ] || { echo "FAIL: cannot read ./VERSION"; exit 1; }
     Z="dist/koboy-$V.zip"
     [ -f "$Z" ] || { echo "FAIL: make dist produced no $Z"; exit 1; }
 

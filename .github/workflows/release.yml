@@ -92,18 +92,39 @@ jobs:
       - uses: actions/checkout@v4
       - id: v
         run: |
-          mk=$(awk -F':=' '/^VERSION[[:space:]]*:=/ { gsub(/[[:space:]]/,"",$2); print $2 }' Makefile)
-          [ -n "$mk" ] || { echo "FAIL: no VERSION in the Makefile"; exit 1; }
+          mk=$(tr -d '[:space:]' < VERSION 2>/dev/null)
+          [ -n "$mk" ] || { echo "FAIL: cannot read ./VERSION"; exit 1; }
           tag="${GITHUB_REF#refs/tags/}"
           if [ "$GITHUB_REF" = "$tag" ]; then
-            echo "not a tag build (workflow_dispatch); using the Makefile's $mk"
+            echo "not a tag build (workflow_dispatch); using ./VERSION's $mk"
           elif [ "v$mk" != "$tag" ]; then
-            echo "FAIL: tag $tag does not match the Makefile's VERSION ($mk)."
-            echo "      Bump VERSION in the Makefile, or retag as v$mk."
+            echo "FAIL: tag $tag does not match ./VERSION ($mk)."
+            echo "      Bump ./VERSION, or retag as v$mk."
             exit 1
           fi
           echo "version=$mk" >> "$GITHUB_OUTPUT"
           echo "building koboy $mk"
+
+      # THE NOTES GO STALE SILENTLY, which is the whole reason for this step.
+      # .github/RELEASE-NOTES.md is the release body; it is about ONE release
+      # and nothing about publishing it a second time fails. So the previous
+      # release's story would ship attached to this release's archive, and the
+      # only person who would notice is the reader it misinforms. Requiring the
+      # file to NAME the version being built means the notes cannot be left
+      # untouched -- the same gate as the tag-versus-VERSION check above, for
+      # the same reason.
+      - name: The release notes are about THIS release
+        run: |
+          f=.github/RELEASE-NOTES.md
+          v="${{ steps.v.outputs.version }}"
+          [ -s "$f" ] || { echo "FAIL: $f is missing or empty"; exit 1; }
+          grep -qF "$v" "$f" || {
+            echo "FAIL: $f never mentions $v, so it is last release's notes."
+            echo "      Rewrite its top half for $v before tagging; the"
+            echo "      Installing section below it is boilerplate."
+            exit 1
+          }
+          echo "notes name $v"
 
   # ----------------------------------------------------------- toolchain
   # Primes the shared cache. See note 3 in the header for why this is a job
@@ -374,6 +395,13 @@ jobs:
       # repository's supply chain, and this project's whole position on
       # dependencies is that fewer is better.
       #
+      # The body comes from .github/RELEASE-NOTES.md, a FILE IN THE REPOSITORY
+      # rather than a heredoc in this workflow. It used to be inline, which made
+      # the notes generic by construction: editing them meant editing CI, so
+      # nobody did, and every release shipped the same install instructions and
+      # never said what had changed. The check job refuses a tag whose version
+      # that file does not mention.
+      #
       # Skipped for a workflow_dispatch run, which is a dry run by design --
       # the archives are still uploaded as artifacts above, so you can check a
       # build without publishing anything.
@@ -385,28 +413,6 @@ jobs:
           v="${{ needs.check.outputs.version }}"
           gh release create "${GITHUB_REF#refs/tags/}" \
             --title "koboy $v" \
-            --notes-file - \
+            --notes-file .github/RELEASE-NOTES.md \
             "dist/koboy-$v.zip#koboy $v (all fifteen systems)" \
-            "dist/koboy-probe-$v.zip#koboy-probe $v (device profiler only)" <<'NOTES'
-          Unzip the koboy archive below at the root of the drive your Kobo
-          shows up as over USB, put ROMs in `.adds/koboy/roms/`, and launch
-          from NickelMenu.
-
-          **The archive looks almost empty until you extract it.** Everything
-          lives in `.adds`, and the leading dot hides it from Linux file
-          managers, Finder and Explorer -- that is where Kobo add-ons go, and
-          your extractor creates it for you. README.md has the rest, including the screen
-          settings -- try `MENU -> MOTION` first, it is the one that stops
-          moving sprites smearing.
-
-          The probe archive is the device profiler on its own, for
-          characterising a Kobo nobody has tried without installing the
-          emulator. See TESTED.md's "How to add a row".
-
-          One archive, ~18.6 MB. 13.6 MB of that is the arcade core; delete
-          `.adds/koboy/fbneo_libretro.so` if you have no arcade romset.
-
-          Verified on a Kobo Libra 2 and nowhere else. Every core is built
-          from source at the commit `scripts/pins.txt` records. koboy is
-          GPL-3; see LICENSES.md for each core's own terms.
-          NOTES
+            "dist/koboy-probe-$v.zip#koboy-probe $v (device profiler only)"

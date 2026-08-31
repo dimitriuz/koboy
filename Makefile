@@ -1,5 +1,19 @@
 CC      ?= cc
 CFLAGS  ?= -std=c11 -O2 -g -Wall -Wextra -Wno-unused-parameter
+# THE RELEASE NUMBER LIVES IN ./VERSION and not in this file. Three things read
+# it -- this Makefile, tests/test_dist.sh and .github/workflows/release.yml's
+# tag gate -- and it used to be a `VERSION :=` line buried three hundred lines
+# down in the packaging section, so the other two each carried their own copy of
+# an awk one-liner to dig it back out of make syntax. A bare file is the only
+# format all three read without a parser.
+#
+# HARD ERROR rather than an empty default, and the reason is the failure it
+# replaces: an unset VERSION packages `dist/koboy-.zip`, which builds, uploads
+# and installs perfectly well and is named after nothing.
+VERSION := $(strip $(shell cat VERSION 2>/dev/null))
+ifeq ($(VERSION),)
+$(error cannot read ./VERSION, the one place the release number lives)
+endif
 INC     := -Isrc -Itests
 TESTSRC := $(wildcard tests/test_*.c)
 TESTBIN := $(patsubst tests/%.c,build/%,$(TESTSRC))
@@ -344,7 +358,6 @@ core-fbneo: $(CORE_FBNEO_SO)
 # no KoboRoot.tgz, nothing under /usr, nothing the firmware updater will notice.
 # Everything it writes lives in .adds/koboy/, so uninstalling is `rm -rf` of one
 # directory and a bad build cannot brick anything.
-VERSION := 0.5.3
 
 dist: kobo $(CORE_SO) $(CORE_GW_SO) $(CORE_NES_SO) $(CORE_PM_SO) $(CORE_WS_SO) $(CORE_NGP_SO) \
       $(CORE_A26_SO) $(CORE_COL_SO) $(CORE_INT_SO) $(CORE_SMS_SO) \
