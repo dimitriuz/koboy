@@ -762,6 +762,70 @@ TEST_MAIN({
                          BROWSE_ERR_EMPTY);
         }
 
+        /* A rom_dir whose ROMs are ALL in subfolders must NOT read as empty.
+           This is the shape a sorted collection actually has -- roms/gb,
+           roms/NES, roms/MegaDrive, nothing loose in the root -- and it is
+           the case an owner hit and reported: 421 ROMs in seventeen folders,
+           and the browser said "no games in". screen_browser answers on
+           rl.count (ROWS) and not rl.roms (loadable FILES) precisely so a
+           folder row keeps the browser open, and nothing tested it: the
+           checks above use a flat directory, where the two are the same
+           number.
+           MUTANT: `rl.count` -> `rl.roms` at the empty arm in screens.c --
+           BROWSE_NONE becomes BROWSE_ERR_EMPTY and this goes red. */
+        {
+            char sd[] = "/tmp/koboy_screens_subonly_XXXXXX";
+            CHECK(mkdtemp(sd) != NULL);
+            char inner[600];
+            snprintf(inner, sizeof inner, "%s/GB Games", sd);
+            CHECK_EQ_INT(mkdir(inner, 0777), 0);
+            touch_file(inner, "TETRIS.gb");
+
+            /* The root really does hold no loadable file: a ROM row here
+               would make the check below pass for the wrong reason. */
+            CHECK(browser_row_of_kind(sd, ROMLIST_DIR) >= 0);
+            CHECK_EQ_INT(browser_row_of_kind(sd, ROMLIST_ROM), -1);
+
+            /* Selecting nothing: the browser OPENED and was backed out of,
+               which is a different answer from "there is nothing here". */
+            {
+                int si = 0;
+                koboy_input_state script[1] = { lift() };
+                CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
+                                            sd, out, sizeof out, script, &si, 1),
+                             BROWSE_NONE);
+            }
+
+            /* And the ROM inside is reachable: tap the folder, tap the file.
+               Both rows come from romlist -- the second from a listing taken
+               AFTER the descent, so the ".." row it adds is counted rather
+               than assumed. */
+            int drow = browser_row_of_kind(sd, ROMLIST_DIR);
+            int frow = -1;
+            {
+                koboy_romlist rl;
+                memset(&rl, 0, sizeof rl);
+                CHECK(romlist_scan(&rl, sd) > 0);
+                CHECK(romlist_enter(&rl, drow) > 0);
+                for (int i = 0; i < rl.count && frow < 0; i++)
+                    if (romlist_kind(&rl, i) == ROMLIST_ROM) frow = i;
+                romlist_free(&rl);
+            }
+            CHECK(frow >= 0);
+            {
+                int si = 0;
+                koboy_input_state script[2] = { tap_at(PW / 2, row_cy(drow)),
+                                                tap_at(PW / 2, row_cy(frow)) };
+                memset(out, 0, sizeof out);
+                CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
+                                            sd, out, sizeof out, script, &si, 2),
+                             BROWSE_PICKED);
+                char want[700];
+                snprintf(want, sizeof want, "%s/TETRIS.gb", inner);
+                CHECK(strcmp(out, want) == 0);
+            }
+        }
+
         /* Now put ROMs in it. The row indices come from romlist itself: the
            sort order is romlist.c's business, and a hardcoded row would be
            asserting the sort rather than the browser. */
