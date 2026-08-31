@@ -45,7 +45,7 @@ up -- loading, geometry, pacing and speed, and nothing a finger does. See
 ## Build and test
 
 ```sh
-make test        # host suite: 29 binaries, 6244 checks. Runs on x86_64.
+make test        # host suite: 30 binaries, 6361 checks. Runs on x86_64.
 make lint        # clang -Werror -fsyntax-only over src/ AND tests/. A SECOND
                  # front end: `make test` is gcc, and clang carries classes
                  # gcc has no equivalent for. Green on the tree; CI gates on
@@ -110,7 +110,18 @@ src/video.c           RGB565->gray LUT (five selectable mappings, koboy_gray_map
                       (thresholds are the matrix SCALED to 0..254, or pure
                       white speckles one pixel per 16x16 tile -- g_thresh),
                       8x8-tile dirty rects
-src/input.c           protocol-B multitouch decode, axis transpose, d-pad modes
+src/input.c           evdev touch decode, axis transpose, d-pad modes. FOUR
+                      Kobo touch protocols, not one -- see input_feed_from's
+                      header. The LIFT is the whole difficulty: protocol B
+                      retires a contact with ABS_MT_TRACKING_ID == -1, and the
+                      other three families NEVER SEND THAT (Phoenix keeps the
+                      id, Snow repeats it, the pre-multitouch panels have no id
+                      at all), so BTN_TOUCH == 0 is the other half. Reading
+                      only the id was github issue #1: one tap per
+                      koboy_input object worked and every tap after it was
+                      dead. input_feed takes a SOURCE because ABS_X/ABS_Y are a
+                      finger on the touchscreen and an analog stick on a
+                      gamepad
 src/chrome.c          the procedural faceplate drawn around the game rect
 src/config.c          ini load/save, profile resolution, path resolution
 src/core.c            dlopen + retro_* symbol binding

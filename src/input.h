@@ -16,6 +16,13 @@ typedef struct { uint16_t type, code; int32_t value; } koboy_ev;
 #define KOBOY_ABS_MT_POSITION_Y  0x36
 #define KOBOY_ABS_MT_TRACKING_ID 0x39
 
+/* The SINGLE-touch position axes, which the pre-multitouch Kobos (Touch A/B/C,
+   Mini, Glo, Aura HD) report instead of the ABS_MT_ pair above. THE SAME TWO
+   CODES ARE A GAMEPAD'S ANALOG STICK, which is why input_feed takes a source
+   and only honours them on KOBOY_EV_SRC_TOUCH -- see input.c. */
+#define KOBOY_ABS_X              0x00
+#define KOBOY_ABS_Y              0x01
+
 /* The d-pad on a Bluetooth gamepad. MEASURED on a real Xbox Wireless
    Controller, 2026-08-26: it does NOT arrive as EV_KEY like the page-turn
    buttons -- it is a HAT SWITCH, two absolute axes each taking exactly
@@ -44,6 +51,19 @@ void         input_destroy(koboy_input *in);
 void         input_set_pointer_rect(koboy_input *in, int x, int y, int w, int h);
 void         input_set_touch_transform(koboy_input *in, int raw_max_x, int raw_max_y,
                                        bool transpose, bool flip_x, bool flip_y);
+/* WHICH NODE a batch of events came off, because two codes mean different
+   things on different nodes and there is no way to tell from the event: a
+   touchscreen's ABS_X/ABS_Y are a finger's position, a gamepad's are the analog
+   stick, and BTN_TOUCH is a contact flag on the one and nothing at all on the
+   other. The KEY nodes and a gamepad share KOBOY_EV_SRC_BUTTONS: neither
+   carries touch, which is the only distinction the decode makes. */
+typedef enum { KOBOY_EV_SRC_TOUCH = 0, KOBOY_EV_SRC_BUTTONS } koboy_ev_source;
+
+void         input_feed_from(koboy_input *in, koboy_ev_source src,
+                             const koboy_ev *evs, size_t n);
+/* == input_feed_from(in, KOBOY_EV_SRC_TOUCH, ...). The touchscreen spelling is
+   the bare one because it is what every caller but platform_kobo.c's key and
+   gamepad nodes means; a NEW node kind must pick its source explicitly. */
 void         input_feed(koboy_input *in, const koboy_ev *evs, size_t n);
 void         input_feed_key(koboy_input *in, uint16_t code, bool pressed);
 const koboy_input_state *input_state(const koboy_input *in);

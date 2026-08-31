@@ -665,6 +665,100 @@ rect. A seventh system needing three would need somewhere to put the third,
 not just a bigger number. Recorded so nobody raises the constant and
 discovers that at render time.
 
+### 106. Three of the four touch protocols have never touched a real panel
+
+github issue #1 (a Kobo Aura H2O) found koboy unable to see a finger LEAVE the
+screen on every Kobo that does not retire its `ABS_MT_TRACKING_ID`. The fix
+(`input_feed_from`, `tests/test_input_protocols.c`) reads `BTN_TOUCH == 0` as
+the lift and decodes `ABS_X`/`ABS_Y` for the pre-multitouch panels, and it is
+verified **only against recorded event streams on the host**. Nobody here owns
+a Phoenix, Snow or non-MT device.
+
+The streams themselves come from FBInk's `generate_button_press()`, which is an
+INJECTOR -- what FBInk sends to fake a tap the local driver will accept -- and
+not a capture of a real driver. It is the best evidence available and it is not
+the same thing, and FBInk hedges on the Mk7/Snow family in its own comments.
+What would settle it is a `hexdump`/`evtest` capture from one of these panels.
+The families, and what each is believed to send, are tabulated in
+`input_feed_from`'s header.
+
+IT ALSO CHANGES ONE THING ON THE VERIFIED DEVICE, which is worth stating
+plainly because everything else here is about panels nobody has: `BTN_TOUCH ==
+0` now clears every contact, and the Libra 2 presumably sends it. That is inert
+if FBInk's contract holds ("you won't get an EV_KEY:BTN_TOUCH:0 until *all*
+contact points have been lifted") -- the protocol-B lift arrives in the same
+packet and says the same thing. If some driver fired it on the FIRST of two
+fingers instead, a d-pad finger would be dropped when the A finger lifted.
+Taken on the evidence that FBInk's own reader and KOReader both apply
+`BTN_TOUCH` unconditionally on these devices, so a violation would already be
+breaking them. Not measured here, and the two-finger case is what to look at
+first if Game Boy input ever regresses.
+
+TWO THINGS THE FIX DOES NOT ADDRESS, both of which would look identical to the
+reporter and neither of which the host can see:
+
+- **Where the taps LAND.** `touch_axes` derives transposition from
+  `mx > my` and FBInk records no touch-mirror quirk for dahlia, so koboy
+  believes the H2O's touch layer is panel-oriented and unmirrored. Nothing has
+  checked that. A wrong transform is a separate defect with the same symptom
+  ("tapping does nothing"), and the `koboy: touch ... raw WxH transpose=N` log
+  line is what tells them apart.
+- **What "the program locks up on QUIT" was.** MAIN MENU -> QUIT and a power
+  press leave through the SAME return, so the likeliest reading is that QUIT
+  worked and the reporter was watching `koboy.sh`'s Nickel restart with
+  koboy's last frame frozen on the panel. Unconfirmed: their log would say
+  (`no rom chosen, exiting`, `koboy exited rc=0`, `restore: done`). Filed
+  rather than fixed because it may not be a defect at all.
+
+### 108. Phoenix and non-MT panels can only track ONE finger, so no d-pad + button
+
+Separate from #106 and worse for a player, because it survives that fix.
+`in->slot` is advanced by `ABS_MT_SLOT` and by nothing else, and the Phoenix
+packet has no `ABS_MT_SLOT` in it -- it separates contacts with
+`SYN_MT_REPORT`, the protocol-A way, which koboy treats as just another
+recompute boundary. A second finger therefore lands in slot 0 on top of the
+first.
+
+The consequence is not a lost tap, it is UNPLAYABILITY: the DMG faceplate wants
+a thumb on the d-pad and a thumb on A at the same time, and on these panels
+slot 0's position would alternate between the two every packet. `dpad_bits`
+claims slot 0 while it is inside the pad circle and then reads the A button's
+coordinates as an enormous stick deflection. The pre-multitouch panels are the
+same story for a simpler reason -- one contact is all they have, and that one is
+a hardware limit rather than a decode gap.
+
+INFERRED, NOT CAPTURED, and the distinction matters before anyone writes the
+fix: what is certain is that koboy has no protocol-A contact demux and that the
+Phoenix stream carries `SYN_MT_REPORT` and no `ABS_MT_SLOT`. What a real
+multi-contact Phoenix packet looks like is not in evidence here -- FBInk's
+injector only ever synthesises ONE contact, so it cannot show the shape. The
+two candidate demuxes differ in exactly the way that matters:
+
+- **count `SYN_MT_REPORT` within a packet** as the contact index, reset at
+  `SYN_REPORT`. The textbook protocol-A reading, and it does not care what the
+  ids are.
+- **use the `ABS_MT_TRACKING_ID` VALUE as the slot.** Cheaper, and wrong the
+  moment a driver hands out incrementing ids rather than small stable ones --
+  which would index past `KOBOY_MAX_TOUCH`.
+
+Do not guess between them from here. A `hexdump`/`evtest` capture of two
+fingers on one of these panels picks one in a second, and until there is one,
+single-touch is what these devices get.
+
+### 107. A touch-only Kobo cannot back out of the ROM browser
+
+The browser has no cancel row on purpose -- it is reached only by deliberate
+choice, and `..` goes UP rather than out. That reasoning assumed the page-turn
+buttons, which `ui_list_feed` takes as page-prev/next. A Kobo Aura H2O has no
+buttons but power, so once ALL GAMES is open the only ways out are picking a
+ROM or holding power; there is no route back to the MAIN MENU and therefore
+none to QUIT. Found by reading issue #1, not reported as such -- the reporter
+could not get that far because of #106.
+
+Cheap if it matters: the RECENT picker already carries a trailing BACK row for
+exactly this reason (`screen_recent_picker` says so), and the browser could
+grow one at the root level only, where `..` has nothing to do.
+
 ## Saves, save states, and staying alive
 
 ### 84. One file in the collection crashes the process, and no floor can stop it
