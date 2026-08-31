@@ -10,6 +10,7 @@
 #include "state.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
 
@@ -248,6 +249,12 @@ int screen_recent_picker(koboy_platform *pf, koboy_input *in, uint8_t *panel,
    breadcrumb below reads as a path. */
 #define BROWSER_TITLE_HEAD "ALL GAMES"
 
+/* The row that leaves the browser. STARTS WITH A SYMBOL on purpose: ui.c
+   buckets a row by its first character for the letter-index strip, so a row
+   called "BACK" would file itself under B and steal a jump to B from the first
+   B-named ROM. '<' buckets at '#', exactly where ".." already lands. */
+#define BROWSER_BACK_LABEL "<< MAIN MENU"
+
 /* Drives the ROM browser until the user picks a ROM, backs out of the root, or
    the run ends. Returns a BROWSE_*; on BROWSE_PICKED it writes the ROM's full
    path into out_path -- and NOT the row text as well, because recent.c derives
@@ -279,16 +286,47 @@ int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
     if (rl.count == 0) { romlist_free(&rl); return BROWSE_ERR_EMPTY; }
 
     int result = BROWSE_NONE;
+    const char **items = NULL;
+    int items_cap = 0;
     for (;;) {
         char title[UI_TITLE_CHARS + 8];
         ui_path_title(title, sizeof title, BROWSER_TITLE_HEAD,
                       romlist_subpath(&rl));
 
+        /* THE ESCAPE ROW, prepended here and NOT inside romlist. It is a
+           property of this SCREEN, not of the directory: romlist's count, its
+           cap, its hidden tally and screen_browser's own "no games" test
+           (rl.count == 0, above) all mean "things on disk", and a row that is
+           not on disk corrupts every one of them -- an empty rom_dir would
+           stop reporting itself as empty because the list was no longer empty.
+           screen_recent_picker builds its BACK row the same way.
+
+           WHY IT EXISTS: a Kobo with no page-turn buttons has no other way out
+           of this screen. ".." goes UP, and at the root there is no up, so the
+           browser was a one-way door with the power button behind it. github
+           issue #1 / docs/FOLLOWUPS.md #112.
+
+           AT INDEX 0 IN EVERY DIRECTORY, not only the root. Two reasons: the
+           offset from a ui row to a romlist row is then the constant 1 rather
+           than a conditional nobody can check at a glance, and from three
+           folders deep the MAIN MENU is one tap instead of four ".."s. */
+        if (n + 1 > items_cap) {
+            int want = n + 1;
+            const char **grown = realloc(items, sizeof *items * (size_t)want);
+            if (!grown) { result = BROWSE_ERR_DIR; break; }
+            items = grown; items_cap = want;
+        }
+        items[0] = BROWSER_BACK_LABEL;
+        {
+            const char *const *src = romlist_items(&rl);
+            for (int i = 0; i < n; i++) items[i + 1] = src[i];
+        }
+
         /* Rebuilt after every navigation, never reused: romlist's arrays are
            reallocated wholesale by each rescan (see romlist.h), so a
            koboy_ui_list that outlived one would be holding freed pointers. */
         koboy_ui_list list;
-        ui_list_init(&list, title, romlist_items(&rl), n,
+        ui_list_init(&list, title, items, n + 1,
                      KOBOY_CHROME_MARGIN, KOBOY_CHROME_MARGIN,
                      pw - 2 * KOBOY_CHROME_MARGIN, ph - 2 * KOBOY_CHROME_MARGIN);
         /* Letter index strip: only the ROM browser gets one, never MENU,
@@ -298,7 +336,7 @@ int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
 
         int pick = screen_list(pf, in, &list, panel, stride, pw, ph,
                             script, script_i, script_n,
-                            rl.hidden > 0 ? rl.count : -1);
+                            rl.hidden > 0 ? rl.count + 1 : -1);
         if (pick < 0) {
             /* Stopped, or the script ran out. Leaves the BROWSER from whatever
                directory it is in rather than walking up one level per
@@ -307,6 +345,13 @@ int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
             result = BROWSE_NONE;
             break;
         }
+        if (pick == 0) {
+            /* The escape row. NOT BROWSE_NONE, which main.c reads as the end
+               of the run -- see screens.h. */
+            result = BROWSE_BACK;
+            break;
+        }
+        pick--;                         /* ui row -> romlist row, from here on */
 
         int kind = romlist_kind(&rl, pick);
         if (kind == ROMLIST_ROM) {
@@ -327,6 +372,7 @@ int screen_browser(koboy_platform *pf, koboy_input *in, uint8_t *panel,
         }
     }
 
+    free(items);
     romlist_free(&rl);
     return result;
 }

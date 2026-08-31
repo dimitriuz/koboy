@@ -16,6 +16,20 @@ struct koboy_input {
     int  raw_max_x, raw_max_y;
     bool transpose, flip_x, flip_y;
     int  raw_x[KOBOY_MAX_TOUCH], raw_y[KOBOY_MAX_TOUCH];
+    /* Whether this panel has ever spoken multitouch, which is what unlocks the
+       single-touch ABS_X/ABS_Y position axes -- see input_feed_from. Latched,
+       never cleared: a panel does not change protocol mid-session. */
+    bool saw_mt;
+    /* ...and whether it has ever named a SLOT, which is the same latch one
+       level finer: a panel that does is protocol B and owns `slot` itself, so
+       the protocol-A contact cursor below must keep its hands off. */
+    bool saw_slot;
+    /* PROTOCOL-A FRAME STATE, all three reset at every SYN_REPORT. A panel
+       with no ABS_MT_SLOT separates contacts with SYN_MT_REPORT instead, so
+       the cursor has to be counted rather than read. */
+    int  mt_reports;      /* SYN_MT_REPORTs this frame, empty blocks included */
+    int  mt_contacts;     /* how many of them carried an actual position */
+    bool mt_block_data;   /* has the block now being read carried one yet */
 
     bool     pad_active;
     int      pad_slot, pad_ox, pad_oy;
@@ -352,17 +366,104 @@ void input_feed_key(koboy_input *in, uint16_t code, bool pressed)
     recompute(in);
 }
 
-void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
+/* Marks every contact lifted. BTN_TOUCH IS OUT-OF-BAND of the multitouch
+   stream: FBInk's reader states the contract as "you won't get an
+   EV_KEY:BTN_TOUCH:0 until *all* contact points have been lifted", so a zero
+   there is a statement about the whole panel and not about in->slot. Getting
+   that wrong the other way -- clearing only the current slot -- would leave a
+   phantom finger on a panel that reports no slot at all. */
+static void all_contacts_up(koboy_input *in)
+{
+    for (int s = 0; s < KOBOY_MAX_TOUCH; s++) in->st.touch[s].down = false;
+}
+
+/* Contract in input.h.
+ *
+ * THE LIFT IS THE WHOLE DIFFICULTY, and it is why this function takes a source.
+ * A Kobo announces that a finger has left the panel in one of two ways, and
+ * koboy shipped v2 understanding only the first:
+ *
+ *   ABS_MT_TRACKING_ID == -1   protocol B. The verified Libra 2 and everything
+ *                              modern. Retires the contact by id.
+ *   BTN_TOUCH == 0             everything else. The id STAYS NON-NEGATIVE
+ *                              through the lift ("Phoenix": Aura H2O, Aura,
+ *                              Aura SE r1, Glo HD, Touch 2.0, Nia, KA1) or is
+ *                              repeated unchanged ("Snow"/Mk7: H2O2 r2, Clara
+ *                              HD, Forma), or is never sent at all (the
+ *                              pre-multitouch Touch A/B/C, Mini, Glo, Aura HD).
+ *
+ * Reading only the tracking id cost every tap after the first on three of those
+ * four families -- ui.c is edge-triggered, so a contact that never falls never
+ * rises again -- and on the emulator screen it held a joypad button down for
+ * the rest of the session. github issue #1, reported on an Aura H2O.
+ * tests/test_input_protocols.c replays all four streams.
+ *
+ * THE SECOND FINGER is the other half, and a game needs it: `in->slot` is
+ * advanced by ABS_MT_SLOT, which the Phoenix packet does not contain -- it
+ * separates contacts with SYN_MT_REPORT, the protocol-A way. Until that was
+ * counted, a second contact landed on top of the first and d-pad-plus-button
+ * was impossible. See the SYN branch below.
+ *
+ * WHY BTN_TOUCH AND NOT THE PRESSURE AXES. FBInk's own reader also treats
+ * ABS_PRESSURE / ABS_MT_PRESSURE / ABS_MT_WIDTH_MAJOR going to zero as a lift,
+ * and warns in the same breath that "getting a 0-pressure event on lift is
+ * *not* a guarantee". They are not needed: every family above sends BTN_TOUCH,
+ * which is a binary contact flag. And ABS_MT_TOUCH_MAJOR, which looks like the
+ * obvious signal because it reads 0 on a lift, is a TRAP -- FBInk: "Oops, not
+ * that one, it's always 0 on early Mk.7 devices", i.e. it reads 0 with a finger
+ * DOWN, and believing it would make those panels untouchable. If a device ever
+ * turns up that lifts with pressure alone, this is the paragraph to amend. */
+void input_feed_from(koboy_input *in, koboy_ev_source src,
+                     const koboy_ev *evs, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
         const koboy_ev *e = &evs[i];
         if (e->type == KOBOY_EV_KEY) {
+            /* Not a button, and never bindable as one (koboy.h): the
+               touchscreen's contact flag. Consumed HERE rather than falling
+               through, so no key mapping can ever claim it. */
+            if (src == KOBOY_EV_SRC_TOUCH && e->code == KOBOY_KEY_BTN_TOUCH) {
+                if (e->value != 0) in->st.touch[in->slot].down = true;
+                else               all_contacts_up(in);
+                continue;
+            }
             input_feed_key(in, e->code, e->value != 0);
             continue;
         }
         if (e->type == KOBOY_EV_SYN) {
-            /* One recompute per SYN, not per event: a protocol B packet is
-               only coherent at the SYN boundary. */
+            /* SYN_MT_REPORT ends a CONTACT, not a frame. On a panel with no
+               ABS_MT_SLOT it is the only thing separating two fingers, so it
+               advances the cursor -- and does NOT recompute, because a frame
+               is only coherent once every contact in it has been read.
+               An EMPTY block (no position in front of it) is protocol A's way
+               of saying "nothing is touching" and must not be counted as a
+               contact, or the all-up frame would read as one finger down. */
+            if (src == KOBOY_EV_SRC_TOUCH && !in->saw_slot &&
+                e->code == KOBOY_SYN_MT_REPORT) {
+                in->mt_reports++;
+                if (in->mt_block_data) {
+                    in->mt_contacts++;
+                    in->slot = in->mt_contacts < KOBOY_MAX_TOUCH
+                             ? in->mt_contacts : KOBOY_MAX_TOUCH - 1;
+                }
+                in->mt_block_data = false;
+                continue;
+            }
+            /* A protocol-A frame LISTS WHAT IS TOUCHING NOW, so a contact it
+               does not mention is gone -- there is no per-slot retirement
+               event to wait for, and waiting for one is what left a lifted
+               finger down. Protocol B is the opposite (an omitted slot means
+               "unchanged"), which is why this runs only for a frame that
+               actually carried a SYN_MT_REPORT. */
+            if (in->mt_reports > 0) {
+                for (int s = in->mt_contacts; s < KOBOY_MAX_TOUCH; s++)
+                    in->st.touch[s].down = false;
+                in->slot = 0;
+            }
+            in->mt_reports = in->mt_contacts = 0;
+            in->mt_block_data = false;
+            /* One recompute per FRAME, not per event: a packet is only
+               coherent at the SYN_REPORT boundary. */
             recompute(in);
             continue;
         }
@@ -384,27 +485,56 @@ void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
             if (e->value < 0) in->hat_bits |= KOBOY_BTN_UP;
             else if (e->value > 0) in->hat_bits |= KOBOY_BTN_DOWN;
             break;
-        /* ABS_X/ABS_Y (0x00/0x01, the analog stick) are deliberately NOT
-           handled, and not even named as constants. MEASURED: the stick
-           streams at ~100 Hz even at rest (fuzz 255, flat 4095 around a
-           centred 32768), so decoding it would flood input_feed with noise for
-           no gain -- the hat is already the d-pad. They fall through to
-           `default`. Stick support, if added, needs the measured `flat` as a
+        /* ABS_X/ABS_Y (0x00/0x01) are TWO THINGS AT ONCE, which is what `src`
+           exists for. On a gamepad they are the analog stick, and decoding
+           that is still refused: MEASURED, the stick streams at ~100 Hz even
+           at rest (fuzz 255, flat 4095 around a centred 32768), so it would
+           flood this loop with noise for no gain -- the hat is already the
+           d-pad. Stick support, if ever added, needs the measured `flat` as a
            deadzone and must NOT reuse axis_bits() untouched, whose deadzone is
-           in raw touch pixels, not 0..65535. */
+           in raw touch pixels, not 0..65535.
+           On a TOUCHSCREEN they are a finger's position, and on the
+           pre-multitouch Kobos they are the only position there is.
+           `saw_mt` is a second gate on top of the source: a panel that speaks
+           multitouch may ALSO emulate single-touch for legacy clients, and
+           those coordinates track contact 0 -- writing them into whatever slot
+           is current would corrupt a second finger's position. Every family in
+           tests/test_input_protocols.c leads its first packet with an MT event,
+           so on an MT panel this branch closes before it can be reached. */
+        case KOBOY_ABS_X:
+            if (src != KOBOY_EV_SRC_TOUCH || in->saw_mt) break;
+            in->raw_x[in->slot] = e->value; apply_transform(in, in->slot); break;
+        case KOBOY_ABS_Y:
+            if (src != KOBOY_EV_SRC_TOUCH || in->saw_mt) break;
+            in->raw_y[in->slot] = e->value; apply_transform(in, in->slot); break;
         case KOBOY_ABS_MT_SLOT:
+            in->saw_mt = in->saw_slot = true;
             if (e->value >= 0 && e->value < KOBOY_MAX_TOUCH) in->slot = e->value;
             break;
         case KOBOY_ABS_MT_TRACKING_ID:
+            in->saw_mt = true;
+            /* A NEGATIVE id retires the contact; a non-negative one asserts it.
+               NOT the whole story on its own -- three of the four Kobo touch
+               protocols never send the negative, which is why BTN_TOUCH above
+               is the other half. See input_feed_from's header. */
             in->st.touch[in->slot].down = (e->value >= 0);
             break;
+        /* A POSITION is what makes a protocol-A block a contact rather than
+           the empty terminator -- see the SYN_MT_REPORT branch. */
         case KOBOY_ABS_MT_POSITION_X:
+            in->saw_mt = in->mt_block_data = true;
             in->raw_x[in->slot] = e->value; apply_transform(in, in->slot); break;
         case KOBOY_ABS_MT_POSITION_Y:
+            in->saw_mt = in->mt_block_data = true;
             in->raw_y[in->slot] = e->value; apply_transform(in, in->slot); break;
         default: break;
         }
     }
+}
+
+void input_feed(koboy_input *in, const koboy_ev *evs, size_t n)
+{
+    input_feed_from(in, KOBOY_EV_SRC_TOUCH, evs, n);
 }
 
 bool input_take_menu_request(koboy_input *in)

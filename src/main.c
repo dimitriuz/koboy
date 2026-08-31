@@ -739,11 +739,20 @@ int main(int argc, char **argv)
                 fatal(why, cfg.rom_dir);
                 free(panel); pf->shutdown(pf->ctx); return 2;
             }
+            if (br == BROWSE_BACK) {
+                /* The browser's own escape row: round again to the MAIN MENU,
+                   where a fresh ui_in is made and QUIT is one tap away. NOT
+                   folded into the `!= BROWSE_PICKED` exit below -- that path
+                   ends the run, and ending the run is what this row exists to
+                   avoid on a Kobo with no buttons. docs/FOLLOWUPS.md #112. */
+                continue;
+            }
             if (br != BROWSE_PICKED) {
                 /* A SCRIPTED run that ends without a rom chosen is a failure,
                    not a clean exit -- screen_list says why it needs its own
                    exit code. Backing out interactively (only via a signal or
-                   should_quit; ".." goes UP a level) still exits 0. */
+                   should_quit; ".." goes UP a level, and the root's own row
+                   is BROWSE_BACK above) still exits 0. */
                 if (any_game_ran) goto session_end;
                 if (ui_script_n > 0) {
                     fatal("ui script selected nothing");

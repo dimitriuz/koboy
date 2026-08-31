@@ -150,6 +150,14 @@ typedef enum { KOBOY_WFM_AUTO = 0, KOBOY_WFM_DU4, KOBOY_WFM_DU, KOBOY_WFM_COUNT 
 #define KOBOY_KEY_PAGE_F23 193
 #define KOBOY_KEY_PAGE_F24 194
 
+/* BTN_TOUCH. NOT a game button and never bindable as one: it is the
+   touchscreen's own contact flag, and it is how koboy learns a finger has LEFT
+   the panel on every Kobo that does not retire its ABS_MT_TRACKING_ID. See
+   input.c's decode and tests/test_input_protocols.c. Calibration cannot reach
+   it -- platform_kobo.c only offers codes from the KEY nodes, and the
+   touchscreen is not one. */
+#define KOBOY_KEY_BTN_TOUCH 330
+
 /* Gamepad button codes, MEASURED on a real Xbox Wireless Controller
    (Bus=0005) paired over Bluetooth to the verified Libra 2, 2026-08-26.
    key_a/key_b already default to the page-turn buttons above;

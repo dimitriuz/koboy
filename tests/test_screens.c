@@ -56,6 +56,16 @@ static int row_cy(int r)
     return p.y + p.row_h + r * p.row_h + p.row_h / 2;
 }
 
+/* The same, for the ROM BROWSER, whose ui rows are offset by one: screens.c
+   prepends a "<< MAIN MENU" escape row at ui index 0, so romlist row r is ui
+   row r + 1 (screen_browser says why the row is not in romlist). Every browser
+   tap below goes through this rather than row_cy, so the offset is written
+   down once. */
+static int browser_cy(int romlist_row)
+{
+    return row_cy(romlist_row + 1);
+}
+
 static int rows_per_page(void)
 {
     koboy_ui_list p;
@@ -135,9 +145,9 @@ static void vanish_tree(void);
 static void poll_enter_then_up(fakeplat *fp, koboy_input *in, int poll)
 {
     (void)fp;
-    if (poll == 1)      feed_down(in, PW / 2, row_cy(g_dir_row));
+    if (poll == 1)      feed_down(in, PW / 2, browser_cy(g_dir_row));
     else if (poll == 2) feed_up(in);
-    else if (poll == 3) { vanish_tree(); feed_down(in, PW / 2, row_cy(g_up_row)); }
+    else if (poll == 3) { vanish_tree(); feed_down(in, PW / 2, browser_cy(g_up_row)); }
 }
 
 static void unlink_in(const char *dir, const char *name)
@@ -814,8 +824,8 @@ TEST_MAIN({
             CHECK(frow >= 0);
             {
                 int si = 0;
-                koboy_input_state script[2] = { tap_at(PW / 2, row_cy(drow)),
-                                                tap_at(PW / 2, row_cy(frow)) };
+                koboy_input_state script[2] = { tap_at(PW / 2, browser_cy(drow)),
+                                                tap_at(PW / 2, browser_cy(frow)) };
                 memset(out, 0, sizeof out);
                 CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
                                             sd, out, sizeof out, script, &si, 2),
@@ -834,7 +844,7 @@ TEST_MAIN({
         {
             int row = browser_row_of(dir, "TETRIS.gb");
             CHECK(row >= 0);
-            koboy_input_state script[1] = { tap_at(PW / 2, row_cy(row)) };
+            koboy_input_state script[1] = { tap_at(PW / 2, browser_cy(row)) };
             int si = 0;
             memset(out, 0, sizeof out);
             CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
@@ -843,6 +853,121 @@ TEST_MAIN({
             char want[512];
             snprintf(want, sizeof want, "%.400s/TETRIS.gb", dir);
             CHECK(strcmp(out, want) == 0);
+        }
+
+        /* THE ESCAPE ROW. A Kobo with no page-turn buttons had no way out of
+           this screen at all -- ".." goes UP and the root has no up -- so the
+           browser was a one-way door with the power button behind it. github
+           issue #1 / docs/FOLLOWUPS.md #112.
+
+           row_cy(0), NOT browser_cy(0): this is the one tap in the file aimed
+           at the prepended row itself rather than at a romlist row, and using
+           the offset helper here would aim one row too low and hit a ROM --
+           which returns BROWSE_PICKED and would look like a plain failure
+           rather than a mis-aimed fixture. */
+        {
+            koboy_input_state script[1] = { tap_at(PW / 2, row_cy(0)) };
+            int si = 0;
+            memset(out, 0, sizeof out);
+            CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
+                                        dir, out, sizeof out, script, &si, 1),
+                         BROWSE_BACK);
+            /* AND NOT BROWSE_NONE, which main.c reads as the end of the run:
+               the two differ by one enum value and the wrong one turns the
+               escape row into a quit. Checked as an inequality as well as an
+               equality, because BROWSE_BACK's numeric value is not the point,
+               being distinct from BROWSE_NONE is. */
+            CHECK(BROWSE_BACK != BROWSE_NONE);
+            /* Nothing was chosen, and out_path was not scribbled on. */
+            CHECK_EQ_INT(out[0], 0);
+            /* One tap did it: the script still had nothing left, but the row
+               answered on its first frame rather than by exhaustion. */
+            CHECK_EQ_INT(si, 1);
+        }
+
+        /* And it is there in a SUBDIRECTORY too, above ".." -- the offset is
+           unconditional, so from three folders deep the MAIN MENU is one tap
+           instead of one ".." per level. */
+        {
+            char sub2[512];
+            snprintf(sub2, sizeof sub2, "%.400s/DEEP", dir);
+            CHECK_EQ_INT(mkdir(sub2, 0755), 0);
+            touch_file(sub2, "INNER.gb");
+            int drow = browser_row_of(dir, "DEEP/");
+            CHECK(drow >= 0);
+            koboy_input_state script[3] = {
+                tap_at(PW / 2, browser_cy(drow)), lift(),
+                tap_at(PW / 2, row_cy(0)),           /* the escape row again */
+            };
+            int si = 0;
+            memset(out, 0, sizeof out);
+            CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
+                                        dir, out, sizeof out, script, &si, 3),
+                         BROWSE_BACK);
+            CHECK_EQ_INT(out[0], 0);
+            unlink_in(sub2, "INNER.gb");
+            rmdir(sub2);
+        }
+
+        /* THE OVERFLOW ROW AND THE ROW ABOVE IT, under a capped listing.
+           screen_browser tells screen_list which ui row selects nothing, and
+           that index had to move with the escape row. Getting the shift wrong
+           is nearly invisible: the overflow row STILL cannot be picked, because
+           romlist_kind sends it to the `continue` arm regardless -- what breaks
+           instead is that the LAST REAL ROM goes dead. So the selectable half
+           is what this checks, and it is the only thing in the suite that
+           notices. (MUTANT: `rl.count` for `rl.count + 1`. It survives both
+           test_screens without this block and the overflow smoke run.) */
+        {
+            char cap[] = "/tmp/koboy_screens_cap_XXXXXX";
+            CHECK(mkdtemp(cap) != NULL);
+            touch_file(cap, "AAA.gb");
+            touch_file(cap, "BBB.gb");
+            touch_file(cap, "CCC.gb");
+            setenv("KOBOY_ROMLIST_CAP_TEST", "2", 1);
+
+            /* The fixture reaches the state the checks are named for: two real
+               rows and a synthetic third. Asserted, not assumed -- without the
+               cap actually biting there is no overflow row and both checks
+               below would be about ordinary ROMs. */
+            {
+                koboy_romlist rl;
+                memset(&rl, 0, sizeof rl);
+                int rn = romlist_scan(&rl, cap);
+                CHECK_EQ_INT(rl.count, 2);
+                CHECK_EQ_INT(rn, 3);
+                CHECK_EQ_INT(romlist_kind(&rl, 2), ROMLIST_OVERFLOW);
+                romlist_free(&rl);
+            }
+
+            /* The last REAL row still selects. */
+            {
+                koboy_input_state script[1] = { tap_at(PW / 2, browser_cy(1)) };
+                int si = 0;
+                memset(out, 0, sizeof out);
+                CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
+                                            cap, out, sizeof out, script, &si, 1),
+                             BROWSE_PICKED);
+                char want[512];
+                snprintf(want, sizeof want, "%.400s/BBB.gb", cap);
+                CHECK(strcmp(out, want) == 0);
+            }
+            /* And the synthetic one does not: the script runs out instead. */
+            {
+                koboy_input_state script[1] = { tap_at(PW / 2, browser_cy(2)) };
+                int si = 0;
+                memset(out, 0, sizeof out);
+                CHECK_EQ_INT(screen_browser(&fp.pf, NULL, panel, fp.stride, PW, PH,
+                                            cap, out, sizeof out, script, &si, 1),
+                             BROWSE_NONE);
+                CHECK_EQ_INT(out[0], 0);
+            }
+
+            unsetenv("KOBOY_ROMLIST_CAP_TEST");
+            unlink_in(cap, "AAA.gb");
+            unlink_in(cap, "BBB.gb");
+            unlink_in(cap, "CCC.gb");
+            rmdir(cap);
         }
 
         /* A script that runs out leaves the browser without picking, and that
@@ -879,8 +1004,8 @@ TEST_MAIN({
                root-level scan of `sub` does not have. Asserted rather than
                assumed, one line down. */
             koboy_input_state script[3] = {
-                tap_at(PW / 2, row_cy(drow)), lift(),
-                tap_at(PW / 2, row_cy(rrow + 1)),
+                tap_at(PW / 2, browser_cy(drow)), lift(),
+                tap_at(PW / 2, browser_cy(rrow + 1)),
             };
             int si = 0;
             memset(out, 0, sizeof out);
@@ -901,10 +1026,10 @@ TEST_MAIN({
             int trow = browser_row_of(dir, "TETRIS.gb");
             CHECK(trow >= 0);
             koboy_input_state back[5] = {
-                tap_at(PW / 2, row_cy(drow)), lift(),
-                tap_at(PW / 2, row_cy(0)),            /* ".." */
+                tap_at(PW / 2, browser_cy(drow)), lift(),
+                tap_at(PW / 2, browser_cy(0)),        /* ".." */
                 lift(),
-                tap_at(PW / 2, row_cy(trow)),
+                tap_at(PW / 2, browser_cy(trow)),
             };
             si = 0;
             memset(out, 0, sizeof out);

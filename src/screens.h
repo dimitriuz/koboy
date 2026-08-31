@@ -44,7 +44,13 @@ enum {
 
 enum { MAIN_RECENT = 0, MAIN_ALL_GAMES, MAIN_QUIT, MAIN_COUNT };
 
-enum { BROWSE_PICKED = 0, BROWSE_NONE, BROWSE_ERR_DIR, BROWSE_ERR_EMPTY };
+/* BROWSE_BACK is NOT BROWSE_NONE. Both mean "no rom", and they must not be
+   confused: NONE is the run ending (a signal, or a script running out) and
+   main.c exits on it, while BACK is the user asking for the MAIN MENU and
+   main.c must go there. Collapsing them would turn the new escape row into a
+   quit. */
+enum { BROWSE_PICKED = 0, BROWSE_NONE, BROWSE_BACK, BROWSE_ERR_DIR,
+       BROWSE_ERR_EMPTY };
 
 /* Drives one list widget to a selection; the rationale for `script`,
    `script_i` and `disabled_index` is on the definition in screens.c. */

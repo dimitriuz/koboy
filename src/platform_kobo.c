@@ -709,7 +709,13 @@ static bool drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
             out[m].value = ev[i].value;
             m++;
         }
-        if (in && m) input_feed(in, out, m);
+        /* The SOURCE, not just the events: `is_key` is exactly the
+           touch-versus-buttons distinction input.c needs, because ABS_X/ABS_Y
+           are a finger on one node and an analog stick on the other, and
+           BTN_TOUCH is a contact flag only on the touchscreen. */
+        if (in && m)
+            input_feed_from(in, is_key ? KOBOY_EV_SRC_BUTTONS
+                                       : KOBOY_EV_SRC_TOUCH, out, m);
         if (cnt < EV_BATCH) return true;       /* short read: nothing left */
     }
     return true;

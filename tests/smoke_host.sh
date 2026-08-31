@@ -174,7 +174,10 @@ script="$(mktemp)"
 # (KOBOY_CHROME_MARGIN=8 on every side, h=1664, 26 slots of 64px under the
 # CURRENT UI_MAX_ROWS=24), so row r's centre is 8 + 64 + r*64 + 64/2.
 #   tap 200 168  -- MAIN MENU row 1 ("ALL GAMES"; row 0 is "RECENT")
-#   tap 200 104  -- the browser's row 0, the only rom in $romdir
+#   tap 200 168  -- the browser's row 1, the only rom in $romdir. EVERY
+#                   browser row here is one lower than its romlist row: the
+#                   browser prepends a "<< MAIN MENU" escape row at ui row 0
+#                   (screens.c says why it is not a romlist entry).
 # A row-density or MAIN MENU item-order change is exactly the kind of thing
 # that silently strands a hardcoded pixel coordinate outside every row, so if
 # this ever goes stale again the failure here is "did not select the only
@@ -187,7 +190,7 @@ script="$(mktemp)"
 # than say anything about a stale coordinate. The grep below is what actually
 # discriminates: it names the exact path, so selecting anything else fails.
 # Folder navigation gets its own runs further down.
-printf 'tap 200 168\ntap 200 104\n' > "$script"
+printf 'tap 200 168\ntap 200 168\n' > "$script"
 
 # Explicit rc capture, not the bare `out=$(...)` the run above uses: under
 # set -e a nonzero exit from inside a command substitution assignment aborts
@@ -226,17 +229,19 @@ echo "ok: browser selects from a tap-first script"
 # Row geometry is the same 1264x1680 derivation as every other browser tap in
 # this file (row_h=64, row r's centre is 8 + 64 + r*64 + 32), aimed at rows
 # whose contents are pinned by the sort order src/romlist.c guarantees:
-#   root:   row 0 "Game and Watch/"   row 1 "AAA TEST.gb"   (dirs first)
-#   sub:    row 0 ".."                row 1 "BALL.mgw"      (".." first)
+# UI rows, which are romlist's rows shifted down one by the browser's
+# "<< MAIN MENU" escape row at ui row 0:
+#   root:   row 1 "Game and Watch/"   row 2 "AAA TEST.gb"   (dirs first)
+#   sub:    row 1 ".."                row 2 "BALL.mgw"      (".." first)
 romdir="$(mktemp -d)"
 : > "$romdir/AAA TEST.gb"
 mkdir "$romdir/Game and Watch"
 : > "$romdir/Game and Watch/BALL.mgw"
 script="$(mktemp)"
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
-#   tap 200 104 -- browser root row 0, the "Game and Watch/" folder
-#   tap 200 168 -- subdirectory row 1, BALL.mgw (row 0 is "..")
-printf 'tap 200 168\ntap 200 104\ntap 200 168\n' > "$script"
+#   tap 200 168 -- browser root row 1, the "Game and Watch/" folder
+#   tap 200 232 -- subdirectory row 2, BALL.mgw (row 1 is "..")
+printf 'tap 200 168\ntap 200 168\ntap 200 232\n' > "$script"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom-dir "$romdir" --ui-script "$script" \
@@ -257,19 +262,55 @@ echo "$out" | grep -q "chose $romdir/Game and Watch/BALL.mgw" \
 rm -rf "$romdir" "$script"
 echo "ok: the browser descends into a folder and loads from it"
 
+# ---------------------------------------------------------------------------
+# THE BROWSER'S ESCAPE ROW, end to end. On a Kobo with no page-turn buttons
+# the browser used to be a one-way door: ".." goes UP, the root has no up, and
+# a list with nothing to leave by leaves the power button as the only exit.
+# github issue #1 / docs/FOLLOWUPS.md #112.
+#
+# THE SECOND HALF IS THE POINT. That the run ends is not evidence of anything
+# -- BROWSE_NONE ends it too, and BROWSE_NONE means QUIT. What says the row
+# went back to the MAIN MENU is that the MENU ANSWERS AGAIN afterwards and a
+# game still starts, which a quit could not do.
+romdir="$(mktemp -d)"
+: > "$romdir/AAA TEST.gb"
+script="$(mktemp)"
+#   tap 200 168 -- MAIN MENU row 1, ALL GAMES
+#   tap 200 104 -- the browser's ui row 0, "<< MAIN MENU"   <- under test
+#   tap 200 168 -- MAIN MENU row 1 again  <- only reachable if we went BACK
+#   tap 200 168 -- browser ui row 1, the only rom
+printf 'tap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$script"
+rc=0
+out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
+        --rom-dir "$romdir" --ui-script "$script" \
+        --panel 1264x1680 --frames 30 2>&1) || rc=$?
+echo "$out"
+if [ "$rc" -ne 0 ]; then
+    echo "FAIL: browser escape-row run exited $rc (4 = selected nothing, i.e."
+    echo "      the row quit instead of returning to the MAIN MENU;"
+    echo "      124 = hit the 30s timeout)"
+    rm -rf "$romdir" "$script"; exit 1
+fi
+echo "$out" | grep -q "chose $romdir/AAA TEST.gb" \
+    || { echo "FAIL: after the escape row the MAIN MENU did not start a game"; \
+         rm -rf "$romdir" "$script"; exit 1; }
+rm -rf "$romdir" "$script"
+echo "ok: the browser's escape row returns to the MAIN MENU, and a game still starts"
+
 romdir="$(mktemp -d)"
 : > "$romdir/AAA TEST.gb"
 mkdir "$romdir/Game and Watch"
 : > "$romdir/Game and Watch/BALL.mgw"
 script="$(mktemp)"
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
-#   tap 200 104 -- root row 0, into "Game and Watch/"
-#   tap 200 104 -- subdirectory row 0, "..", back to the root
-#   tap 200 168 -- root row 1, "AAA TEST.gb"
-# The last tap is the discriminator: at this coordinate the SUBDIRECTORY
-# holds BALL.mgw, so a ".." that did nothing (or that quietly re-listed the
-# same folder) selects a different file and the grep fails.
-printf 'tap 200 168\ntap 200 104\ntap 200 104\ntap 200 168\n' > "$script"
+#   tap 200 168 -- root row 1, into "Game and Watch/"
+#   tap 200 168 -- subdirectory row 1, "..", back to the root
+#   tap 200 232 -- root row 2, "AAA TEST.gb"
+# The last tap is the discriminator: at this coordinate the SUBDIRECTORY has
+# nothing at all (it holds one ".." and one ROM, ui rows 1 and 2... and row 2
+# is BALL.mgw), so a ".." that did nothing (or that quietly re-listed the same
+# folder) selects a different file and the grep fails.
+printf 'tap 200 168\ntap 200 168\ntap 200 168\ntap 200 232\n' > "$script"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom-dir "$romdir" --ui-script "$script" \
@@ -328,7 +369,7 @@ romdir="$(mktemp -d)"
 # First tap navigates MAIN MENU -> ALL GAMES (row 1), same as the tap-first
 # script far above; the second is the one under test here.
 script="$(mktemp)"
-printf 'tap 200 168\ntap 200 232\n' > "$script"   # row 2: y = 8 + 64 + 2*64 + 64/2
+printf 'tap 200 168\ntap 200 296\n' > "$script"   # ui row 3: y = 8 + 64 + 3*64 + 64/2
 rc=0
 out=$(KOBOY_ROMLIST_CAP_TEST=2 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom-dir "$romdir" --ui-script "$script" \
@@ -352,8 +393,8 @@ romdir="$(mktemp -d)"
 : > "$romdir/AAA.gb"; : > "$romdir/BBB.gb"; : > "$romdir/CCC.gb"
 : > "$romdir/DDD.gb"; : > "$romdir/EEE.gb"
 script="$(mktemp)"
-# Same MAIN MENU navigation tap first, then the browser's row 0.
-printf 'tap 200 168\ntap 200 104\n' > "$script"   # row 0: y = 8 + 64 + 0*64 + 64/2
+# Same MAIN MENU navigation tap first, then the browser's first REAL row.
+printf 'tap 200 168\ntap 200 168\n' > "$script"   # ui row 1: y = 8 + 64 + 1*64 + 64/2
 rc=0
 out=$(KOBOY_ROMLIST_CAP_TEST=2 SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy \
         --core build/stub_core.so --rom-dir "$romdir" --ui-script "$script" \
@@ -1834,8 +1875,8 @@ head -c 8192 /dev/zero > "$rd/BAD.sfc"
 # centre is 8 + 64 + r*64 + 32. $rd is FLAT so no folder row shifts an index.
 #   MAIN MENU: row 0 RECENT, row 1 ALL GAMES
 #   browser:   row 0 BAD.sfc, row 1 GOOD.gb   (alphabetical, src/romlist.c)
-s1="$(mktemp)"; printf 'tap 200 168\ntap 200 104\n' > "$s1"   # ALL GAMES -> BAD.sfc
-s2="$(mktemp)"; printf 'tap 200 168\ntap 200 168\n' > "$s2"   # ALL GAMES -> GOOD.gb
+s1="$(mktemp)"; printf 'tap 200 168\ntap 200 168\n' > "$s1"   # ALL GAMES -> BAD.sfc
+s2="$(mktemp)"; printf 'tap 200 168\ntap 200 232\n' > "$s2"   # ALL GAMES -> GOOD.gb
 for seed in "$s1" "$s2"; do
     rc=0
     SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
@@ -1907,10 +1948,10 @@ head -c 212 /dev/zero > "$rd/BAD.sfc"
 : > "$rd/GOOD.gb"
 s4="$(mktemp)"
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
-#   tap 200 104 -- browser row 0, BAD.sfc   <- fails
+#   tap 200 168 -- browser row 1, BAD.sfc   <- fails
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
-#   tap 200 168 -- browser row 1, GOOD.gb   <- plays
-printf 'tap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s4"
+#   tap 200 232 -- browser row 2, GOOD.gb   <- plays
+printf 'tap 200 168\ntap 200 168\ntap 200 168\ntap 200 232\n' > "$s4"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom-dir "$rd" --save-dir "$sd" --ui-script "$s4" \
@@ -1980,10 +2021,10 @@ s5="$(mktemp)"
 #   tap 200 552 -- MENU row 7, CHOOSE ROM
 #                  (SAVE LOAD RESET GRAY FRAMES MOTION SCREENSHOT ...)
 #   tap 200 168 -- mid-session MAIN MENU row 1, ALL GAMES
-#   tap 200 104 -- browser row 0, BAD.sfc   <- the load that fails
+#   tap 200 168 -- browser row 1, BAD.sfc   <- the load that fails
 #   tap 200 168 -- MAIN MENU row 1 again    <- proves we came BACK
-#   tap 200 168 -- browser row 1, GOOD.gb   <- and can still start a game
-printf 'menu\ntap 200 552\ntap 200 168\ntap 200 104\ntap 200 168\ntap 200 168\n' > "$s5"
+#   tap 200 232 -- browser row 2, GOOD.gb   <- and can still start a game
+printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\ntap 200 168\ntap 200 232\n' > "$s5"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 ./build/koboy --core build/stub_core.so \
         --rom "$rd/GOOD.gb" --rom-dir "$rd" --save-dir "$sd" --ui-script "$s5" \
@@ -2041,8 +2082,8 @@ sw_script="$(mktemp)"
 #   menu        -- open the in-game MENU on the Game Boy game
 #   tap 200 552 -- MENU row 7, CHOOSE ROM (row_h=64, centre 8+64+r*64+32)
 #   tap 200 168 -- MAIN MENU row 1, ALL GAMES
-#   tap 200 168 -- browser row 1, ZZZ.md (row 0 is AAA.gb; alphabetical)
-printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n' > "$sw_script"
+#   tap 200 232 -- browser row 2, ZZZ.md (row 1 is AAA.gb; alphabetical)
+printf 'menu\ntap 200 552\ntap 200 168\ntap 200 232\n' > "$sw_script"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 30 "$d_sw/koboy" --rom "$d_sw/roms/AAA.gb" \
         --rom-dir "$d_sw/roms" --save-dir "$d_sw/save" --ui-script "$sw_script" \
@@ -2151,9 +2192,9 @@ head -c 32768 /dev/zero > "$d_sw3/roms/ZZZ.md"
 sw3="$(mktemp)"
 # Three switches. Each is: menu, CHOOSE ROM (row 7), ALL GAMES (row 1), then
 # the browser row -- 104 for AAA.gb, 168 for ZZZ.md.
-{ printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n'
-  printf 'menu\ntap 200 552\ntap 200 168\ntap 200 104\n'
-  printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n'; } > "$sw3"
+{ printf 'menu\ntap 200 552\ntap 200 168\ntap 200 232\n'
+  printf 'menu\ntap 200 552\ntap 200 168\ntap 200 168\n'
+  printf 'menu\ntap 200 552\ntap 200 168\ntap 200 232\n'; } > "$sw3"
 rc=0
 out=$(SDL_VIDEODRIVER=dummy timeout 60 "$d_sw3/koboy" --rom "$d_sw3/roms/AAA.gb" \
         --rom-dir "$d_sw3/roms" --save-dir "$d_sw3/save" --ui-script "$sw3" \

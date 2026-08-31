@@ -665,6 +665,64 @@ rect. A seventh system needing three would need somewhere to put the third,
 not just a bigger number. Recorded so nobody raises the constant and
 discovers that at render time.
 
+### 111. Three of the four touch protocols have never touched a real panel
+
+github issue #1 (a Kobo Aura H2O) found koboy unable to see a finger LEAVE the
+screen on every Kobo that does not retire its `ABS_MT_TRACKING_ID`. The fix
+(`input_feed_from`, `tests/test_input_protocols.c`) reads `BTN_TOUCH == 0` as
+the lift and decodes `ABS_X`/`ABS_Y` for the pre-multitouch panels, and it is
+verified **only against recorded event streams on the host**. Nobody here owns
+a Phoenix, Snow or non-MT device.
+
+The streams themselves come from FBInk's `generate_button_press()`, which is an
+INJECTOR -- what FBInk sends to fake a tap the local driver will accept -- and
+not a capture of a real driver. It is the best evidence available and it is not
+the same thing, and FBInk hedges on the Mk7/Snow family in its own comments.
+What would settle it is a `hexdump`/`evtest` capture from one of these panels.
+The families, and what each is believed to send, are tabulated in
+`input_feed_from`'s header.
+
+WHAT RESTS ON THAT EVIDENCE IS NOW THREE FIXES, not one: the lift itself, the
+ABS_X/ABS_Y position decode for the pre-multitouch panels, and the protocol-A
+contact demux that gives those panels a SECOND finger (#113, retired). The
+third is the least evidenced of the three and the most load-bearing for a
+player -- without two contacts there is no d-pad-plus-button and nothing with a
+jump is playable. FBInk's injector only ever synthesises ONE contact, so the
+shape of a real two-finger frame is not in evidence anywhere in this tree; what
+koboy implements is the kernel's documented protocol A (count SYN_MT_REPORT,
+retire whatever the frame stops mentioning), chosen over "use the tracking id
+as the slot" because it cannot index past KOBOY_MAX_TOUCH whatever ids the
+driver hands out. A two-finger capture would confirm or refute it in one
+reading.
+
+IT ALSO CHANGES ONE THING ON THE VERIFIED DEVICE, which is worth stating
+plainly because everything else here is about panels nobody has: `BTN_TOUCH ==
+0` now clears every contact, and the Libra 2 presumably sends it. That is inert
+if FBInk's contract holds ("you won't get an EV_KEY:BTN_TOUCH:0 until *all*
+contact points have been lifted") -- the protocol-B lift arrives in the same
+packet and says the same thing. If some driver fired it on the FIRST of two
+fingers instead, a d-pad finger would be dropped when the A finger lifted.
+Taken on the evidence that FBInk's own reader and KOReader both apply
+`BTN_TOUCH` unconditionally on these devices, so a violation would already be
+breaking them. Not measured here, and the two-finger case is what to look at
+first if Game Boy input ever regresses.
+
+TWO THINGS THE FIX DOES NOT ADDRESS, both of which would look identical to the
+reporter and neither of which the host can see:
+
+- **Where the taps LAND.** `touch_axes` derives transposition from
+  `mx > my` and FBInk records no touch-mirror quirk for dahlia, so koboy
+  believes the H2O's touch layer is panel-oriented and unmirrored. Nothing has
+  checked that. A wrong transform is a separate defect with the same symptom
+  ("tapping does nothing"), and the `koboy: touch ... raw WxH transpose=N` log
+  line is what tells them apart.
+- **What "the program locks up on QUIT" was.** MAIN MENU -> QUIT and a power
+  press leave through the SAME return, so the likeliest reading is that QUIT
+  worked and the reporter was watching `koboy.sh`'s Nickel restart with
+  koboy's last frame frozen on the panel. Unconfirmed: their log would say
+  (`no rom chosen, exiting`, `koboy exited rc=0`, `restore: done`). Filed
+  rather than fixed because it may not be a defect at all.
+
 ## Saves, save states, and staying alive
 
 ### 84. One file in the collection crashes the process, and no floor can stop it
@@ -1357,6 +1415,8 @@ moved before the entry went; the destination is named.
 | # | What happened to it |
 |---|---|
 | 1 | CLOSED. `tests/test_input_touch.c` (search `#1`) asserts the CROSS/RELATIVE distinction. |
+| 112 | CLOSED. The ROM browser grows a `<< MAIN MENU` row at ui index 0 in every directory (`screen_browser`), so a Kobo with no page-turn buttons can leave it. `tests/test_screens.c`, and an end-to-end run in `tests/smoke_host.sh` that proves it returns to the MAIN MENU rather than quitting. |
+| 113 | CLOSED. `input_feed_from` counts `SYN_MT_REPORT` as the contact cursor on a panel that never names a slot, so Phoenix tracks two fingers and d-pad-plus-button works. `tests/test_input_protocols.c` section 6. THE INFERENCE BEHIND IT IS STILL UNCONFIRMED -- see #111. |
 | 2 | CLOSED. `tests/test_input_touch.c` (`#2`) passes `flip_x` and `flip_y` true. |
 | 3 | CLOSED. Cartridge SRAM write, read and the destructive-truncation path all ran on the Libra 2 — `TESTED.md`, "The save path ran on hardware for the first time". |
 | 4 | CLOSED. `force_dither` is the shipped default and runs end to end — `TESTED.md`, "1-bit output fixes the motion smearing". |
