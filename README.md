@@ -230,6 +230,16 @@ works out what it can at runtime, screen size, colour depth, touch
 orientation, which refresh modes exist, so it has a fair chance elsewhere. A
 fair chance isn't the same as tested.
 
+0.5.3 is the first release where that gap cost somebody something. On a Kobo
+Aura H2O the menus took exactly one tap and then went dead, because Kobo has
+four different ways of reporting a touch and koboy understood one of them --
+the one the Libra 2 speaks. It now handles all four, which should also cover
+the Aura, Aura SE, Glo HD, Touch 2.0, Nia, Clara HD, Forma, H2O2 and the
+original Touch, Mini and Aura HD. **None of that is tested on the hardware it
+is for**; it is built against the event streams FBInk records for each family.
+If you have one of those, this is the release to try, and a report either way
+is worth having.
+
 If you run it on another Kobo, please add a row. There's nothing to build:
 `koboy-probe` ships in the download and characterises a device over SSH
 without stopping anything or changing anything. TESTED.md's "How to add a row"
