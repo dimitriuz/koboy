@@ -219,26 +219,56 @@ Every image in [docs/SCREENSHOTS.md](docs/SCREENSHOTS.md) was made this way.
 
 ---
 
-## What is verified
+## Will it run on my Kobo?
 
-**One device: a Kobo Libra 2.** Games have been played on it, and it exits
-cleanly to the home screen without a reboot. [TESTED.md](TESTED.md) is the
-real record and is more careful than this summary.
+Two models are confirmed by a person holding one. Everything else is grouped by
+how much of koboy is already known to work on hardware like it. koboy works out
+your screen size, colour depth, touch orientation and refresh modes at runtime,
+so there is no list of "supported" models in the code — this is a statement
+about evidence, not about capability.
 
-No other Kobo has been measured, which isn't the same as known broken. koboy
-works out what it can at runtime, screen size, colour depth, touch
-orientation, which refresh modes exist, so it has a fair chance elsewhere. A
-fair chance isn't the same as tested.
+### Confirmed working
 
-0.5.3 is the first release where that gap cost somebody something. On a Kobo
-Aura H2O the menus took exactly one tap and then went dead, because Kobo has
-four different ways of reporting a touch and koboy understood one of them --
-the one the Libra 2 speaks. It now handles all four, which should also cover
-the Aura, Aura SE, Glo HD, Touch 2.0, Nia, Clara HD, Forma, H2O2 and the
-original Touch, Mini and Aura HD. **None of that is tested on the hardware it
-is for**; it is built against the event streams FBInk records for each family.
-If you have one of those, this is the release to try, and a report either way
-is worth having.
+| Model | Codename | What was confirmed |
+|---|---|---|
+| **Libra 2** | Io, Mark 9 | Everything. Games played by hand, all fifteen systems rendered, cartridge saves and save states round-tripped, exits cleanly to the home screen. [TESTED.md](TESTED.md) is the real record. |
+| **Aura H2O** | Dahlia, Mark 5 | Menus and the ROM browser, by the owner who reported [#1](https://github.com/dimitriuz/koboy/issues/1). Its touchscreen speaks a different dialect from the Libra 2's, and 0.5.5 is the release that got it right. |
+
+### Should work
+
+These share their touch dialect with one of the two above, and have nothing else
+koboy has not already met. That is a good reason to expect them to work and it
+is not the same as somebody having tried.
+
+- **Like the Aura H2O** — Aura, Aura One, Aura One LE, Glo HD, Touch 2.0,
+  Aura SE, Aura SE r2, Nia
+- **Like the Libra 2** — Clara 2E, Elipsa 2E, Libra Colour
+
+### Worth trying, but nobody has
+
+Everything here is implemented and none of it has been confirmed on any device.
+
+- **Clara HD, Forma, Libra H2O, Aura H2O², Aura H2O² r2, Clara B&W,
+  Clara Colour** — a third dialect ("Snow"). koboy handles it and no device
+  using it has ever been tried.
+- **Touch A/B/C, Mini, Glo, Aura HD** — single-touch panels, handled by a code
+  path no device has exercised. These are also the oldest and slowest hardware
+  Kobo made, so even if the controls work the emulation may be too slow to
+  enjoy. The Game Boy is the one to try first.
+- **Elipsa, Sage** — a different display engine from every other Kobo. The
+  touch side should be fine; whether anything appears on screen is genuinely
+  unknown.
+- **Clara Colour, Libra Colour** — colour panels. koboy draws four greys
+  through a colour filter, which should work and may look muddy.
+
+If your model is not listed at all it is probably newer than this file. Try it.
+
+### If it does not work
+
+Open `.adds/koboy/koboy.ini`, set `trace_touch = true`, tap around for a few
+seconds, and attach `.adds/koboy/koboy.log` to a bug report. That log is what
+turned #1 from two failed guesses into a fix, and it is the single most useful
+thing you can send. `docs/kobo-touch-protocols.md` explains what it contains.
 
 If you run it on another Kobo, please add a row. There's nothing to build:
 `koboy-probe` ships in the download and characterises a device over SSH

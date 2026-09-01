@@ -29,7 +29,13 @@ ColecoVision wants `colecovision.rom`; Intellivision wants `exec.bin` and
 `GET_SYSTEM_DIRECTORY` with). Nothing ships them and `tests/test_dist.sh`
 asserts nothing ever will.
 
-**Verified on real hardware, on exactly one device** (a Kobo Libra 2). v1
+**Verified on real hardware, on TWO devices, and they are verified to very
+different depths.** A Kobo Libra 2 (Mark 9, protocol-B touch) is the reference:
+everything below was measured on it. A Kobo Aura H2O (Mark 5, Phoenix touch) is
+the second, via github issue #1 -- its owner confirmed the menus and the ROM
+browser on v0.5.5 and reported no playtest, so it is evidence that koboy STARTS
+and can be DRIVEN on hardware unlike the reference, and evidence of nothing
+else. Do not promote it to "verified" in the sense the Libra 2 is. v1
 plays Tetris and an action platformer and exits to a working Nickel without a
 reboot; v2-core's takeover, touch d-pad, ROM browser and in-game MENU were
 driven by hand from NickelMenu on 2026-08-26, and cartridge SRAM and save
@@ -372,7 +378,7 @@ record, not a to-do list.
 | `docs/superpowers/specs/2026-08-25-koboy-v2-design.md` | The v2 design: the mode machine, save states, the faceplate, and §13's open measurements. |
 | `docs/FOLLOWUPS.md` | 69 findings that are still open, grouped by subsystem, with a six-item "Start here" at the top. Everything CLOSED and everything whose only content was "not run on hardware" was cut (2026-08-28); the 41 retired numbers are indexed in a table at the bottom, so a `#N` in a source comment still resolves. Numbers are never reused. The live ones: **#23** (`video_submit` is the bottleneck on all fifteen systems and nothing has optimised it), **#84 / #72** (one file segfaults the process, and twelve cores have never been swept for the same), **#92 / #95** (two unexplained SIGSEGVs in the owner's log, on a path a remote session cannot exercise), **#78** (nine systems auto-fit with no measured scale ceiling), **#25** (scroller smearing, improved by 1-bit output and not solved). |
 | `docs/device-workflow.md` | Deploying, launching, diagnosing, and the traps. |
-| `TESTED.md` | The device matrix, and the record every "measured" claim in this file points at. Exactly ONE device is verified (a Kobo Libra 2). All fifteen systems have rendered on it; only the Game Boy has been played. Sections are dated and LATER ones supersede earlier ones — three "NOT RUN ON THE DEVICE" sections dated 2026-08-27 are overturned by "All fourteen systems run on the device" later the same day, so read the file forwards. |
+| `TESTED.md` | The device matrix, and the record every "measured" claim in this file points at. TWO devices, unequally: every measurement here is off the Kobo Libra 2, on which all fifteen systems have rendered and only the Game Boy has been played; the Kobo Aura H2O confirmed touch input and nothing more. README.md's "Will it run on my Kobo?" is the reader-facing version and groups every other model by how much of koboy is known to work on hardware like it. Sections are dated and LATER ones supersede earlier ones — three "NOT RUN ON THE DEVICE" sections dated 2026-08-27 are overturned by "All fourteen systems run on the device" later the same day, so read the file forwards. |
 | `docs/kobo-touch-protocols.md` | **The four dialects a Kobo touchscreen speaks**, which of them each model uses, where the taps land, and the three traps that cost a release each. Read before touching `input.c`. Sourced from FBInk and from KOReader as datasheets -- KOReader is AGPL-3 and this project is GPL-3, so facts only, never code. |
 | `docs/cross-compiling.md` | Toolchain, including why koxtoolchain was abandoned. |
 | `docs/probe-readme.md` | Profiling a device nobody has tried. |

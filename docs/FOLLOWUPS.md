@@ -665,54 +665,6 @@ rect. A seventh system needing three would need somewhere to put the third,
 not just a bigger number. Recorded so nobody raises the constant and
 discovers that at render time.
 
-### 111. The Aura H2O's touch stream is now CAPTURED, and it broke two releases
-
-Resolved as far as evidence goes, and kept because the numbers in it are the
-only real description of one of these panels anywhere in this tree.
-
-`trace_touch = true` on the reporter's device, 371 events, decoded:
-
-```
-koboy: touch /dev/input/event1 (zForce-ir-touch) raw 1440x1080 transpose=1
-koboy: touch caps mt=1 slot=0 st=1 btn_touch=1 tool_finger=0
-                  pressure=1 mt_pressure=0 touch_major=1
-```
-
-| Fact | Value |
-|---|---|
-| Codes ever sent | `MT_TRACKING_ID`, `MT_TOUCH_MAJOR`, `MT_WIDTH_MAJOR`, `MT_POSITION_X/Y`, `SYN_MT_REPORT`, `SYN_REPORT`. Nothing else |
-| `EV_KEY` events | **none, in the entire capture** |
-| `BTN_TOUCH` | advertised in the capability bitmap, **never sent** |
-| `ABS_PRESSURE` | advertised, never sent |
-| `ABS_MT_TRACKING_ID` | `1` in every frame. Never `-1` |
-| The lift | `ABS_MT_TOUCH_MAJOR` going 1 -> 0, `WIDTH_MAJOR` alongside |
-| Frames | one contact block each; protocol A throughout |
-
-**THE CAPABILITY BITMAP LIES, and that is the finding worth keeping.** The node
-advertises `BTN_TOUCH` and `ABS_PRESSURE` and sends neither. v0.5.3 read the
-lift from `BTN_TOUCH` and could never have worked here; v0.5.4 added the caps
-line, which said `btn_touch=1` and would have misled anyone reading only that.
-What a node CAN send and what it DOES send are different questions and only the
-trace answers the second. Ask for both.
-
-**And the field koboy refused was the only one that worked.**
-`ABS_MT_TOUCH_MAJOR` was excluded on FBInk's warning that it "is always 0 on
-early Mk.7 devices" -- true, and about Mk7. This is a Mk5, where the same axis
-is a clean binary flag and the sole lift signal. No fixed choice of field
-satisfies both, so input.c stopped choosing: `contact_hint` ARMS an axis the
-first time it is seen positive, and only an armed axis may report a lift. A
-panel with real contact strength proves it the moment a finger lands; a panel
-whose axis is stuck at zero never proves anything and is never allowed to deny
-a contact either. Same principle as deriving the transposition from the
-reported maxima instead of a table of models.
-
-STILL OPEN, and only a person at the device can close it: **whether the taps
-land where the finger is.** The capture's coordinates map to a plausible region
-of the list, which is not the same as the right one -- rows span the full width,
-so an x mirror is invisible in a menu and ruins the d-pad in a game. The way to
-settle it is to ask for a trace of two deliberate taps, one at each of two named
-corners, and read the raw pairs. Nobody has.
-
 ### 116. The axis swap is DERIVED where two projects TABULATE it, and could differ
 
 `touch_axes` sets `transpose = (mx > my)` -- the touch layer is rotated if its X
@@ -1517,6 +1469,7 @@ moved before the entry went; the destination is named.
 | # | What happened to it |
 |---|---|
 | 1 | CLOSED. `tests/test_input_touch.c` (search `#1`) asserts the CROSS/RELATIVE distinction. |
+| 111 | CLOSED by the reporter on v0.5.5: github issue #1 is fixed and the Aura H2O taps. The capture that settled it, and the three traps it exposed, are written up in `docs/kobo-touch-protocols.md`; the device's own row is in `TESTED.md`. What it did NOT establish -- any timing, any game, whether the d-pad is usable -- is recorded there rather than here, because it is unmeasured rather than open. |
 | 112 | CLOSED. The ROM browser grows a `<< MAIN MENU` row at ui index 0 in every directory (`screen_browser`), so a Kobo with no page-turn buttons can leave it. `tests/test_screens.c`, and an end-to-end run in `tests/smoke_host.sh` that proves it returns to the MAIN MENU rather than quitting. |
 | 113 | CLOSED. `input_feed_from` counts `SYN_MT_REPORT` as the contact cursor on a panel that never names a slot, so Phoenix tracks two fingers and d-pad-plus-button works. `tests/test_input_protocols.c` section 6. THE INFERENCE BEHIND IT IS STILL UNCONFIRMED -- see #111. |
 | 2 | CLOSED. `tests/test_input_touch.c` (`#2`) passes `flip_x` and `flip_y` true. |

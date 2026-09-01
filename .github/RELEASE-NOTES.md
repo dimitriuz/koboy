@@ -68,4 +68,4 @@ The probe archive is the device profiler on its own, for characterising a Kobo n
 
 ---
 
-Played and verified on a Kobo Libra 2 and nowhere else. Every core is built from source at the commit `scripts/pins.txt` records. koboy is GPL-3; see LICENSES.md for each core's own terms.
+Played and verified on a Kobo Libra 2; touch input additionally confirmed on a Kobo Aura H2O. README.md's "Will it run on my Kobo?" says where every other model stands. Every core is built from source at the commit `scripts/pins.txt` records. koboy is GPL-3; see LICENSES.md for each core's own terms.

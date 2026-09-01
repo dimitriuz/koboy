@@ -5,12 +5,55 @@ stride, framebuffer depth, the touch layer's raw range and rotation, whether
 DU4 is available --- so it has a fair chance on a Kobo nobody has tried. A fair
 chance is not the same as tested, and this file is the difference.
 
-**Exactly one device is verified.** Every other Kobo is *unverified*: not known
-broken, just unmeasured. If you run koboy on one, please add a row.
+**TWO devices, and they are not verified to the same depth.** Every measurement
+in this file is off the Libra 2. The Aura H2O confirmed that koboy starts and
+can be driven on hardware quite unlike it, and confirmed nothing else --- do not
+read its row as a second set of numbers. Every other Kobo is *unverified*: not
+known broken, just unmeasured. If you run koboy on one, please add a row.
+README.md's "Will it run on my Kobo?" groups the rest by how much of koboy is
+known to work on hardware like theirs.
 
 | Device | Platform | Firmware | Panel | Buttons | `wfm_fast` | fps at 5x | Status |
 |---|---|---|---|---|---|---|---|
 | Kobo Libra 2 (`Io`, FBInk id 388) | Mark 9, `mx6sll-ntx`, Cortex-A9 single core | 4.38.23684 | 1264x1680 @ 300dpi, 32bpp, 1280px stride | 2 page-turn keys, KEY_F23(193)/KEY_F24(194) --- the shipped default pair, though this device's own calibration assigned them the other way round (`key_a = 194`) | `AUTO` (DU4 available: `hasEclipseWfm=1`) | 25.5 fps blocking / 66.7 fps non-blocking for the 800x720 rect | **verified** --- full game played, exits to a working Nickel, no reboot |
+| Kobo Aura H2O (`Dahlia`, FBInk id 370) | Mark 5, `mx50-ntx`, i.MX6 SoloLite | unrecorded | 1080x1429 visible @ 265dpi, 32bpp, 1088px stride, origin (0,11) --- the top 11 rows are behind the bezel | **none but power.** No page-turn keys at all, so the on-screen controls are the only controls | `AUTO` (DU4 NOT available: Mark 5, `hasEclipseWfm=0`) | not measured | **touch confirmed** --- menus and the ROM browser respond on v0.5.5. No playtest reported, no timings taken |
+
+### Kobo Aura H2O, 2026-09-01 --- a second dialect, and what it cost
+
+Reported as [issue #1](https://github.com/dimitriuz/koboy/issues/1): the menus
+took exactly one tap and then went dead. THREE RELEASES to fix, and the first
+two failed for the same reason --- they were built on FBInk's button *injector*,
+which describes what a driver will accept rather than what one sends.
+
+What settled it was `trace_touch = true`, added in 0.5.4 for exactly this, and
+371 events from the owner:
+
+```
+koboy: touch /dev/input/event1 (zForce-ir-touch) raw 1440x1080 transpose=1
+koboy: touch caps mt=1 slot=0 st=1 btn_touch=1 tool_finger=0
+                  pressure=1 mt_pressure=0 touch_major=1
+```
+
+Seven event codes, no `EV_KEY` at all, `ABS_MT_TRACKING_ID` pinned at 1 forever,
+and the lift announced as `ABS_MT_TOUCH_MAJOR` going to zero. **The node
+advertises `BTN_TOUCH` and never sends it**, which is why 0.5.3 could not have
+worked and why 0.5.4's own capability line would have misled anyone reading it
+without the trace beside it. `docs/kobo-touch-protocols.md` is the write-up.
+
+Also established, and useful for the next unfamiliar panel:
+
+- The bezel viewport works. This is the first device where `origin_y` is not
+  zero (11 rows hidden at the top) and the blit honoured it.
+- The axis transform is swap + mirror-X, which koboy applied and which FBInk
+  and KOReader independently agree on for this model.
+- 32bpp throughout: `fbdepth` is absent on this device, so the launcher's 8bpp
+  switch and its restore both fail harmlessly and koboy runs at the native
+  depth.
+
+Not established: any timing, any game, and whether the on-screen d-pad is
+usable --- a mirror error is invisible in a menu, where rows span the full
+width, and would ruin a game. `docs/FOLLOWUPS.md` #114 has the one known
+coordinate defect, worth about eleven pixels.
 
 Verified with the SHIPPED defaults, which is the point of shipping them:
 `waveform_fast = auto`, `full_refresh_permille = 1000` (never force a flash),
