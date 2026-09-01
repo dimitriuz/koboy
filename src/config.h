@@ -47,6 +47,13 @@ typedef struct {
        gray_of guards the range. */
     int      gray_map;
     bool     grab_input;
+    /* Dump every raw touch event into koboy.log. OFF by default and noisy when
+       on -- it exists because a Kobo koboy has never run on is diagnosed by
+       what its panel SENDS, and the owner of that Kobo is the only person who
+       can capture it. An ini key rather than an environment variable for
+       exactly that reason: koboy.ini is a file they already edit over USB,
+       and koboy.sh is not. */
+    bool     trace_touch;
     int      dpad_mode;
     int      dpad_deadzone;      /* px */
     int      dpad_hysteresis;    /* px */

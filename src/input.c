@@ -24,6 +24,14 @@ struct koboy_input {
        level finer: a panel that does is protocol B and owns `slot` itself, so
        the protocol-A contact cursor below must keep its hands off. */
     bool saw_slot;
+    /* ...and whether it has ever sent a SYN_MT_REPORT, which is how a panel
+       announces that it speaks protocol A. STICKY, unlike mt_reports below,
+       and the difference is load-bearing: once a panel has said it lists every
+       contact per frame, a frame that lists NONE is a statement that nothing
+       is touching -- even when it is a bare SYN_REPORT with nothing in front
+       of it. Reading that as "no information" is the original stuck-finger bug
+       one protocol deeper. */
+    bool saw_mt_report;
     /* PROTOCOL-A FRAME STATE, all three reset at every SYN_REPORT. A panel
        with no ABS_MT_SLOT separates contacts with SYN_MT_REPORT instead, so
        the cursor has to be counted rather than read. */
@@ -441,6 +449,7 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
             if (src == KOBOY_EV_SRC_TOUCH && !in->saw_slot &&
                 e->code == KOBOY_SYN_MT_REPORT) {
                 in->mt_reports++;
+                in->saw_mt_report = true;
                 if (in->mt_block_data) {
                     in->mt_contacts++;
                     in->slot = in->mt_contacts < KOBOY_MAX_TOUCH
@@ -455,7 +464,7 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
                finger down. Protocol B is the opposite (an omitted slot means
                "unchanged"), which is why this runs only for a frame that
                actually carried a SYN_MT_REPORT. */
-            if (in->mt_reports > 0) {
+            if (in->saw_mt_report) {
                 for (int s = in->mt_contacts; s < KOBOY_MAX_TOUCH; s++)
                     in->st.touch[s].down = false;
                 in->slot = 0;
