@@ -11,47 +11,50 @@
 
      Markdown, rendered by GitHub. This comment does not show. -->
 
-**0.5.4 is for one person and anyone with the same Kobo.** 0.5.3 tried to fix
-[#1](https://github.com/dimitriuz/koboy/issues/1) — a Kobo Aura H2O where the
-menus took one tap and then went dead — and did not. This release is mostly
-about being able to tell why.
+**If tapping never worked on your Kobo, try 0.5.5.** This is the third attempt at
+[#1](https://github.com/dimitriuz/koboy/issues/1) and the first one built on a
+recording of the hardware rather than a guess about it.
 
-## If tapping does not work on your Kobo
+## What was wrong
 
-There are at least four ways a Kobo touchscreen can describe a finger, and koboy
-has only ever been tested against the one the author's Libra 2 speaks. 0.5.3
-guessed at the others from a description that turned out to be about a different
-kind of panel entirely — the H2O uses an *infrared* touch frame, not the
-capacitive type that guess was built for.
+There are several ways a Kobo touchscreen can report a finger, and koboy
+understood the one its author's device speaks. On a Kobo Aura H2O the menus took
+exactly one tap and then went dead: koboy was waiting to be told the finger had
+lifted, in a way that panel never says.
 
-So this release stops guessing and starts asking your device:
+0.5.3 and 0.5.4 both guessed at what it *does* say, from a description that
+turned out to be about a different kind of touchscreen. 0.5.4 added a way to
+record the real thing instead, the owner sent one, and it settled the question
+in a line: the panel reports a lift by saying the contact has **shrunk to
+nothing** — and never sends the signal koboy had been waiting for, even though
+it advertises that it can.
 
-- **koboy now logs what your panel can send**, every launch, no setup. Look for
-  a line beginning `koboy: touch caps` in `.adds/koboy/koboy.log`.
-- **`trace_touch = true`** in `.adds/koboy/koboy.ini` records the touch events
-  themselves. Turn it on, tap around for a few seconds, and send the log with
-  your report. It is noisy, so leave it off otherwise.
+## What changed
 
-Between them those two turn "it doesn't work on my model" into something
-fixable by someone who does not own your model. If tapping is broken for you,
-that log is the single most useful thing you can send.
+koboy no longer decides in advance which signal to trust. It watches how each
+one behaves on your particular panel and believes the ones that have shown they
+work — a panel that reports real contact strength proves it the moment you touch
+the screen, and a panel whose sensor is stuck at zero is never allowed to claim
+your finger has gone. The device answers the question about itself, which is how
+koboy already works out your screen size and touch orientation.
 
-## Two fixes worth trying
+**This should fix tapping on the Aura H2O, and may fix it on the Aura, Aura HD,
+Aura SE, Glo HD, Touch 2.0, Nia, Clara HD and Forma.** It cannot affect devices
+where tapping already worked: the new handling runs only on panels that describe
+touches the older way, and a Libra 2 executes none of it. That was checked on
+the device, not assumed.
 
-- **A touchscreen that reported nothing at all.** koboy was opening, closing and
-  reopening the touch node at startup; on the infrared panels used by the Aura
-  H2O and Aura HD, open and close are power commands to the touch frame's own
-  firmware, and FBInk documents that shuffle as able to leave the panel silent
-  for the whole session. koboy no longer does it.
-- **A finger that never came up.** Some panels report a lift by simply not
-  mentioning the finger any more, rather than by sending anything about it.
-  koboy was waiting for an event that was never coming.
+## If it still does not work
 
-Whether either one is *the* problem on the Aura H2O is unknown — nobody working
-on koboy owns one. If 0.5.4 fixes it for you, please say so; if it does not, the
-trace above is what settles it.
+Open `.adds/koboy/koboy.ini`, set `trace_touch = true`, tap around for a few
+seconds and send `.adds/koboy/koboy.log` with your report. That is what turned
+this from two failed guesses into a fix, and it will do the same for the next
+panel.
 
-Everything else in 0.5.4 is release plumbing and changes nothing on the device.
+One thing still unknown even when tapping works: whether taps land exactly where
+your finger is. Menu rows span the whole width so a sideways error does not show
+up there, but it would ruin the on-screen d-pad. If the buttons feel wrong in a
+game, the same trace answers that too.
 
 ## Installing
 
