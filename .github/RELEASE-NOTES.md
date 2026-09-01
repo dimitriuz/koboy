@@ -11,30 +11,47 @@
 
      Markdown, rendered by GitHub. This comment does not show. -->
 
-**The touchscreen release.** Everything in 0.5.3 comes out of [#1](https://github.com/dimitriuz/koboy/issues/1), filed by an owner whose Kobo Aura H2O showed the menu, accepted exactly one tap, and then went dead.
+**0.5.4 is for one person and anyone with the same Kobo.** 0.5.3 tried to fix
+[#1](https://github.com/dimitriuz/koboy/issues/1) — a Kobo Aura H2O where the
+menus took one tap and then went dead — and did not. This release is mostly
+about being able to tell why.
 
-## What changed
+## If tapping does not work on your Kobo
 
-koboy learned that a finger has left the panel by watching `ABS_MT_TRACKING_ID` go negative. That is what a Libra 2 sends, and it was the only thing the test suite had ever fed. **Three other families ship on the Kobo line and none of them does that:**
+There are at least four ways a Kobo touchscreen can describe a finger, and koboy
+has only ever been tested against the one the author's Libra 2 speaks. 0.5.3
+guessed at the others from a description that turned out to be about a different
+kind of panel entirely — the H2O uses an *infrared* touch frame, not the
+capacitive type that guess was built for.
 
-| Family | Devices | What it sends instead |
-|---|---|---|
-| Phoenix | Aura H2O, Aura, Aura SE r1, Glo HD, Touch 2.0, Nia, KA1 | keeps the tracking id through the lift |
-| Snow / Mk7 | Clara HD, Forma, Aura H2O² r2 | repeats the id unchanged |
-| pre-multitouch | Touch A/B/C, Mini, Glo, Aura HD | never sends one at all |
+So this release stops guessing and starts asking your device:
 
-All of them announce the lift with `BTN_TOUCH`, which koboy was discarding as an unrecognised key. So the contact latched down on first touch and never came up — one tap in the menus and nothing afterwards, and in a game a joypad button held down for the rest of the session.
+- **koboy now logs what your panel can send**, every launch, no setup. Look for
+  a line beginning `koboy: touch caps` in `.adds/koboy/koboy.log`.
+- **`trace_touch = true`** in `.adds/koboy/koboy.ini` records the touch events
+  themselves. Turn it on, tap around for a few seconds, and send the log with
+  your report. It is noisy, so leave it off otherwise.
 
-Two more problems came out of the same investigation, neither of which the reporter could reach because of the first:
+Between them those two turn "it doesn't work on my model" into something
+fixable by someone who does not own your model. If tapping is broken for you,
+that log is the single most useful thing you can send.
 
-- **Only one finger was tracked on those panels.** Phoenix separates two contacts in a way koboy was not reading, so the second landed on top of the first. No holding the d-pad while pressing A — not an annoyance, unplayability.
-- **The ROM browser had no way out** on a Kobo with no page-turn buttons. `..` goes *up*, and the root has no up, so the only exits were picking a game or holding the power button. There is now a `<< MAIN MENU` row at the top of every folder.
+## Two fixes worth trying
 
-## If you have one of those Kobos, this is the release to try
+- **A touchscreen that reported nothing at all.** koboy was opening, closing and
+  reopening the touch node at startup; on the infrared panels used by the Aura
+  H2O and Aura HD, open and close are power commands to the touch frame's own
+  firmware, and FBInk documents that shuffle as able to leave the panel silent
+  for the whole session. koboy no longer does it.
+- **A finger that never came up.** Some panels report a lift by simply not
+  mentioning the finger any more, rather than by sending anything about it.
+  koboy was waiting for an event that was never coming.
 
-**None of it is tested on the hardware it is for.** Nobody working on koboy owns an affected device; the fixes are built against the event streams FBInk records for each family, which is the best evidence available and is not the same as a real capture. The device *can* run the build — every binary in the archive targets the ARMv7-A + NEON baseline every Kobo has had since the Touch, and needs nothing outside the base system — but whether the touch handling is right on your panel is exactly the thing that needs someone to try it.
+Whether either one is *the* problem on the Aura H2O is unknown — nobody working
+on koboy owns one. If 0.5.4 fixes it for you, please say so; if it does not, the
+trace above is what settles it.
 
-A report either way is worth having. If it still misbehaves, `.adds/koboy/koboy.log` says what koboy decided about your screen and is the single most useful thing to attach.
+Everything else in 0.5.4 is release plumbing and changes nothing on the device.
 
 ## Installing
 
