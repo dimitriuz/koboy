@@ -607,11 +607,36 @@ static bool kobo_init(void *ctx, const koboy_config *c)
        a different convention: trust the measured maxima for the swap and drop
        the mirrors. */
     if (k->touch_fd >= 0 && st.touch_swap_axes != k->transpose) {
-        kobo_say(k, "koboy: FBInk reports touchSwapAxes=%d but the axis maxima "
-                    "say %d; ignoring its mirror quirks\n",
+        /* LOUD, because this has never fired and the entry that explains it
+           argues koboy would probably be the one in the wrong. FBInk and
+           KOReader both hold the swap as a platform-wide constant -- true on
+           every Kobo, overridden by none -- while koboy derives it from the
+           reported maxima, so a panel answering 0..4095 on both axes would
+           compute `false` where the tables say `true`. Dropping the mirrors on
+           top then turns one wrong answer into three. See
+           docs/FOLLOWUPS.md #116 and docs/kobo-touch-protocols.md; if this
+           line is in somebody's log, that entry is what to read. */
+        kobo_say(k, "koboy: WARNING FBInk reports touchSwapAxes=%d but the axis "
+                    "maxima say %d. Trusting the maxima and dropping FBInk's "
+                    "mirror quirks. This has never been seen on real hardware "
+                    "-- if touches land wrongly, see docs/FOLLOWUPS.md #116\n",
                  st.touch_swap_axes ? 1 : 0, k->transpose ? 1 : 0);
         k->flip_x = k->flip_y = false;
     }
+
+    /* THE WHOLE TRANSFORM, AND WHERE EACH HALF CAME FROM. koboy logged the
+       maxima and the swap it derived, and never the mirrors -- so on the Aura
+       H2O of github issue #1 the X mirror WAS applied and nothing in the log
+       said so, which left "are the taps even landing where the finger is"
+       open for a day and two releases. Printing FBInk's raw opinion beside the
+       resolved answer means one line settles both whether they agreed and what
+       koboy ended up doing. */
+    if (k->touch_fd >= 0)
+        kobo_say(k, "koboy: touch transform transpose=%d flip_x=%d flip_y=%d "
+                    "(FBInk said swap=%d mirror_x=%d mirror_y=%d)\n",
+                 k->transpose ? 1 : 0, k->flip_x ? 1 : 0, k->flip_y ? 1 : 0,
+                 st.touch_swap_axes ? 1 : 0, st.touch_mirror_x ? 1 : 0,
+                 st.touch_mirror_y ? 1 : 0);
 
     install_emergency(k);
     return true;
@@ -964,6 +989,8 @@ void platform_kobo_selftest(koboy_platform *pf)
     printf("origin=%d,%d\n", k->origin_x, k->origin_y);
     printf("wfm_du4_capable=%d\n", k->du4_capable ? 1 : 0);
     printf("touch_transpose=%d\n", k->transpose ? 1 : 0);
+    printf("touch_flip_x=%d\n", k->flip_x ? 1 : 0);
+    printf("touch_flip_y=%d\n", k->flip_y ? 1 : 0);
     printf("touch_raw=%dx%d\n", k->raw_max_x, k->raw_max_y);
     printf("input_touch=%d\n", k->touch_fd >= 0 ? 1 : 0);
     printf("input_keys=%d\n", k->n_key);
