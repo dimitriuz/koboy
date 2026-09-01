@@ -713,6 +713,42 @@ so an x mirror is invisible in a menu and ruins the d-pad in a game. The way to
 settle it is to ask for a trace of two deliberate taps, one at each of two named
 corners, and read the raw pairs. Nobody has.
 
+### 116. The axis swap is DERIVED where two projects TABULATE it, and could differ
+
+`touch_axes` sets `transpose = (mx > my)` -- the touch layer is rotated if its X
+axis spans more than its Y. It has been right on both devices seen (Libra 2
+1680x1264, Aura H2O 1440x1080) and it is a guess where FBInk and KOReader both
+carry an answer.
+
+Both state the same thing and state it absolutely: KOReader's Kobo base sets
+`touch_switch_xy = true` with the note that it "is *always* true", and FBInk
+defaults `touchSwapAxes = true` for the whole platform. No Kobo overrides it.
+So the derivation is re-deriving a constant, and it can only differ from the
+constant by being WRONG -- on a panel reporting square maxima (0..4095 on both
+axes is an ordinary controller default) it would compute `false` where every
+table says `true`, and every tap would land transposed.
+
+Worse, koboy currently resolves the disagreement in its own favour: when
+FBInk's `touchSwapAxes` differs from the computed value it keeps the computed
+one AND discards FBInk's mirror flags. On the hypothetical square-maxima panel
+that turns one wrong answer into three.
+
+NOT CHANGED, because it would be a behaviour change on the one verified device
+to fix a device nobody has reported. The argument for changing it: FBInk's flag
+IS the per-model table, koboy already trusts that same table for the mirrors,
+and trusting it for the swap as well would make the three answers come from one
+place. The argument against, and the reason the derivation exists: KOReader has
+had to disable its own per-model quirks at runtime when a hardware revision
+turned up that did not need them (see `docs/kobo-touch-protocols.md`), so a
+table is not automatically better than a measurement.
+
+What would settle it is a device where they disagree. `koboy: touch ... raw
+WxH transpose=N` is already logged; the FBInk mismatch warning fires when they
+differ; neither has ever been seen to. Also worth logging the resulting
+`flip_x`/`flip_y`, which currently appear nowhere -- on the Aura H2O the mirror
+was applied and nothing in the log said so, which cost an hour of reasoning
+about whether it had been.
+
 ### 114. The touch layer spans 1440 rows and koboy scales it onto 1429
 
 On the Aura H2O the panel is physically 1080x1440 with the top 11 rows behind
