@@ -655,6 +655,46 @@ TEST_MAIN({
         input_destroy(in);
     }
 
+    /* ------------- 7b. ...and the same thing said with even less
+       A protocol-A driver reports the contacts that exist. When none do, some
+       drivers send the empty block above and others send a BARE SYN_REPORT
+       with nothing in front of it at all -- the frame is empty, so the lift is
+       the absence of the contact rather than any event about it.
+
+       koboy's first attempt at this only retired contacts on a frame that
+       carried a SYN_MT_REPORT of its own, which reads the second form as "no
+       touch information, change nothing" and leaves the finger down forever --
+       the ORIGINAL bug, reintroduced one protocol deeper. Once a panel has
+       shown it speaks protocol A, every SYN_REPORT is a complete statement of
+       what is touching, including a silent one.
+
+       Which form a real zForce panel uses is not known here (github issue #1
+       is open on exactly that question), so koboy handles both. */
+    {
+        koboy_input *in = fresh(&c, &prof);
+        phoenix_press(in, 300, 400);
+        CHECK(input_state(in)->touch[0].down);
+
+        koboy_ev bare[] = { { KOBOY_EV_SYN, 0, 0 } };
+        input_feed(in, bare, EVN(bare));
+        if (input_state(in)->touch[0].down)
+            fprintf(stderr, "  [protocol A] a bare SYN_REPORT left the contact down\n");
+        CHECK(!input_state(in)->touch[0].down);
+
+        /* And a panel that has NEVER spoken protocol A is untouched by this:
+           on protocol B a frame that mentions no slot means "unchanged", and
+           reading it as "all up" would drop a finger every frame. Section 8
+           checks the same property for a panel that speaks both. */
+        koboy_input *b = fresh(&c, &prof);
+        b_press(b, 300, 400);
+        CHECK(input_state(b)->touch[0].down);
+        input_feed(b, bare, EVN(bare));
+        CHECK(input_state(b)->touch[0].down);
+        input_destroy(b);
+
+        input_destroy(in);
+    }
+
     /* ------------------------------- 8. a panel that speaks BOTH dialects
        The protocol-A cursor is gated on "this panel has never named a slot",
        and that gate is the only thing standing between the two schemes. Some

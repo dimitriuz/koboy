@@ -665,7 +665,78 @@ rect. A seventh system needing three would need somewhere to put the third,
 not just a bigger number. Recorded so nobody raises the constant and
 discovers that at render time.
 
-### 111. Three of the four touch protocols have never touched a real panel
+### 111. The Aura H2O still cannot be tapped, and the panel is not the one that was fixed
+
+**v0.5.3 did not fix github issue #1.** The reporter tried it: QUIT works, the
+browser still selects nothing. Their `koboy.log` is the first description of one
+of these panels that is not a guess, and it says the guess was wrong in a way
+worth writing down.
+
+```
+koboy: Aura H2O (id 370, Dahlia, Mark 5), 1080x1429 @ 32bpp, ... origin (0,11)
+koboy: keys /dev/input/event0 (mxckpd) [carries KEY_POWER]
+koboy: touch /dev/input/event1 (zForce-ir-touch) raw 1440x1080 transpose=1
+```
+
+**`zForce-ir-touch`.** A Neonode INFRARED frame -- emitters and receivers round
+the bezel -- not a capacitive digitiser. The Phoenix stream v0.5.3 was built
+against comes from FBInk's button INJECTOR, whose Phoenix branch lists the H2O;
+but an injector describes what a driver will ACCEPT, and this is a different
+class of controller from the ones that branch was written for. Two layers of
+inference, and the entry below already said the first was unsafe.
+
+Nothing here knows what that driver emits. That is now the whole question, and
+0.5.4 answers it with instruments rather than another guess:
+
+- `koboy: touch caps ...` is logged unconditionally at open time -- whether the
+  node advertises `ABS_MT_SLOT` (protocol B) or only `SYN_MT_REPORT` (protocol
+  A), whether `BTN_TOUCH` exists at all (v0.5.3's entire lift fix rests on it),
+  whether position is `ABS_MT_POSITION_*` or `ABS_X`/`ABS_Y`. Eight ioctls, one
+  line, no action needed from the owner beyond sending the log again.
+- `trace_touch = true` in `koboy.ini` dumps the raw event stream. An ini key
+  and not an environment variable because the owner already edits that file
+  over USB and does not edit `koboy.sh`.
+
+Two changes went with them, both from evidence rather than hope:
+
+- **koboy was triggering a hazard FBInk documents against this exact panel.**
+  `fbink_input_scan.c` special-cases `zForce-ir-touch`: "Some zForce panels have
+  a weird race condition around Active/Deactivate commands, which can
+  potentially lead to no reports being generated if the Active command fumbles.
+  [...] A better bet is to avoid using SCAN_ONLY and keep the fd around."
+  open() and close() on that node ARE Active and Deactivate, and koboy passed
+  `SCAN_ONLY` and then reopened -- Active, Deactivate, Active on every launch.
+  It now takes FBInk's fd. Whether that was the failure is unknown; that koboy
+  was doing the thing the vendor's own library warns against is not.
+- The protocol-A frame-end retirement is now STICKY (`saw_mt_report`). A bare
+  `SYN_REPORT` with no contacts in front of it is how some protocol-A drivers
+  say "nothing is touching", and requiring the frame to carry its own
+  `SYN_MT_REPORT` read that as "no information" and left the finger down --
+  the original bug one protocol deeper.
+
+NONE OF THAT IS A CLAIM THAT IT WORKS NOW. It is one documented defect fixed,
+one plausible one fixed, and two instruments added so the next round is not a
+third guess.
+
+### 114. The touch layer spans 1440 rows and koboy scales it onto 1429
+
+On the Aura H2O the panel is physically 1080x1440 with the top 11 rows behind
+the bezel, which FBInk reports as a 1080x1429 viewport at origin (0,11) --
+correctly, and koboy's blit already honours it. The touch frame does not know
+about the bezel: it reports the full 0..1440.
+
+`apply_transform` scales the raw axis onto `prof.panel_h`, the VISIBLE 1429, so
+a touch at physical row 11 (the first visible row) lands at panel y 10 instead
+of 0, and the error shrinks to nothing at the bottom edge. The right arithmetic
+is to scale onto the full panel and subtract `origin_y`, which means input.c
+needs a number it is not currently told.
+
+ELEVEN PIXELS against a 64-pixel row, so this is not what issue #1 is about and
+fixing it would not have helped -- filed because it is real, it is the first
+device where `origin_y` is not zero, and the next such device may hide more
+rows than this one does.
+
+### 115. Three of the four touch protocols have never touched a real panel
 
 github issue #1 (a Kobo Aura H2O) found koboy unable to see a finger LEAVE the
 screen on every Kobo that does not retire its `ABS_MT_TRACKING_ID`. The fix

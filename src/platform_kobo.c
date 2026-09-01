@@ -279,6 +279,47 @@ static bool node_has_key(int fd, unsigned int code)
     return (bits[code / 8] & (1u << (code % 8))) != 0;
 }
 
+static bool node_has_abs(int fd, unsigned int code)
+{
+    unsigned char bits[(ABS_MAX + 7) / 8];
+    memset(bits, 0, sizeof bits);
+    if (ioctl(fd, EVIOCGBIT(EV_ABS, sizeof bits), bits) < 0) return false;
+    return (bits[code / 8] & (1u << (code % 8))) != 0;
+}
+
+/* WHAT THE PANEL SAYS IT CAN SEND, logged unconditionally at open time.
+ *
+ * This line exists because of what it cost not to have it. koboy could not be
+ * tapped on a Kobo Aura H2O (github issue #1); the fix was designed against the
+ * event streams FBInk's button injector synthesises, because that was the only
+ * description of those panels anywhere to hand -- and an injector is a guess
+ * about a driver, not a recording of one. The first fix did not work, and the
+ * log from the device could not say why, because it reported the axis MAXIMA
+ * and nothing about the PROTOCOL.
+ *
+ * Every field below is one ioctl and answers a question that otherwise takes a
+ * round trip to a stranger's device:
+ *   slot=1   protocol B -- contacts are addressed by ABS_MT_SLOT.
+ *   slot=0 with mt=1  protocol A -- contacts are separated by SYN_MT_REPORT
+ *            and the decode has to count them (input.c).
+ *   btn_touch=0  the lift CANNOT be read from BTN_TOUCH on this panel, which
+ *            is the assumption the first fix rested on.
+ *   st=1 mt=0  a pre-multitouch panel: position is ABS_X/ABS_Y only.
+ * `trace_touch = true` in koboy.ini then dumps the events themselves. */
+static void touch_caps(kobo_ctx *k, int fd)
+{
+    kobo_say(k, "koboy: touch caps mt=%d slot=%d st=%d btn_touch=%d "
+                "tool_finger=%d pressure=%d mt_pressure=%d touch_major=%d\n",
+             node_has_abs(fd, ABS_MT_POSITION_X) ? 1 : 0,
+             node_has_abs(fd, ABS_MT_SLOT)       ? 1 : 0,
+             node_has_abs(fd, ABS_X)             ? 1 : 0,
+             node_has_key(fd, BTN_TOUCH)         ? 1 : 0,
+             node_has_key(fd, BTN_TOOL_FINGER)   ? 1 : 0,
+             node_has_abs(fd, ABS_PRESSURE)      ? 1 : 0,
+             node_has_abs(fd, ABS_MT_PRESSURE)   ? 1 : 0,
+             node_has_abs(fd, ABS_MT_TOUCH_MAJOR)? 1 : 0);
+}
+
 /* Classification from fbink_input_scan, NOT hardcoded event<N> numbers: the
    numbering is not stable across firmwares (on the reference device touch is
    event1, keys event0, the accelerometer event2). SCAN_ONLY makes FBInk close
@@ -299,6 +340,9 @@ static void touch_axes(kobo_ctx *k, int fd, const char *path, const char *name)
     k->transpose = (mx > my);
     kobo_say(k, "koboy: touch %s (%s) raw %dx%d transpose=%d\n",
              path, name, mx, my, k->transpose ? 1 : 0);
+    /* Both scan paths reach here, so the capability line cannot be missed by
+       taking the KOBOY_TOUCH_DEV override instead of the classification. */
+    touch_caps(k, fd);
 }
 
 static void open_input(kobo_ctx *k)
@@ -320,9 +364,31 @@ static void open_input(kobo_ctx *k)
         }
     }
 
+    /* NO SCAN_ONLY, and this is not a preference. FBInk opens every node it
+       classifies; SCAN_ONLY makes it close them again, and koboy used to
+       reopen the two it wanted so that the open flags and the grabs were its
+       own. On one panel that close-and-reopen is a hazard FBInk documents by
+       name -- fbink_input_scan.c, on `zForce-ir-touch`:
+    
+         "Some zForce panels have a weird race condition around
+          Active/Deactivate commands, which can potentially lead to no reports
+          being generated if the Active command fumbles. [...] A better bet is
+          to avoid using SCAN_ONLY and keep the fd around if you actually need
+          it."
+    
+       open() and close() on that node are Active and Deactivate to the panel's
+       firmware, so the old path sent Active/Deactivate/Active on every launch
+       and a fumbled third command means a touchscreen that reports NOTHING for
+       the whole session. The Kobo Aura H2O of github issue #1 has exactly that
+       panel. Taking FBInk's fd is one command instead of three.
+    
+       The flags survive the change: without OPEN_BLOCKING FBInk opens
+       O_NONBLOCK, which is what drain() needs, and CLOEXEC is set below
+       because a launcher that later spawns anything must not leak the panel.
+       The grabs are unaffected -- they are ioctls on whatever fd we hold. */
     size_t            n   = 0;
     FBInkInputDevice *dev = fbink_input_scan(INPUT_TOUCHSCREEN | INPUT_KEY, 0,
-                                             SCAN_ONLY | NO_RECAP, &n);
+                                             NO_RECAP, &n);
     if (!dev) {
         kobo_say(k, "koboy: fbink_input_scan found no input devices\n");
         return;
@@ -330,18 +396,17 @@ static void open_input(kobo_ctx *k)
 
     for (size_t i = 0; i < n; i++) {
         const FBInkInputDevice *d = &dev[i];
+        /* EVERY fd this loop does not adopt has to be closed here: FBInk left
+           them open for us, so `continue` now leaks one. */
+        int fd = d->fd;
 
         /* The accelerometer is on its own node and reports a continuous stream
-           of nonsense as far as we are concerned. Never open it. */
-        if (d->type & INPUT_ACCELEROMETER) continue;
+           of nonsense as far as we are concerned. Never read it. */
+        if (d->type & INPUT_ACCELEROMETER) { if (fd >= 0) close(fd); continue; }
+        if (fd < 0) continue;              /* FBInk could not open it */
 
         if ((d->type & INPUT_TOUCHSCREEN) && k->touch_fd < 0) {
-            int fd = open(d->path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-            if (fd < 0) {
-                kobo_say(k, "koboy: cannot open touchscreen %s: %s\n",
-                         d->path, strerror(errno));
-                continue;
-            }
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
             k->touch_fd = fd;
 
             /* Protocol B first, protocol A as the fallback. The transposition
@@ -357,19 +422,20 @@ static void open_input(kobo_ctx *k)
            anything already claimed as the touchscreen. */
         if ((d->type & INPUT_KEY) && !(d->type & INPUT_TOUCHSCREEN) &&
             k->n_key < MAX_KEY_NODES) {
-            int fd = open(d->path, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
-            if (fd < 0) {
-                kobo_say(k, "koboy: cannot open key node %s: %s\n",
-                         d->path, strerror(errno));
-                continue;
-            }
+            fcntl(fd, F_SETFD, FD_CLOEXEC);
             int idx = k->n_key++;
             k->key_fd[idx]        = fd;
             k->key_has_power[idx] = (d->type & INPUT_POWER_BUTTON) ||
                                     node_has_key(fd, KEY_POWER);
             kobo_say(k, "koboy: keys %s (%s)%s\n", d->path, d->name,
                      k->key_has_power[idx] ? " [carries KEY_POWER]" : "");
+            continue;
         }
+
+        /* Classified, opened by FBInk, and not wanted: a second touchscreen, a
+           key node past MAX_KEY_NODES, or the node KOBOY_TOUCH_DEV already
+           took by hand. */
+        close(fd);
     }
     free(dev);
 
@@ -691,6 +757,18 @@ static bool drain(kobo_ctx *k, int fd, bool is_key, koboy_input *in)
 
         size_t m = 0;
         for (size_t i = 0; i < cnt; i++) {
+            /* THE RAW STREAM, when koboy.ini asks for it. One line per event,
+               before koboy interprets any of it -- the point is to record what
+               the PANEL said, not what the decode made of it, because the two
+               disagreeing is the whole class of bug this exists for. SYN
+               (type 0) is printed too: on a panel with no ABS_MT_SLOT the
+               SYN_MT_REPORT boundaries are the only thing separating one
+               finger from another, so a trace that dropped them would hide
+               exactly what it was opened to find. */
+            if (k->cfg.trace_touch && !is_key)
+                kobo_say(k, "koboy: ev type=%u code=%u value=%d\n",
+                         (unsigned)ev[i].type, (unsigned)ev[i].code,
+                         (int)ev[i].value);
             if (ev[i].type == EV_KEY) {
                 bool down = (ev[i].value != 0);
                 /* The power button is the way out. With Nickel stopped nothing
