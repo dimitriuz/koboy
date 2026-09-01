@@ -45,7 +45,7 @@ up -- loading, geometry, pacing and speed, and nothing a finger does. See
 ## Build and test
 
 ```sh
-make test        # host suite: 30 binaries, 6417 checks. Runs on x86_64.
+make test        # host suite: 30 binaries, 6446 checks. Runs on x86_64.
 make lint        # clang -Werror -fsyntax-only over src/ AND tests/. A SECOND
                  # front end: `make test` is gcc, and clang carries classes
                  # gcc has no equivalent for. Green on the tree; CI gates on

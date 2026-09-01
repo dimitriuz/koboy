@@ -38,6 +38,15 @@ struct koboy_input {
     int  mt_reports;      /* SYN_MT_REPORTs this frame, empty blocks included */
     int  mt_contacts;     /* how many of them carried an actual position */
     bool mt_block_data;   /* has the block now being read carried one yet */
+    /* What the CONTACT-STRENGTH axes said about the block now being read:
+       -1 nothing, 0 the contact is going, 1 it is there. Resolved at the end
+       of the block rather than per event, so the order the driver happens to
+       put ABS_MT_TOUCH_MAJOR and ABS_MT_TRACKING_ID in cannot decide the
+       answer. Reset with every block. */
+    int  blk_contact;
+    /* ...and which of those axes has EARNED the right to be believed, one
+       sticky bit each. See contact_hint. */
+    bool armed_major, armed_width, armed_mtp, armed_absp;
 
     bool     pad_active;
     int      pad_slot, pad_ox, pad_oy;
@@ -56,6 +65,7 @@ koboy_input *input_create(const koboy_config *c, const koboy_profile *p)
     koboy_input *in = calloc(1, sizeof *in);
     if (!in) return NULL;
     in->cfg = *c; in->prof = *p;
+    in->blk_contact = -1;      /* calloc's 0 would mean "the contact is going" */
     in->raw_max_x = p->panel_w; in->raw_max_y = p->panel_h;
     /* The reserved game rect is the honest starting answer: it is where a
        frame will land, and until one has actually been submitted nobody knows
@@ -385,6 +395,36 @@ static void all_contacts_up(koboy_input *in)
     for (int s = 0; s < KOBOY_MAX_TOUCH; s++) in->st.touch[s].down = false;
 }
 
+/* A CONTACT-STRENGTH AXIS SPEAKS, and whether to believe it is the whole
+ * problem. ABS_MT_TOUCH_MAJOR is the clearest case of it:
+ *
+ *   - On the Kobo Aura H2O's zForce infrared frame it is the ONLY lift signal
+ *     there is. CAPTURED, github issue #1: the driver sends seven event codes
+ *     and no EV_KEY at all, ABS_MT_TRACKING_ID is 1 in every frame it ever
+ *     sends, and a release is TOUCH_MAJOR going 1 -> 0. koboy read the lift
+ *     from BTN_TOUCH, which that node ADVERTISES in its capability bitmap and
+ *     never once sends, so v0.5.3 could not have worked there.
+ *   - On an early Mk7 panel the same axis reads 0 with a finger DOWN. FBInk's
+ *     reader excludes it for exactly that reason: "Oops, not that one, it's
+ *     always 0 on early Mk.7 devices". Believing it there makes the panel
+ *     untouchable.
+ *
+ * Both are true, so no fixed choice of field is right and koboy stopped
+ * choosing. AN AXIS IS ARMED BY BEING SEEN POSITIVE, once, on this device: a
+ * panel that reports real contact strength proves it the moment a finger
+ * arrives, and a panel whose axis is stuck at zero never proves anything and
+ * so is never allowed to deny a contact either. The device answers the
+ * question about itself, which is the same principle as deriving the axis
+ * transposition from the reported maxima rather than from a table of models.
+ *
+ * `armed` is per axis, not shared: a panel may report a real TOUCH_MAJOR and a
+ * permanently-zero pressure, and one dead axis must not veto a live one. */
+static void contact_hint(koboy_input *in, bool *armed, int32_t v)
+{
+    if (v > 0)        { *armed = true; in->blk_contact = 1; }
+    else if (*armed)  { in->blk_contact = 0; }
+}
+
 /* Contract in input.h.
  *
  * THE LIFT IS THE WHOLE DIFFICULTY, and it is why this function takes a source.
@@ -450,6 +490,12 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
                 e->code == KOBOY_SYN_MT_REPORT) {
                 in->mt_reports++;
                 in->saw_mt_report = true;
+                /* The block just ended, so whatever its strength axes said
+                   applies to the slot it was about -- BEFORE the cursor moves
+                   on to the next contact. */
+                if (in->blk_contact >= 0)
+                    in->st.touch[in->slot].down = (in->blk_contact == 1);
+                in->blk_contact = -1;
                 if (in->mt_block_data) {
                     in->mt_contacts++;
                     in->slot = in->mt_contacts < KOBOY_MAX_TOUCH
@@ -471,6 +517,7 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
             }
             in->mt_reports = in->mt_contacts = 0;
             in->mt_block_data = false;
+            in->blk_contact = -1;
             /* One recompute per FRAME, not per event: a packet is only
                coherent at the SYN_REPORT boundary. */
             recompute(in);
@@ -516,6 +563,33 @@ void input_feed_from(koboy_input *in, koboy_ev_source src,
         case KOBOY_ABS_Y:
             if (src != KOBOY_EV_SRC_TOUCH || in->saw_mt) break;
             in->raw_y[in->slot] = e->value; apply_transform(in, in->slot); break;
+        /* These only ever REACH a contact through blk_contact, which is
+           applied in the SYN_MT_REPORT branch above and nowhere else -- and
+           that branch is itself protocol-A only. So a panel that names its
+           slots (the verified Libra 2, every modern Kobo) records these values
+           and is never affected by them, and the mechanism cannot regress the
+           one device anybody has tested on.
+           SAID HERE BECAUSE IT IS NOT OBVIOUS FROM HERE. An earlier version
+           repeated `!in->saw_slot` on each of these four cases as well; it
+           read like the thing doing the confining and could not change any
+           behaviour, which is worse than no guard because the next reader
+           trusts it. The confinement has one location. */
+        case KOBOY_ABS_MT_TOUCH_MAJOR:
+            if (src == KOBOY_EV_SRC_TOUCH)
+                contact_hint(in, &in->armed_major, e->value);
+            break;
+        case KOBOY_ABS_MT_WIDTH_MAJOR:
+            if (src == KOBOY_EV_SRC_TOUCH)
+                contact_hint(in, &in->armed_width, e->value);
+            break;
+        case KOBOY_ABS_MT_PRESSURE:
+            if (src == KOBOY_EV_SRC_TOUCH)
+                contact_hint(in, &in->armed_mtp, e->value);
+            break;
+        case KOBOY_ABS_PRESSURE:
+            if (src == KOBOY_EV_SRC_TOUCH)
+                contact_hint(in, &in->armed_absp, e->value);
+            break;
         case KOBOY_ABS_MT_SLOT:
             in->saw_mt = in->saw_slot = true;
             if (e->value >= 0 && e->value < KOBOY_MAX_TOUCH) in->slot = e->value;
