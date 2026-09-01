@@ -31,6 +31,14 @@ typedef struct { uint16_t type, code; int32_t value; } koboy_ev;
 #define KOBOY_ABS_X              0x00
 #define KOBOY_ABS_Y              0x01
 
+/* CONTACT-STRENGTH axes: how much finger the panel thinks it can see. Zero
+   means the contact is going away -- on the panels that say so this way, and
+   input.c explains why that cannot be assumed in advance. */
+#define KOBOY_ABS_PRESSURE       0x18
+#define KOBOY_ABS_MT_TOUCH_MAJOR 0x30
+#define KOBOY_ABS_MT_WIDTH_MAJOR 0x32
+#define KOBOY_ABS_MT_PRESSURE    0x3a
+
 /* The d-pad on a Bluetooth gamepad. MEASURED on a real Xbox Wireless
    Controller, 2026-08-26: it does NOT arrive as EV_KEY like the page-turn
    buttons -- it is a HAT SWITCH, two absolute axes each taking exactly

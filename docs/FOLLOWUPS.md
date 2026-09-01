@@ -665,58 +665,53 @@ rect. A seventh system needing three would need somewhere to put the third,
 not just a bigger number. Recorded so nobody raises the constant and
 discovers that at render time.
 
-### 111. The Aura H2O still cannot be tapped, and the panel is not the one that was fixed
+### 111. The Aura H2O's touch stream is now CAPTURED, and it broke two releases
 
-**v0.5.3 did not fix github issue #1.** The reporter tried it: QUIT works, the
-browser still selects nothing. Their `koboy.log` is the first description of one
-of these panels that is not a guess, and it says the guess was wrong in a way
-worth writing down.
+Resolved as far as evidence goes, and kept because the numbers in it are the
+only real description of one of these panels anywhere in this tree.
+
+`trace_touch = true` on the reporter's device, 371 events, decoded:
 
 ```
-koboy: Aura H2O (id 370, Dahlia, Mark 5), 1080x1429 @ 32bpp, ... origin (0,11)
-koboy: keys /dev/input/event0 (mxckpd) [carries KEY_POWER]
 koboy: touch /dev/input/event1 (zForce-ir-touch) raw 1440x1080 transpose=1
+koboy: touch caps mt=1 slot=0 st=1 btn_touch=1 tool_finger=0
+                  pressure=1 mt_pressure=0 touch_major=1
 ```
 
-**`zForce-ir-touch`.** A Neonode INFRARED frame -- emitters and receivers round
-the bezel -- not a capacitive digitiser. The Phoenix stream v0.5.3 was built
-against comes from FBInk's button INJECTOR, whose Phoenix branch lists the H2O;
-but an injector describes what a driver will ACCEPT, and this is a different
-class of controller from the ones that branch was written for. Two layers of
-inference, and the entry below already said the first was unsafe.
+| Fact | Value |
+|---|---|
+| Codes ever sent | `MT_TRACKING_ID`, `MT_TOUCH_MAJOR`, `MT_WIDTH_MAJOR`, `MT_POSITION_X/Y`, `SYN_MT_REPORT`, `SYN_REPORT`. Nothing else |
+| `EV_KEY` events | **none, in the entire capture** |
+| `BTN_TOUCH` | advertised in the capability bitmap, **never sent** |
+| `ABS_PRESSURE` | advertised, never sent |
+| `ABS_MT_TRACKING_ID` | `1` in every frame. Never `-1` |
+| The lift | `ABS_MT_TOUCH_MAJOR` going 1 -> 0, `WIDTH_MAJOR` alongside |
+| Frames | one contact block each; protocol A throughout |
 
-Nothing here knows what that driver emits. That is now the whole question, and
-0.5.4 answers it with instruments rather than another guess:
+**THE CAPABILITY BITMAP LIES, and that is the finding worth keeping.** The node
+advertises `BTN_TOUCH` and `ABS_PRESSURE` and sends neither. v0.5.3 read the
+lift from `BTN_TOUCH` and could never have worked here; v0.5.4 added the caps
+line, which said `btn_touch=1` and would have misled anyone reading only that.
+What a node CAN send and what it DOES send are different questions and only the
+trace answers the second. Ask for both.
 
-- `koboy: touch caps ...` is logged unconditionally at open time -- whether the
-  node advertises `ABS_MT_SLOT` (protocol B) or only `SYN_MT_REPORT` (protocol
-  A), whether `BTN_TOUCH` exists at all (v0.5.3's entire lift fix rests on it),
-  whether position is `ABS_MT_POSITION_*` or `ABS_X`/`ABS_Y`. Eight ioctls, one
-  line, no action needed from the owner beyond sending the log again.
-- `trace_touch = true` in `koboy.ini` dumps the raw event stream. An ini key
-  and not an environment variable because the owner already edits that file
-  over USB and does not edit `koboy.sh`.
+**And the field koboy refused was the only one that worked.**
+`ABS_MT_TOUCH_MAJOR` was excluded on FBInk's warning that it "is always 0 on
+early Mk.7 devices" -- true, and about Mk7. This is a Mk5, where the same axis
+is a clean binary flag and the sole lift signal. No fixed choice of field
+satisfies both, so input.c stopped choosing: `contact_hint` ARMS an axis the
+first time it is seen positive, and only an armed axis may report a lift. A
+panel with real contact strength proves it the moment a finger lands; a panel
+whose axis is stuck at zero never proves anything and is never allowed to deny
+a contact either. Same principle as deriving the transposition from the
+reported maxima instead of a table of models.
 
-Two changes went with them, both from evidence rather than hope:
-
-- **koboy was triggering a hazard FBInk documents against this exact panel.**
-  `fbink_input_scan.c` special-cases `zForce-ir-touch`: "Some zForce panels have
-  a weird race condition around Active/Deactivate commands, which can
-  potentially lead to no reports being generated if the Active command fumbles.
-  [...] A better bet is to avoid using SCAN_ONLY and keep the fd around."
-  open() and close() on that node ARE Active and Deactivate, and koboy passed
-  `SCAN_ONLY` and then reopened -- Active, Deactivate, Active on every launch.
-  It now takes FBInk's fd. Whether that was the failure is unknown; that koboy
-  was doing the thing the vendor's own library warns against is not.
-- The protocol-A frame-end retirement is now STICKY (`saw_mt_report`). A bare
-  `SYN_REPORT` with no contacts in front of it is how some protocol-A drivers
-  say "nothing is touching", and requiring the frame to carry its own
-  `SYN_MT_REPORT` read that as "no information" and left the finger down --
-  the original bug one protocol deeper.
-
-NONE OF THAT IS A CLAIM THAT IT WORKS NOW. It is one documented defect fixed,
-one plausible one fixed, and two instruments added so the next round is not a
-third guess.
+STILL OPEN, and only a person at the device can close it: **whether the taps
+land where the finger is.** The capture's coordinates map to a plausible region
+of the list, which is not the same as the right one -- rows span the full width,
+so an x mirror is invisible in a menu and ruins the d-pad in a game. The way to
+settle it is to ask for a trace of two deliberate taps, one at each of two named
+corners, and read the raw pairs. Nobody has.
 
 ### 114. The touch layer spans 1440 rows and koboy scales it onto 1429
 

@@ -273,6 +273,57 @@ static void b_press2(koboy_input *in, int x0, int y0, int x1, int y1)
     input_feed(in, ev, EVN(ev));
 }
 
+/* ------------------------------------------------ zForce: a REAL CAPTURE
+   Everything else in this file is transcribed from FBInk's button INJECTOR,
+   which describes what a driver will ACCEPT. This one is a recording of what a
+   driver SENDS: `trace_touch = true` on the Kobo Aura H2O of github issue #1,
+   371 events, decoded and reduced to the two frames below. It is the only
+   stream here that is evidence rather than inference, and it is the one that
+   proved the inference wrong.
+
+   WHAT THE CAPTURE SAYS, and every clause cost a release:
+     - SEVEN codes, ever. No EV_KEY of any kind.
+     - BTN_TOUCH is ADVERTISED in the node's capability bitmap (`btn_touch=1`
+       in koboy's own caps line) and is NEVER SENT. v0.5.3 read the lift from
+       BTN_TOUCH and shipped; it could not have worked here.
+     - ABS_PRESSURE likewise: advertised, never sent.
+     - ABS_MT_TRACKING_ID is 1 in every frame of all 371 events. Never -1.
+     - The lift is ABS_MT_TOUCH_MAJOR going 1 -> 0, with WIDTH_MAJOR alongside.
+
+   That last one is the field koboy deliberately refused, on FBInk's warning
+   that it "is always 0 on early Mk.7 devices". The warning is real and is
+   about Mk7; this is a Mk5, where the same field is a clean binary flag. A
+   fixed choice of field cannot satisfy both, which is why input.c ARMS a field
+   on first seeing it positive instead of trusting or distrusting it in
+   advance. */
+static void zforce_press(koboy_input *in, int x, int y)
+{
+    koboy_ev ev[] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },
+        { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    1 },
+        { KOBOY_EV_ABS, EV_ABS_MT_WIDTH_MAJOR,    1 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+        { KOBOY_EV_SYN, 0,                        0 },
+    };
+    input_feed(in, ev, EVN(ev));
+}
+static void zforce_lift(koboy_input *in, int x, int y)
+{
+    koboy_ev ev[] = {
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 1 },   /* still 1 */
+        { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    0 },   /* THE lift, and the
+                                                            only one there is */
+        { KOBOY_EV_ABS, EV_ABS_MT_WIDTH_MAJOR,    0 },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X,  x },
+        { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y,  y },
+        { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+        { KOBOY_EV_SYN, 0,                        0 },
+    };
+    input_feed(in, ev, EVN(ev));
+}
+
 typedef void (*touch_fn)(koboy_input *, int, int);
 typedef struct { const char *name; touch_fn press, lift; } family;
 
@@ -281,6 +332,7 @@ static const family FAMILIES[] = {
     { "Phoenix (Aura H2O, issue #1)",   phoenix_press, phoenix_lift },
     { "Snow / Mk7",                     snow_press,    snow_lift    },
     { "non-MT (Touch, Mini, Glo, HD)",  nonmt_press,   nonmt_lift   },
+    { "zForce IR (Aura H2O, CAPTURED)", zforce_press,  zforce_lift  },
 };
 #define N_FAMILIES (sizeof FAMILIES / sizeof *FAMILIES)
 
@@ -695,6 +747,95 @@ TEST_MAIN({
         input_destroy(in);
     }
 
+    /* ------------- 7c. the axis that is stuck at zero must not veto a touch
+       The other half of the arming rule, and the reason it is a rule rather
+       than a choice of field. FBInk's reader refuses ABS_MT_TOUCH_MAJOR
+       outright -- "Oops, not that one, it's always 0 on early Mk.7 devices" --
+       and the zForce capture in section 1 is a panel where that same axis is
+       the ONLY lift signal there is. Both are true.
+
+       Here is the panel FBInk is warning about: TOUCH_MAJOR present and
+       permanently 0, contact carried by BTN_TOUCH. Reading the axis at face
+       value makes it untouchable -- every press arrives pre-lifted. Arming
+       fixes it by never believing an axis that has not first shown it can be
+       positive. */
+    {
+        koboy_input *in = fresh(&c, &prof);
+        koboy_ev press[] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 3 },
+            { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    0 },   /* stuck, always */
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 300 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 400 },
+            { KOBOY_EV_KEY, KOBOY_KEY_BTN_TOUCH,      1 },
+            { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+            { KOBOY_EV_SYN, 0,                        0 },
+        };
+        input_feed(in, press, EVN(press));
+        if (!input_state(in)->touch[0].down)
+            fprintf(stderr, "  [stuck TOUCH_MAJOR] the press never registered\n");
+        CHECK(input_state(in)->touch[0].down);
+        CHECK_EQ_INT(input_state(in)->touch[0].x, 300);
+
+        koboy_ev lift[] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 3 },
+            { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 300 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 400 },
+            { KOBOY_EV_KEY, KOBOY_KEY_BTN_TOUCH,      0 },
+            { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+            { KOBOY_EV_SYN, 0,                        0 },
+        };
+        input_feed(in, lift, EVN(lift));
+        CHECK(!input_state(in)->touch[0].down);
+
+        input_destroy(in);
+    }
+
+    /* ------- 7d. protocol B is not touched by any of this, which is a promise
+       The strength axes are a FALLBACK for panels that never retire a contact
+       with ABS_MT_TRACKING_ID == -1. A panel that names its slots does retire
+       them, needs none of this, and is the one kind of panel anybody here has
+       actually tested on -- so input.c confines the mechanism to `!saw_slot`
+       and this is the check that the confinement is real.
+
+       Plenty of protocol-B drivers report ABS_MT_TOUCH_MAJOR, and some report
+       0 for a light contact that is very much still there. On protocol B the
+       tracking id is the authority and a zero strength axis must not overrule
+       it; letting it would trade a bug nobody has for one on the reference
+       device. (MUTANT: drop `&& !in->saw_slot` from the four axis cases.) */
+    {
+        koboy_input *in = fresh(&c, &prof);
+        koboy_ev press[] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 5 },
+            { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,   12 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 300 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 400 },
+            { KOBOY_EV_SYN, 0,                        0 },
+        };
+        input_feed(in, press, EVN(press));
+        CHECK(input_state(in)->touch[0].down);
+
+        /* A light touch: the area reads 0, the finger has not gone anywhere,
+           and the driver says so by NOT retiring the tracking id. */
+        koboy_ev light[] = {
+            { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 301 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 401 },
+            { KOBOY_EV_SYN, 0,                        0 },
+        };
+        input_feed(in, light, EVN(light));
+        if (!input_state(in)->touch[0].down)
+            fprintf(stderr, "  [protocol B] a zero TOUCH_MAJOR dropped a live contact\n");
+        CHECK(input_state(in)->touch[0].down);
+        CHECK_EQ_INT(input_state(in)->touch[0].x, 301);
+
+        /* And the tracking id still ends it, as it always did. */
+        b_lift(in, 301, 401);
+        CHECK(!input_state(in)->touch[0].down);
+        input_destroy(in);
+    }
+
     /* ------------------------------- 8. a panel that speaks BOTH dialects
        The protocol-A cursor is gated on "this panel has never named a slot",
        and that gate is the only thing standing between the two schemes. Some
@@ -708,6 +849,9 @@ TEST_MAIN({
         koboy_ev hybrid[] = {
             { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        1 },
             { KOBOY_EV_ABS, KOBOY_ABS_MT_TRACKING_ID, 7 },
+            /* A REAL contact area, which arms the axis. The zero that
+               matters comes in the next frame. */
+            { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,   12 },
             { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 400 },
             { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 500 },
             { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },   /* the habit */
@@ -725,6 +869,28 @@ TEST_MAIN({
            protocol B keeps a contact until its slot is retired. */
         koboy_ev nothing[] = { { KOBOY_EV_SYN, 0, 0 } };
         input_feed(in, nothing, EVN(nothing));
+        CHECK(input_state(in)->touch[1].down);
+
+        /* NOW the zero, on an axis this panel has already proved it can drive.
+           THIS is the shape where the `!saw_slot` guard on the strength axes
+           earns its place, and it is the only one: everywhere else the
+           mechanism is confined by being resolved at SYN_MT_REPORT, which a
+           protocol-B panel never sends, or by the axis never having been
+           armed. Here the panel sends SYN_MT_REPORT *and* has armed the axis
+           *and* names its slots -- so without the guard a light touch would
+           retire a contact whose tracking id is still live.
+           (MUTANT: drop `&& !in->saw_slot` from the four axis cases.) */
+        koboy_ev light[] = {
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_SLOT,        1 },
+            { KOBOY_EV_ABS, EV_ABS_MT_TOUCH_MAJOR,    0 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_X, 401 },
+            { KOBOY_EV_ABS, KOBOY_ABS_MT_POSITION_Y, 501 },
+            { KOBOY_EV_SYN, EV_SYN_MT_REPORT,         0 },
+            { KOBOY_EV_SYN, 0,                        0 },
+        };
+        input_feed(in, light, EVN(light));
+        if (!input_state(in)->touch[1].down)
+            fprintf(stderr, "  [hybrid] a zero TOUCH_MAJOR retired a slotted contact\n");
         CHECK(input_state(in)->touch[1].down);
 
         input_destroy(in);
