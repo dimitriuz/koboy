@@ -118,7 +118,10 @@ jobs:
           f=.github/RELEASE-NOTES.md
           v="${{ steps.v.outputs.version }}"
           [ -s "$f" ] || { echo "FAIL: $f is missing or empty"; exit 1; }
-          grep -qF "$v" "$f" || {
+          # The same strip the publish step applies, so the gate is about what
+          # a reader will SEE. Naming the version only inside the maintainer
+          # comment would otherwise pass a check about notes nobody can read.
+          sed '/<!--/,/-->/d' "$f" | grep -qF "$v" || {
             echo "FAIL: $f never mentions $v, so it is last release's notes."
             echo "      Rewrite its top half for $v before tagging; the"
             echo "      Installing section below it is boilerplate."
@@ -411,8 +414,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           v="${{ needs.check.outputs.version }}"
+          # STRIP THE MAINTAINER COMMENT. GitHub hides HTML comments when it
+          # renders markdown, so this looked fine in a browser and shipped in
+          # v0.5.4 anyway -- the raw body is what the API, the RSS feed and the
+          # release notification email carry, and "REWRITE THE TOP HALF BEFORE
+          # YOU TAG" is not addressed to the person downloading a build.
+          sed '/<!--/,/-->/d' .github/RELEASE-NOTES.md > "$RUNNER_TEMP/notes.md"
           gh release create "${GITHUB_REF#refs/tags/}" \
             --title "koboy $v" \
-            --notes-file .github/RELEASE-NOTES.md \
+            --notes-file "$RUNNER_TEMP/notes.md" \
             "dist/koboy-$v.zip#koboy $v (all fifteen systems)" \
             "dist/koboy-probe-$v.zip#koboy-probe $v (device profiler only)"
