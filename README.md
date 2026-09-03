@@ -233,7 +233,7 @@ about evidence, not about capability.
 |---|---|---|
 | **Libra 2** | Io, Mark 9 | Everything. Games played by hand, all fifteen systems rendered, cartridge saves and save states round-tripped, exits cleanly to the home screen. [TESTED.md](TESTED.md) is the real record. |
 | **Aura H2O** | Dahlia, Mark 5 | Menus and the ROM browser, by the owner who reported [#1](https://github.com/dimitriuz/koboy/issues/1). Its touchscreen speaks a different dialect from the Libra 2's, and 0.5.5 is the release that got it right. |
-
+| **Kobo Libra Colour** | Monza | Menus, the ROM browser, games |
 ### Should work
 
 These share their touch dialect with one of the two above, and have nothing else
@@ -242,7 +242,7 @@ is not the same as somebody having tried.
 
 - **Like the Aura H2O** — Aura, Aura One, Aura One LE, Glo HD, Touch 2.0,
   Aura SE, Aura SE r2, Nia
-- **Like the Libra 2** — Clara 2E, Elipsa 2E, Libra Colour
+- **Like the Libra 2** — Clara 2E, Elipsa 2E
 
 ### Worth trying, but nobody has
 
